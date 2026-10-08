@@ -1,0 +1,9 @@
+node_modules
+out
+dist
+*.local
+.prototype-agent.json
+.probe
+.DS_Store
+.vscode
+.idea
