@@ -13,8 +13,8 @@
 
     <!-- 栏目 2：AI 对话与多轮迭代区 -->
     <section class="w-96 flex flex-col border-r border-slate-800 bg-slate-900/90 z-10 flex-shrink-0">
-      <!-- 顶部 Header -->
-      <header class="h-14 border-b border-slate-800 px-4 flex items-center justify-between bg-slate-900">
+      <!-- 顶部 Header（兼作窗口拖拽区，见 assets/main.css 的 .app-drag） -->
+      <header class="app-drag h-14 border-b border-slate-800 px-4 flex items-center justify-between bg-slate-900">
         <div class="flex items-center gap-2 min-w-0">
           <span class="text-amber-400 font-bold">⚡ AI 原型对话迭代</span>
           <button
@@ -242,8 +242,8 @@
 
     <!-- 栏目 3：右侧内置浏览器与源码审查区 -->
     <main class="flex-1 flex flex-col min-w-0 bg-slate-900 overflow-hidden relative">
-      <!-- 顶层状态与操作栏 -->
-      <header class="h-14 border-b border-slate-800 px-6 flex items-center justify-between bg-slate-900 flex-shrink-0 z-10">
+      <!-- 顶层状态与操作栏（兼作窗口拖拽区，见 assets/main.css 的 .app-drag） -->
+      <header class="app-drag h-14 border-b border-slate-800 px-6 flex items-center justify-between bg-slate-900 flex-shrink-0 z-10">
         <div class="flex items-center gap-3">
           <div class="font-bold text-slate-200 flex items-center gap-2">
             <span>{{ currentTitle }}</span>

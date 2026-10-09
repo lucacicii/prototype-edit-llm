@@ -9,3 +9,24 @@ html, body, #app {
   height: 100%;
   overflow: hidden;
 }
+
+/* macOS 上窗口用的是 hiddenInset（系统标题栏被藏起来），系统不再提供任何拖拽区，
+   窗口能不能移动完全取决于渲染层自己声明的 app-region 区域。 */
+.app-drag {
+  -webkit-app-region: drag;
+}
+
+/* 拖拽区里的控件必须显式退出拖拽，否则按钮点不动、下拉打不开。 */
+.app-drag button,
+.app-drag a,
+.app-drag input,
+.app-drag select,
+.app-drag textarea,
+.app-drag [role='button'] {
+  -webkit-app-region: no-drag;
+}
+
+/* 红绿灯按钮压在侧边栏左上角，给同一行的标题让出位置（只有 macOS 会加这个类）。 */
+.is-macos .traffic-light-inset {
+  padding-left: 72px;
+}

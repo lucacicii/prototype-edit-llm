@@ -2,7 +2,9 @@
   <aside class="w-64 bg-slate-950 border-r border-slate-800 flex flex-col shrink-0 select-none">
     <!-- 1. 工作区切换与项目导入顶栏 -->
     <div class="p-2.5 border-b border-slate-800 bg-slate-900/60 flex flex-col gap-2 shrink-0">
-      <div class="flex items-center justify-between">
+      <!-- 这一行兼作窗口拖拽区：macOS 上没有系统标题栏，只有 app-region 能移动窗口。
+           traffic-light-inset 让红绿灯按钮（压在左上角）不盖住「工作空间」标题。 -->
+      <div class="app-drag traffic-light-inset flex items-center justify-between">
         <span class="text-xs font-bold text-slate-200 flex items-center gap-1.5">
           <span>📁</span>
           <span>工作空间</span>
