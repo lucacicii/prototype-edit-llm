@@ -117,50 +117,104 @@
       </div>
 
       <!-- 对话消息列表 -->
-      <div ref="chatScrollEl" class="flex-1 overflow-y-auto p-4 space-y-4">
+      <div ref="chatScrollEl" class="flex-1 overflow-y-auto p-4 space-y-6">
         <div
           v-for="(msg, idx) in currentPrototype?.chatMessages"
           :key="idx"
-          class="flex gap-3 text-xs leading-relaxed"
-          :class="msg.role === 'user' ? 'justify-end' : 'justify-start'"
+          class="group flex gap-3.5 w-full"
+          :class="msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'"
         >
-          <!-- Assistant Avatar -->
-          <div
-            v-if="msg.role === 'assistant'"
-            class="w-6 h-6 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center flex-shrink-0 text-xs font-bold border border-amber-500/30"
-          >
-            AI
-          </div>
-
-          <!-- Message Bubble -->
-          <div
-            class="max-w-[85%] rounded-xl px-3.5 py-2.5 break-words shadow-sm"
+          <!-- 头像：30×30、8px 圆角（方形，与 panel 一致） -->
+          <span
+            aria-hidden="true"
+            class="flex-shrink-0 mt-0.5 w-[30px] h-[30px] rounded-lg border flex items-center justify-center text-[11px] font-semibold"
             :class="msg.role === 'user'
-              ? 'bg-sky-600 text-white rounded-tr-none'
-              : 'bg-slate-800 text-slate-200 rounded-tl-none border border-slate-700/60'"
-          >
-            <!-- 关联圈选目标标签 -->
-            <div
-              v-if="msg.inspectContext"
-              class="mb-1.5 pb-1.5 border-b border-sky-500/40 text-[11px] text-sky-100 flex items-center gap-1 font-mono"
-            >
-              <span>🎯 锚点: &lt;{{ msg.inspectContext.tagName }}&gt;</span>
-            </div>
-            <div>{{ msg.content }}</div>
-          </div>
+              ? 'bg-slate-800 text-slate-400 border-slate-700'
+              : 'bg-amber-500/15 text-amber-400 border-amber-500/30'"
+          >{{ msg.role === 'user' ? '我' : '⚡' }}</span>
 
-          <!-- User Avatar -->
+          <!-- 消息容器 -->
           <div
-            v-if="msg.role === 'user'"
-            class="w-6 h-6 rounded-full bg-sky-600 flex items-center justify-center flex-shrink-0 text-xs font-semibold"
+            class="flex-1 min-w-0 flex flex-col gap-2.5"
+            :class="msg.role === 'user' ? 'items-end' : ''"
           >
-            我
+            <!-- 气泡：用户 = 淡底 + 右下单角 2px；助手 = 透明全宽 -->
+            <div
+              class="text-[13.5px] leading-[1.6] break-words select-text"
+              :class="msg.role === 'user'
+                ? 'bg-sky-500/10 text-slate-100 px-3.5 py-2.5 rounded-[14px] rounded-br-[2px] max-w-[85%]'
+                : 'w-full text-slate-200'"
+            >
+              <!-- 关联圈选目标标签 -->
+              <div
+                v-if="msg.inspectContext"
+                class="mb-1.5 pb-1.5 border-b border-sky-500/25 text-[11px] text-sky-300 flex items-center gap-1 font-mono"
+              >
+                <span>🎯 锚点: &lt;{{ msg.inspectContext.tagName }}&gt;</span>
+              </div>
+              <div class="whitespace-pre-wrap">{{ msg.content }}</div>
+            </div>
+
+            <!-- 页脚：助手常显；用户侧只留「复制」且悬停才显（panel 的用户工具条就是悬停才显的） -->
+            <div
+              class="flex items-center gap-2 text-[11px] text-slate-500 transition"
+              :class="msg.role === 'user' ? 'flex-row-reverse opacity-0 group-hover:opacity-100 focus-within:opacity-100' : ''"
+            >
+              <button
+                type="button"
+                class="px-1.5 py-[3px] rounded text-[11.5px] hover:bg-slate-800 hover:text-slate-200 transition"
+                :title="copiedIndex === idx ? '已复制' : '复制'"
+                :aria-label="copiedIndex === idx ? '已复制' : '复制'"
+                @click="copyMessage(msg.content, idx)"
+              >{{ copiedIndex === idx ? '✓ 已复制' : '复制' }}</button>
+              <!-- 时间只放助手侧：panel 的用户工具条没有元信息，而「悬停才显的时间」等于不可用 -->
+              <span v-if="msg.role === 'assistant'">{{ formatClock(msg.timestamp) }}</span>
+              <!-- 本轮统计（panel 的 Turn N • N tokens • 1.2s） -->
+              <span v-if="msg.role === 'assistant' && msg.stats" class="text-slate-600">
+                · {{ msg.stats.totalTurns }} 轮 · {{ (msg.stats.promptTokens + msg.stats.completionTokens).toLocaleString() }} tokens · {{ (msg.stats.durationMs / 1000).toFixed(1) }}s
+              </span>
+            </div>
           </div>
         </div>
 
-        <div v-if="isGenerating" class="flex items-center gap-2 text-xs text-amber-400 animate-pulse">
-          <span class="w-2 h-2 rounded-full bg-amber-400"></span>
-          <span>Thunder Agent 正在组织代码并触发 Vite HMR...</span>
+        <!-- 生成中：实时进度块（阶段 / 工具 / 耗时 / 停止） -->
+        <div v-if="isGenerating" class="flex gap-3.5 w-full">
+          <span
+            aria-hidden="true"
+            class="flex-shrink-0 mt-0.5 w-[30px] h-[30px] rounded-lg border bg-amber-500/15 text-amber-400 border-amber-500/30 flex items-center justify-center text-[11px] font-semibold"
+          >⚡</span>
+          <div class="flex-1 min-w-0 flex flex-col gap-2">
+            <!-- 状态行：阶段 + 轮次 + 耗时 + 停止 -->
+            <div class="flex items-center gap-2 text-[13px]">
+              <span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse flex-shrink-0"></span>
+              <span class="text-slate-300">{{ statusLine }}</span>
+              <span class="text-slate-500 text-[11px] tabular-nums">{{ (runElapsedMs / 1000).toFixed(1) }}s</span>
+              <button
+                type="button"
+                class="ml-auto px-1.5 py-[3px] rounded text-[11px] text-slate-400 hover:text-red-300 hover:bg-red-500/10 border border-slate-700 hover:border-red-500/40 transition"
+                title="停止本次生成"
+                @click="handleCancelRun"
+              >停止</button>
+            </div>
+            <!-- 工具活动：正在跑的 + 已完成计数 -->
+            <div v-if="activeTool || toolCount > 0" class="flex items-center gap-1.5 text-[11.5px] text-slate-500">
+              <span v-if="activeTool" class="text-amber-300/90">⚙ {{ activeTool }}</span>
+              <span v-if="activeTool" class="animate-pulse">…</span>
+              <span v-if="toolCount > 0">✓ {{ toolCount }} 次工具调用</span>
+              <span v-if="toolFailed" class="text-red-400/90">· 有工具失败</span>
+            </div>
+            <!-- 提示行：gate retry 原因 / 工具失败 / 瞬时错误 -->
+            <div v-if="runNotice" class="text-[11px] text-slate-500 leading-snug whitespace-pre-wrap">{{ runNotice }}</div>
+          </div>
+        </div>
+
+        <!-- 流式文本：未完成的助手消息（不塞 chatMessages，清空对话/切换原型不残留） -->
+        <div v-if="isGenerating && runStreamed" class="flex gap-3.5 w-full">
+          <span
+            aria-hidden="true"
+            class="flex-shrink-0 mt-0.5 w-[30px] h-[30px] rounded-lg border bg-amber-500/15 text-amber-400 border-amber-500/30 flex items-center justify-center text-[11px] font-semibold"
+          >⚡</span>
+          <div class="text-[13.5px] leading-[1.6] break-words select-text w-full text-slate-200 whitespace-pre-wrap">{{ runStreamed }}<span class="inline-block w-1.5 h-3.5 bg-amber-400/70 align-middle animate-pulse"></span></div>
         </div>
       </div>
 
@@ -279,7 +333,7 @@ import EmbeddedBrowserViewer from './components/EmbeddedBrowserViewer.vue'
 import MonacoEditor from './components/MonacoEditor.vue'
 import ExportDialog from './components/ExportDialog.vue'
 import ModelSettingsDialog from './components/ModelSettingsDialog.vue'
-import { usePrototypeStore, PrototypeItem } from './stores/prototypeStore'
+import { usePrototypeStore, PrototypeItem, RunStats } from './stores/prototypeStore'
 import { locateCodeSnippet } from './utils/inspector'
 
 const prototypeStore = usePrototypeStore()
@@ -297,6 +351,143 @@ const isGenerating = ref(false)
 const promptInput = ref('')
 const chatScrollEl = ref<HTMLElement>()
 const embeddedBrowserRef = ref()
+
+// —— 一次 run 的实时状态（进度区的数据源；瞬态，run 结束即归零）——
+const activeRunId = ref<string | null>(null)
+const runPhase = ref<'idle' | 'running' | 'verifying' | 'error' | 'cancelled'>('idle')
+const gateRound = ref(0)
+const runTurn = ref(0)
+const runElapsedMs = ref(0)
+const activeTool = ref<string | null>(null)
+const toolCount = ref(0)
+const toolFailed = ref(false)
+const runStreamed = ref('')
+const runReasoning = ref(false)
+const runNotice = ref('')
+const runStats = ref<RunStats | null>(null)
+let runTimer: ReturnType<typeof setInterval> | undefined
+let runStartWall = 0
+
+// 「已复制」只做本地 UI 反馈：按钮文案自己回弹，不弹全局 toast（与 panel 一致）
+const copiedIndex = ref<number>(-1)
+let copiedTimer: ReturnType<typeof setTimeout> | undefined
+
+async function copyMessage(text: string, idx: number) {
+  try {
+    await navigator.clipboard.writeText(text)
+    copiedIndex.value = idx
+    clearTimeout(copiedTimer)
+    copiedTimer = setTimeout(() => (copiedIndex.value = -1), 1500)
+  } catch {
+    // 打包成 file:// 时剪贴板可能不可用，退回让用户自己选中复制
+    ElMessage.warning('复制失败，请手动选中文本复制')
+  }
+}
+
+function formatClock(ts: number) {
+  return new Date(ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+}
+
+// —— 进度区：状态行文案（computed，不在模板里拼字符串）——
+const statusLine = computed(() => {
+  if (runPhase.value === 'verifying') return `验证运行结果…（第 ${gateRound.value} 轮）`
+  const turnSuffix = runTurn.value > 0 ? `（第 ${runTurn.value} 轮）` : ''
+  if (runReasoning.value) return `正在思考…${turnSuffix}`
+  if (activeTool.value) return `正在执行 ${activeTool.value}…${turnSuffix}`
+  if (runStreamed.value) return `正在组织代码…${turnSuffix}`
+  return `Thunder Agent 正在工作…${turnSuffix}`
+})
+
+// —— 进度区：thunder 每一帧的分发（帧词汇见 thunder-agent-loop/src/types/event.rs）——
+function handleStreamFrame(frame: any) {
+  if (!frame) return
+  // 顶层帧（run_id 标识属于哪次 run）
+  if (frame.type === 'run_finished') {
+    if (frame.stats) runStats.value = normalizeStats(frame.stats)
+    if (frame.finish_reason === 'cancelled') runPhase.value = 'cancelled'
+    return
+  }
+  if (frame.type === 'error') {
+    // 带 run_id 的是 run 级失败；协议应答不带 run_id，不经这里
+    runPhase.value = 'error'
+    runNotice.value = frame.message ?? ''
+    return
+  }
+  if (frame.type === 'gate_request') {
+    runPhase.value = 'verifying'
+    gateRound.value = frame.round ?? gateRound.value + 1
+    return
+  }
+  if (frame.type !== 'observation' || !frame.event) return
+  const ev = frame.event
+  switch (ev.type) {
+    case 'turn_start':
+      runTurn.value = ev.turn
+      break
+    case 'token_delta':
+      runStreamed.value += ev.delta ?? ''
+      runReasoning.value = false
+      scrollToBottom()
+      break
+    case 'reasoning_delta':
+      runReasoning.value = true
+      break
+    case 'tool_exec_start':
+      activeTool.value = ev.name
+      break
+    case 'tool_exec_result':
+      activeTool.value = null
+      toolCount.value += 1
+      if (ev.result?.is_error) {
+        toolFailed.value = true
+        runNotice.value = runNotice.value ? `${runNotice.value}\n${ev.name} 失败` : `${ev.name} 失败`
+      }
+      break
+    case 'turn_end':
+      runTurn.value = ev.turn
+      break
+    case 'gate_result':
+      if (ev.verdict === 'fail') {
+        runPhase.value = 'error'
+        runNotice.value = ev.detail ?? '验证未通过'
+      } else if (ev.verdict === 'retry') {
+        // 门禁要求再来一轮：把原因亮出来，用户才知道为什么没停
+        runPhase.value = 'running'
+        runNotice.value = ev.detail ?? ''
+      } else {
+        runPhase.value = 'running'
+      }
+      break
+    case 'loop_complete':
+      if (ev.stats) runStats.value = normalizeStats(ev.stats)
+      break
+    case 'error':
+      // recoverable 的瞬时失败：agent 会自己重试，只在状态行提示
+      runNotice.value = ev.message ?? ''
+      break
+  }
+}
+
+/** thunder 的 AgentStats（snake_case）→ 渲染层 RunStats。字段缺省按 0。 */
+function normalizeStats(s: any): RunStats {
+  return {
+    totalTurns: s?.total_turns ?? 0,
+    promptTokens: s?.total_prompt_tokens ?? 0,
+    completionTokens: s?.total_completion_tokens ?? 0,
+    durationMs: s?.total_duration_ms ?? 0,
+    toolExecutions: s?.total_tool_executions ?? 0,
+    tokensPerSecond: s?.avg_tokens_per_second ?? undefined
+  }
+}
+
+async function handleCancelRun() {
+  if (!activeRunId.value) return
+  try {
+    await window.agent.cancel(activeRunId.value)
+  } catch {
+    // 停止失败不打断界面：run 自己会收尾
+  }
+}
 
 // 当前圈选选中的目标 DOM 信息
 const inspectTarget = ref<any | null>(null)
@@ -474,6 +665,16 @@ async function syncActivePrototypeToFile() {
   }
 }
 
+// 开屏对齐磁盘：store 里的代码若是刚从快照恢复的，磁盘上的 active.vue 可能不是它
+// （比如被别的东西覆盖过），补一次写回，预览区才不会和左侧代码对不上。
+//
+// 只在「确实是从快照恢复」时做：没有快照 = 这次是个全新种子，把它推上磁盘
+// 只会把上一次生成的真页面覆盖成空白骨架。主进程那侧还会跳过内容相同的写入，
+// 所以这一步正常开屏不会真的落盘、也不会白白让预览刷新。
+onMounted(() => {
+  if (prototypeStore.hydratedFromSnapshot) syncActivePrototypeToFile()
+})
+
 function handleCodeManualUpdate(newCode: string) {
   if (currentPrototype.value) {
     prototypeStore.updateCode(currentPrototype.value.id, newCode)
@@ -516,6 +717,29 @@ async function handleSend() {
   promptInput.value = ''
   clearInspectTarget()
   markupAnnotation.value = null
+
+  // runId 由渲染层生成并传入 —— 进度帧靠它认领，「停止」按钮也靠它取消。
+  // （main 端不传则自己生成；加随机后缀避免同一毫秒两次发送撞 id，
+  //  runtime 侧会拒绝重复 run_id）
+  const runId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+  activeRunId.value = runId
+  runPhase.value = 'running'
+  gateRound.value = 0
+  runTurn.value = 0
+  runElapsedMs.value = 0
+  activeTool.value = null
+  toolCount.value = 0
+  toolFailed.value = false
+  runStreamed.value = ''
+  runReasoning.value = false
+  runNotice.value = ''
+  runStats.value = null
+  runStartWall = Date.now()
+  clearInterval(runTimer)
+  runTimer = setInterval(() => {
+    runElapsedMs.value = Date.now() - runStartWall
+  }, 500)
+
   isGenerating.value = true
   scrollToBottom()
 
@@ -536,11 +760,11 @@ async function handleSend() {
       return
     }
 
-    let streamed = ''
+    // 每一帧都从这里过：进度区靠它驱动。run_id 过滤是防御 ——
+    // agent:stream-event 扇出到所有窗口，别的窗口的 run 不该污染这里。
     const offStream = window.agent.onStreamEvent((frame: any) => {
-      if (frame?.type === 'observation' && frame.event?.type === 'token_delta') {
-        streamed += frame.event.delta ?? ''
-      }
+      if (frame?.run_id && activeRunId.value && frame.run_id !== activeRunId.value) return
+      handleStreamFrame(frame)
     })
     // The agent edits through apply_prototype_edit; keep the editor in sync.
     const offCode = window.agent.onCodeUpdated((data: { code: string }) => {
@@ -550,6 +774,7 @@ async function handleSend() {
     let res: any
     try {
       res = await window.agent.run({
+        runId,
         prototypeId: p.id,
         prompt: instruction,
         code: p.vueCode,
@@ -575,10 +800,25 @@ async function handleSend() {
     }
     await syncActivePrototypeToFile()
 
+    // 用户点了停止：run 正常结束（finishReason 'cancelled'，不是异常），
+    // 已流式输出的部分文本是用户最该看到的东西。
+    if (res.finishReason === 'cancelled') {
+      p.chatMessages.push({
+        role: 'assistant',
+        content: runStreamed.value.trim()
+          ? `已停止。本次修改已部分生成：\n${runStreamed.value.trim()}`
+          : '已停止，未生成修改。',
+        timestamp: Date.now(),
+        stats: runStats.value ?? undefined
+      })
+      return
+    }
+
     p.chatMessages.push({
       role: 'assistant',
-      content: res.finalContent?.trim() || streamed.trim() || '已完成本次原型修改。',
-      timestamp: Date.now()
+      content: res.finalContent?.trim() || runStreamed.value.trim() || '已完成本次原型修改。',
+      timestamp: Date.now(),
+      stats: runStats.value ?? undefined
     })
   } catch (err: any) {
     p.chatMessages.push({
@@ -588,6 +828,20 @@ async function handleSend() {
     })
   } finally {
     isGenerating.value = false
+    // 进度状态是瞬态：run 结束即归零，不残留到下一次
+    activeRunId.value = null
+    runPhase.value = 'idle'
+    gateRound.value = 0
+    runTurn.value = 0
+    runElapsedMs.value = 0
+    activeTool.value = null
+    toolCount.value = 0
+    toolFailed.value = false
+    runStreamed.value = ''
+    runReasoning.value = false
+    runNotice.value = ''
+    runStats.value = null
+    clearInterval(runTimer)
     scrollToBottom()
   }
 }

@@ -82,9 +82,18 @@ app.whenReady().then(async () => {
 
   // The preview host renders a single active prototype file (`/prototypes/:id`
   // is a dynamic segment over one component), so the file name is fixed.
+  //
+  // 内容没变就不写：每次落盘都会让 runtime-host 的 Vite 把预览整页刷新一次。
+  // 渲染层开屏会把 store 里的代码写回这里（reload 后 store 可能是从快照恢复的），
+  // 而「写 → 预览刷新」如果又能引回一次同步，就成了每秒好几次的自激循环。
+  // 幂等写入把这条路堵死，顺带也消掉了切换原型时无意义的预览闪烁。
   ipcMain.handle('host:save-prototype-file', async (_, { code }: { prototypeId: string; code: string }) => {
     try {
       const filePath = join(__dirname, `../../runtime-host/src/views/prototypes/active.vue`)
+      const current = await fs.readFile(filePath, 'utf-8').catch(() => null)
+      if (current === code) {
+        return { success: true, filePath, unchanged: true }
+      }
       await fs.writeFile(filePath, code, 'utf-8')
       return { success: true, filePath }
     } catch (err: any) {
