@@ -1009,8 +1009,10 @@ function handleSelectPrototype(id: string) {
   clearSelectionState()
   // 确保写回文件至 runtime-host
   syncActivePrototypeToFile()
-  void refreshVersionNo()
 }
+
+// 角标跟着活跃原型走：删原型时 store 内部也会改 activeId，光靠切换函数接不全
+watch(() => prototypeStore.activeId, () => void refreshVersionNo())
 
 function handleCreatePrototype(data: { name: string; description: string }) {
   const item = prototypeStore.createPrototype(data.name, data.description)
