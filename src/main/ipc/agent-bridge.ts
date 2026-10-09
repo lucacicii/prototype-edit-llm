@@ -11,6 +11,7 @@ import { BrowserWindow, ipcMain } from 'electron'
 import { promises as fs } from 'fs'
 import * as path from 'path'
 import { BrowserViewManager } from '../browser-view-manager'
+import { activePrototypeFile } from '../app-paths'
 import { resolveRuntimeBinary, RuntimeClient } from '../agent/runtime-client'
 import { PointedTarget, PrototypeAgent } from '../agent/prototype-agent'
 import {
@@ -85,11 +86,7 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
       if (active) {
         // The preview host serves one active prototype file; switching
         // prototypes overwrites it, so the route stays a single component.
-        const file = path.join(
-          options.workspaceDir,
-          'runtime-host/src/views/prototypes',
-          'active.vue'
-        )
+        const file = activePrototypeFile()
         await fs.mkdir(path.dirname(file), { recursive: true })
         await fs.writeFile(file, code, 'utf-8')
       }

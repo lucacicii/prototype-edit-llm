@@ -7,7 +7,7 @@
  */
 
 import { ChildProcess, spawn } from 'child_process';
-import { app } from 'electron';
+import { isPackaged } from '../app-paths';
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -68,6 +68,9 @@ export class ThunderClient extends EventEmitter {
     }
 
     const binaryPath = this.options.binaryPath || this.resolveBinaryPath();
+    console.log(
+      `[ThunderClient] daemon binary: ${binaryPath} (exists: ${fs.existsSync(binaryPath)})`
+    );
     const args: string[] = [];
     if (this.options.workspaceDir) {
       args.push('--workspace', this.options.workspaceDir);
@@ -272,10 +275,9 @@ export class ThunderClient extends EventEmitter {
       return process.env.THUNDER_DAEMON_BIN;
     }
 
-    const isPackaged = typeof app !== 'undefined' && app ? app.isPackaged : false;
     const resourcesPath = (process as any).resourcesPath as string | undefined;
 
-    if (isPackaged && resourcesPath) {
+    if (isPackaged() && resourcesPath) {
       const packagedPath = path.join(resourcesPath, 'bin', binName);
       if (fs.existsSync(packagedPath)) {
         return packagedPath;
@@ -286,7 +288,6 @@ export class ThunderClient extends EventEmitter {
     const candidates = [
       path.join(thunderRepo, 'target/debug', binName),
       path.join(thunderRepo, 'target/release', binName),
-      path.join(__dirname, '../../thunder-agent-daemon/target/debug', binName),
       ...(resourcesPath ? [path.join(resourcesPath, 'bin', binName)] : [])
     ];
 

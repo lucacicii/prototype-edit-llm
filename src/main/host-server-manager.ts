@@ -1,6 +1,6 @@
 import { spawn, ChildProcess } from 'child_process'
-import path from 'path'
 import http from 'http'
+import { runtimeHostDir } from './app-paths'
 
 export class HostServerManager {
   private static instance: HostServerManager
@@ -26,7 +26,7 @@ export class HostServerManager {
       return this.hostUrl
     }
 
-    const hostDir = path.resolve(__dirname, '../../runtime-host')
+    const hostDir = runtimeHostDir()
     const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx'
 
     try {
