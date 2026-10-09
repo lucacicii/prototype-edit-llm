@@ -32,16 +32,22 @@ export interface AgentRunParams {
   code: string
   prototypeId: string
   history?: { role: 'user' | 'assistant' | 'tool' | 'system'; content: string | null }[]
-  inspectTarget?: { tagName: string; text: string }
   /**
-   * 圈改（画方框）时框住的那块：探针在框里认出来的元素 + 框的范围。
-   * 请求里同时带了圈选和圈改时以圈选为准 —— 那是用户更明确的指认。
+   * 圈选点中的元素。走的是同一个 PointedTarget —— 以前这里是内联的
+   * `{tagName, text}`，把选择器/组件/源码位置全挡在了 IPC 之外，模型调
+   * get_inspect_target 也问不出目标在哪一行。
    */
-  markupTarget?: {
+  inspectTarget?: PointedTarget
+  /**
+   * 圈改（画方框）时框住的每一块：探针在框里认出来的元素 + 框的范围 + 该框的批注。
+   * 一次可以框好几处，全部一起送 —— 只发最后一个是上一版的 bug。
+   */
+  markupTargets?: {
+    id?: string
     note: string
     rect: { left: number; top: number; width: number; height: number }
     element?: PointedTarget
-  }
+  }[]
   /** 图片附件：透传给 prototype-agent，落到本轮那条 user 消息的 parts 上。 */
   attachments?: { name: string; mimeType: string; data: string }[]
 }
@@ -95,8 +101,16 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
     // 圈改没有「点中的元素」，但框里认出来的那个同样回答了
     // 「用户在说哪一块」，所以并到同一条通道上 —— 否则
     // get_inspect_target 会在圈改时回「没有圈选任何元素」，跟指令里
-    // 描述的那块区域自相矛盾。
-    getInspectTarget: () => active?.inspectTarget ?? active?.markupTarget?.element,
+    // 描述的那几块区域自相矛盾。
+    // 圈选排在最前：那是用户更明确的指认（同时也是老行为）。
+    getPointedTargets: () => {
+      const list: PointedTarget[] = []
+      if (active?.inspectTarget) list.push(active.inspectTarget)
+      for (const m of active?.markupTargets ?? []) {
+        if (m.element) list.push({ ...m.element, note: m.note })
+      }
+      return list.filter((t) => t.tagName)
+    },
     onFrame: (frame) => {
       for (const win of BrowserWindow.getAllWindows()) {
         win.webContents.send('agent:stream-event', frame)

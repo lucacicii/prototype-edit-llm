@@ -584,6 +584,11 @@ export const BROWSER_PROBE_SCRIPT = `
   let isDrawing = null;
   let startX = 0, startY = 0;
   let currentRectEl = null;
+  // 画过、并且已经确认过批注的框。以前它们只是 overlay 的匿名子 div，没人
+  // 记着 —— 于是既删不掉（发送后、退出圈改后依旧留在画面上，再进圈改又原样
+  // 显形），也编不了号（多框时角标、卡片、指令三处对不上）。
+  let boxSeq = 0;
+  const drawnBoxes = new Map(); // sid -> { id, box, badge, note, label }
   // Electron 渲染进程不实现 window.prompt/alert/confirm（调用直接抛
   // "prompt() is and will not be supported."），批注输入框只能自己画。
   let noteDialogEl = null;
@@ -812,6 +817,12 @@ export const BROWSER_PROBE_SCRIPT = `
           box.remove();
           return;
         }
+        const sid = 'b' + (++boxSeq);
+        // 框只是画出来的东西，确认之后不该再吃鼠标：mousedown 要求
+        // e.target === markupOverlay，框若留着 pointer-events:auto，
+        // 在已有框内部起笔会被它吃掉 —— 多框就画不出「框套框」。
+        box.style.pointerEvents = 'none';
+        box.dataset.protoBoxId = sid;
         const badge = document.createElement('div');
         badge.style.position = 'absolute';
         badge.style.bottom = '-24px';
@@ -822,11 +833,21 @@ export const BROWSER_PROBE_SCRIPT = `
         badge.style.fontSize = '11px';
         badge.style.borderRadius = '3px';
         // 把认出来的元素写进角标：用户发送前就能看到"这一框被认成了什么"，
-        // 认错了可以当场重画，而不是等模型改完才发现改错了地方。
-        badge.textContent = note + (target ? '  · <' + (target.componentName || target.tagName) + '>' : '  · (未定位到元素)');
+        // 认错了可以当场 ✕ 掉重画，而不是等模型改完才发现改错了地方。
+        // 「组件名 == 标签名」（原生 div）时退回选择器：多框时角标才不会清一色 <div>
+        const compLabel = target
+          ? (target.componentName && target.componentName.toLowerCase() !== target.tagName
+              ? target.componentName
+              : (target.selector || target.tagName))
+          : '';
+        const label = target ? '  · <' + compLabel + '>' : '  · (未定位到元素)';
+        badge.textContent = note + label;
         box.appendChild(badge);
+        drawnBoxes.set(sid, { id: sid, box: box, badge: badge, note: note, label: label });
+        renumberBadges();
 
         const payload = {
+          id: sid,
           note,
           rect: {
             left: Math.round(rect.left),
@@ -940,12 +961,59 @@ export const BROWSER_PROBE_SCRIPT = `
     };
   }
 
+  /**
+   * 角标上的 #N 必须和批注卡片、指令里的【圈改位置 N】同源：三处都按「框的先后
+   * 顺序」，删掉中间一个之后重编一遍，否则模型收到的序号跟用户眼前看到的对不上。
+   */
+  function renumberBadges() {
+    let n = 0;
+    drawnBoxes.forEach(function (entry) {
+      n++;
+      entry.badge.textContent = '#' + n + ' ' + entry.note + entry.label;
+    });
+  }
+
+  /**
+   * 清掉画过的所有框：退出圈改、发送、切换原型都走这里。
+   * 以前只有 clearMarkups() 会删，而它没有任何调用者 —— 框因此长生不老，
+   * 重进圈改时又被 display:block 原样显形（用户报的「上次圈改的地方还是
+   * 激活状态」就是这条）。
+   */
+  function clearDrawnBoxes() {
+    closeNoteDialog();
+    drawnBoxes.forEach(function (entry) {
+      if (entry.box && entry.box.isConnected) entry.box.remove();
+    });
+    drawnBoxes.clear();
+    isDrawing = false;
+    currentRectEl = null;
+    // 兜底：本体是旧探针时留下的、没登记过的框（id 由新代码才打，这里只可能
+    // 命中新代码画出来的框，留着等于双保险）
+    if (markupOverlay) {
+      markupOverlay.querySelectorAll('div[data-proto-box-id]').forEach(function (b) {
+        b.remove();
+      });
+    }
+  }
+
+  /** 删掉其中一个框（批注卡片上那一行的 ✕），其余框不动、重新编号 */
+  function removeDrawnBox(id) {
+    const entry = drawnBoxes.get(id);
+    if (!entry) return false;
+    if (entry.box && entry.box.isConnected) entry.box.remove();
+    drawnBoxes.delete(id);
+    renumberBadges();
+    return true;
+  }
+
   function setInspectMode(mode) {
     currentMode = mode;
     initHighlightBox();
     initMarkupOverlay();
 
     if (mode === 'inspect') {
+      // 圈选是「点一个点」，圈改留下的框到这里就没有意义了，顺手清掉
+      clearDrawnBoxes();
       highlightBox.style.display = 'none';
       markupOverlay.style.display = 'none';
       document.addEventListener('mousemove', handleMouseMove, true);
@@ -958,9 +1026,9 @@ export const BROWSER_PROBE_SCRIPT = `
       document.removeEventListener('click', handleClick, true);
       document.addEventListener('keydown', handleKeyDown, true);
     } else {
-      closeNoteDialog();
-      isDrawing = false;
-      currentRectEl = null;
+      // ESC 也走这里（handleKeyDown → setInspectMode('off')），所以退出即清框，
+      // 不需要另一条路径。'markup' 分支**不**清：进入模式时本来就已经是空的。
+      clearDrawnBoxes();
       if (highlightBox) highlightBox.style.display = 'none';
       if (markupOverlay) markupOverlay.style.display = 'none';
       document.removeEventListener('mousemove', handleMouseMove, true);
@@ -988,14 +1056,9 @@ export const BROWSER_PROBE_SCRIPT = `
     setMode: setInspectMode,
     checkViteOverlay: checkViteOverlay,
     resolveComponentMetadata: resolveComponentMetadata,
-    clearMarkups: function() {
-      closeNoteDialog();
-      if (markupOverlay) {
-        const boxes = markupOverlay.querySelectorAll('div');
-        boxes.forEach(b => {
-          if (b.style.border) b.remove();
-        });
-      }
+    // 不带 id = 全清；带 id = 只删那一个框（渲染层卡片上那一行的 ✕）
+    clearMarkups: function(id) {
+      return id != null ? removeDrawnBox(id) : (clearDrawnBoxes(), true);
     }
   };
 })();

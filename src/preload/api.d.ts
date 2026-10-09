@@ -1,4 +1,7 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
+// 只借类型：圈选/圈改指向的元素在主进程那侧已经有权威定义，别在这儿再抄一份
+// （上一版就是抄了个 {tagName,text} 的窄版，把字段丢失藏到了编译期）。
+import type { PointedTarget } from '../main/agent/prototype-agent'
 
 export interface ProjectWorkspace {
   id: string
@@ -32,6 +35,7 @@ export interface IBrowserAPI {
   openDevTools: (mode?: 'detach' | 'bottom' | 'right') => Promise<boolean>
   closeDevTools: () => Promise<boolean>
   setInspectMode: (mode: 'inspect' | 'markup' | 'off') => Promise<boolean>
+  clearMarkups: (id?: string) => Promise<boolean>
   capturePage: () => Promise<string>
   getDiagnostics: () => Promise<{
     hasErrors: boolean
@@ -144,22 +148,15 @@ export interface IAgentAPI {
     prompt: string
     code: string
     history?: Array<{ role: string; content: string | null }>
-    inspectTarget?: { tagName: string; text: string }
-    /** 圈改框住的那块：框里认出来的元素 + 框的范围（视口坐标）。 */
-    markupTarget?: {
+    /** 圈选点中的元素（富字段：选择器/组件/源码位置）。 */
+    inspectTarget?: PointedTarget
+    /** 圈改框住的每一块：框里认出来的元素 + 框的范围（视口坐标）+ 该框的批注。 */
+    markupTargets?: Array<{
+      id?: string
       note: string
       rect: { left: number; top: number; width: number; height: number }
-      element?: {
-        tagName: string
-        text: string
-        className?: string
-        selector?: string
-        componentName?: string
-        sourceFile?: string
-        sourceLine?: number | null
-        stack?: string[]
-      }
-    }
+      element?: PointedTarget
+    }>
     /** 图片附件；`data` 是 base64，不含 `data:` 前缀。 */
     attachments?: Array<{ name: string; mimeType: string; data: string }>
   }) => Promise<{

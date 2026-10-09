@@ -69,6 +69,11 @@ export function setupBrowserIpc(mainWindow: BrowserWindow): void {
     return true
   })
 
+  ipcMain.handle('browser:clear-markups', async (_event, id?: string) => {
+    await browserManager.clearMarkups(id)
+    return true
+  })
+
   ipcMain.handle('browser:capture-page', async () => {
     return browserManager.capturePage()
   })
