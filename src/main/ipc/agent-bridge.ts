@@ -12,7 +12,7 @@ import { promises as fs } from 'fs'
 import * as path from 'path'
 import { BrowserViewManager } from '../browser-view-manager'
 import { resolveRuntimeBinary, RuntimeClient } from '../agent/runtime-client'
-import { PrototypeAgent } from '../agent/prototype-agent'
+import { PointedTarget, PrototypeAgent } from '../agent/prototype-agent'
 import {
   AgentConfigFile,
   isConfigured,
@@ -33,6 +33,15 @@ export interface AgentRunParams {
   prototypeId: string
   history?: { role: 'user' | 'assistant' | 'tool' | 'system'; content: string | null }[]
   inspectTarget?: { tagName: string; text: string }
+  /**
+   * 圈改（画方框）时框住的那块：探针在框里认出来的元素 + 框的范围。
+   * 请求里同时带了圈选和圈改时以圈选为准 —— 那是用户更明确的指认。
+   */
+  markupTarget?: {
+    note: string
+    rect: { left: number; top: number; width: number; height: number }
+    element?: PointedTarget
+  }
   /** 图片附件：透传给 prototype-agent，落到本轮那条 user 消息的 parts 上。 */
   attachments?: { name: string; mimeType: string; data: string }[]
 }
@@ -83,7 +92,11 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
       }
     },
     getDiagnostics: () => BrowserViewManager.getInstance().getDiagnostics(),
-    getInspectTarget: () => active?.inspectTarget,
+    // 圈改没有「点中的元素」，但框里认出来的那个同样回答了
+    // 「用户在说哪一块」，所以并到同一条通道上 —— 否则
+    // get_inspect_target 会在圈改时回「没有圈选任何元素」，跟指令里
+    // 描述的那块区域自相矛盾。
+    getInspectTarget: () => active?.inspectTarget ?? active?.markupTarget?.element,
     onFrame: (frame) => {
       for (const win of BrowserWindow.getAllWindows()) {
         win.webContents.send('agent:stream-event', frame)

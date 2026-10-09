@@ -103,9 +103,34 @@
         <div class="flex-1 pr-2">
           <div class="font-semibold text-amber-300 flex items-center gap-1.5 mb-1">
             <span>✏️ 圈改标注需求</span>
+            <span
+              v-if="markupAnnotation.target"
+              class="px-1.5 rounded bg-amber-900/70 text-amber-200 font-mono text-[10px] font-normal"
+              :title="markupAnnotation.target.sourceFile
+                ? `源码位置: ${markupAnnotation.target.sourceFile}${markupAnnotation.target.sourceLine ? ':' + markupAnnotation.target.sourceLine : ''}`
+                : '未取到源码位置'"
+            >
+              📍 &lt;{{ markupAnnotation.target.componentName || markupAnnotation.target.tagName }}&gt;
+            </span>
+            <span
+              v-else
+              class="px-1.5 rounded bg-red-900/60 text-red-200 text-[10px] font-normal"
+              title="框内没有取到元素，模型只能靠批注文字判断位置"
+            >
+              未定位到元素
+            </span>
           </div>
           <div class="text-amber-200/90 text-[11px] leading-relaxed">
             "{{ markupAnnotation.note }}"
+          </div>
+          <div
+            v-if="markupAnnotation.target"
+            class="text-amber-300/70 font-mono text-[10px] truncate mt-0.5"
+          >
+            {{ markupAnnotation.target.selector || markupAnnotation.target.tagName }}
+            <template v-if="markupAnnotation.target.sourceFile">
+              · {{ getCleanFileName(markupAnnotation.target.sourceFile) }}{{ markupAnnotation.target.sourceLine ? ':' + markupAnnotation.target.sourceLine : '' }}
+            </template>
           </div>
         </div>
         <button
@@ -865,7 +890,7 @@ async function handleCancelRun() {
 // 当前圈选选中的目标 DOM 信息
 const inspectTarget = ref<any | null>(null)
 // 当前圈改标注
-const markupAnnotation = ref<{ note: string; rect: any } | null>(null)
+const markupAnnotation = ref<MarkupAnnotation | null>(null)
 
 const currentTitle = computed(() => {
   if (currentWorkspace.value && currentWorkspace.value.id !== 'default-host') {
@@ -1013,11 +1038,96 @@ function getCleanFileName(p: string) {
   return p.split('/').pop() || p
 }
 
+type MarkupAnnotation = { note: string; rect: any; target?: any }
+
+/**
+ * 圈改请求的提示词：必须先把「框在哪」讲清楚。
+ *
+ * 原先只发一句批注文字，模型无从知道批的哪一块，只能按字面猜 ——
+ * 实测：在顶部标签栏上画框写「修改一下背景色为橙色」，它把整页背景改成了橙色渐变。
+ * 定位信息放在批注文字之后、且明确要求只改这一块。
+ */
+function buildMarkupInstruction(markup: MarkupAnnotation, text: string): string {
+  const t = markup?.target
+  const r = markup?.rect
+  const lines: string[] = [`【圈改批注诉求】: ${markup.note}`]
+
+  if (t) {
+    lines.push('【圈改位置】: 用户在预览里框选了一块区域后写的批注，请只改这一块，不要动整页/全局样式。')
+    const firstClass = String(t.className || '')
+      .split(' ')
+      .filter(Boolean)[0]
+    let desc = `- 目标元素: <${t.tagName}`
+    if (firstClass) desc += ` class="${firstClass}"`
+    desc += '>'
+    if (t.componentName) desc += `（所在组件 <${t.componentName}>）`
+    lines.push(desc)
+    if (t.text) lines.push(`- 该元素文本: "${t.text}"`)
+    if (t.sourceFile) {
+      lines.push(`- 源码位置: ${t.sourceFile}${t.sourceLine ? ':' + t.sourceLine : ''}`)
+    }
+    if (Array.isArray(t.stack) && t.stack.length > 1) {
+      lines.push(`- 该点元素层叠（由内到外）: ${t.stack.join(' < ')}`)
+    }
+    if (t.outerHTMLSnippet) lines.push(`- 元素 HTML: ${t.outerHTMLSnippet}`)
+  } else {
+    lines.push(
+      '【圈改位置】: 这次没能在框内定位到具体元素，请先按批注判断改哪一块；判断不了就不要动全局样式。'
+    )
+  }
+  if (r) {
+    lines.push(`- 框选范围（视口坐标，仅供参考）: left=${r.left} top=${r.top} w=${r.width} h=${r.height}`)
+  }
+  if (text && text !== markup.note) lines.push(text)
+  return lines.join('\n')
+}
+
+/**
+ * IPC 边界上必须递**纯数据**。
+ *
+ * markupAnnotation 是 Vue 的 ref，读出来是响应式 Proxy —— 直接把
+ * markup.rect / markup.target 塞进 ipcRenderer.invoke，主进程侧会炸
+ * 「An object could not be cloned.」，请求根本到不了模型
+ * （实测：页面三秒后回一句"生成异常"，代码一个字没改）。
+ * 所以逐字段摊平成普通对象，跟 inspectTarget 的写法保持一致。
+ */
+function toPlainMarkupTarget(markup: MarkupAnnotation) {
+  const t = markup.target
+  return {
+    note: String(markup.note ?? ''),
+    rect: {
+      left: Number(markup.rect?.left ?? 0),
+      top: Number(markup.rect?.top ?? 0),
+      width: Number(markup.rect?.width ?? 0),
+      height: Number(markup.rect?.height ?? 0)
+    },
+    element: t
+      ? {
+          tagName: String(t.tagName ?? ''),
+          text: String(t.text ?? ''),
+          className: String(t.className ?? ''),
+          selector: String(t.selector ?? ''),
+          componentName: String(t.componentName ?? ''),
+          sourceFile: String(t.sourceFile ?? ''),
+          sourceLine: typeof t.sourceLine === 'number' ? t.sourceLine : null,
+          stack: Array.isArray(t.stack) ? t.stack.map((s: unknown) => String(s)) : []
+        }
+      : undefined
+  }
+}
+
 // 圈改标注事件捕获
-function onMarkupSaved(data: { note: string; rect: any }) {
+function onMarkupSaved(data: MarkupAnnotation) {
   markupAnnotation.value = data
-  promptInput.value = data.note
-  ElMessage.success(`已捕获圈改批注: "${data.note}"`)
+  // 只在输入框空着时回填批注 —— 用户可能已经打了一半需求再去画框，
+  // 那是他写的东西，不该被批注顶掉（批注本身在卡片里、也照样会随请求发出去）。
+  if (!promptInput.value.trim()) promptInput.value = data.note
+  const t = data.target
+  ElMessage.success(
+    t
+      ? `已捕获圈改批注: "${data.note}" · 定位到 <${t.componentName || t.tagName}>`
+      : `已捕获圈改批注: "${data.note}" · 未定位到元素`
+  )
 }
 
 function resetChat() {
@@ -1089,7 +1199,7 @@ async function handleSend() {
 
   let instruction = text
   if (markup) {
-    instruction = `【圈改批注诉求】: ${markup.note}\n${text !== markup.note ? text : ''}`
+    instruction = buildMarkupInstruction(markup, text)
   }
 
   // 文本附件内联成引用块。正文自带 ``` 时改用四反引号围栏，否则代码块会被提前闭合。
@@ -1201,6 +1311,9 @@ async function handleSend() {
         code: p.vueCode,
         history,
         inspectTarget: target ? { tagName: target.tagName, text: target.text } : undefined,
+        // 框住的那块也走一条通道：指令里已经写清楚了，但模型要是回头调
+        // get_inspect_target，得能问出同一个答案，而不是「没有圈选任何元素」。
+        markupTarget: markup ? toPlainMarkupTarget(markup) : undefined,
         attachments: outgoingImages.length ? outgoingImages : undefined
       })
     } finally {

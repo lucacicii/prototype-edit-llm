@@ -145,6 +145,21 @@ export interface IAgentAPI {
     code: string
     history?: Array<{ role: string; content: string | null }>
     inspectTarget?: { tagName: string; text: string }
+    /** 圈改框住的那块：框里认出来的元素 + 框的范围（视口坐标）。 */
+    markupTarget?: {
+      note: string
+      rect: { left: number; top: number; width: number; height: number }
+      element?: {
+        tagName: string
+        text: string
+        className?: string
+        selector?: string
+        componentName?: string
+        sourceFile?: string
+        sourceLine?: number | null
+        stack?: string[]
+      }
+    }
     /** 图片附件；`data` 是 base64，不含 `data:` 前缀。 */
     attachments?: Array<{ name: string; mimeType: string; data: string }>
   }) => Promise<{

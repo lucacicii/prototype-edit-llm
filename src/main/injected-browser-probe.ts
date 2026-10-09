@@ -803,6 +803,10 @@ export const BROWSER_PROBE_SCRIPT = `
         return;
       }
 
+      // 定位必须在弹输入框**之前**做：框刚画完，画面正是用户看到的那一版；
+      // 等用户敲完字再问，中间隔着的正是输入框自己（它会挡住取样点）。
+      const target = describeBoxTarget(rect);
+
       showNoteDialog('调整此区域布局', (note) => {
         if (!note) {
           box.remove();
@@ -817,7 +821,9 @@ export const BROWSER_PROBE_SCRIPT = `
         badge.style.padding = '2px 8px';
         badge.style.fontSize = '11px';
         badge.style.borderRadius = '3px';
-        badge.textContent = note;
+        // 把认出来的元素写进角标：用户发送前就能看到"这一框被认成了什么"，
+        // 认错了可以当场重画，而不是等模型改完才发现改错了地方。
+        badge.textContent = note + (target ? '  · <' + (target.componentName || target.tagName) + '>' : '  · (未定位到元素)');
         box.appendChild(badge);
 
         const payload = {
@@ -827,13 +833,111 @@ export const BROWSER_PROBE_SCRIPT = `
             top: Math.round(rect.top),
             width: Math.round(rect.width),
             height: Math.round(rect.height)
-          }
+          },
+          target: target
         };
         console.log('__PROTOTYPE_MARKUP_RESULT__' + JSON.stringify(payload));
       });
     });
 
     document.body.appendChild(markupOverlay);
+  }
+
+  /**
+   * 框中心命中的元素（连同它外面的层叠）。
+   *
+   * 取样前必须先把遮罩藏起来：它 fixed 全屏、z-index 顶格，子元素还带着
+   * pointer-events:auto，不藏的话 elementsFromPoint 只会返回遮罩自己
+   * （实测：返回 [div#__prototype_markup_overlay__, ...真实元素]）。
+   * display:none 而不是 pointer-events:none —— 画过的每个框都单独设了
+   * pointer-events:auto，逐个撤销容易漏；整棵子树一起出局最稳，而且它是
+   * fixed 定位、不在文档流里，藏一下不会让页面重排。
+   */
+  function elementsInsideBox(rect) {
+    if (!markupOverlay) return [];
+    const prevDisplay = markupOverlay.style.display;
+    let stack = [];
+    try {
+      markupOverlay.style.display = 'none';
+      const cx = Math.round(rect.left + rect.width / 2);
+      const cy = Math.round(rect.top + rect.height / 2);
+      stack = document.elementsFromPoint(cx, cy) || [];
+      // 中心点落在视口外或透明处时是空数组，退到框内四角再试
+      if (!stack.length) {
+        const pts = [
+          [rect.left + 3, rect.top + 3],
+          [rect.right - 3, rect.top + 3],
+          [rect.left + 3, rect.bottom - 3],
+          [rect.right - 3, rect.bottom - 3]
+        ];
+        for (let i = 0; i < pts.length && !stack.length; i++) {
+          stack = document.elementsFromPoint(pts[i][0], pts[i][1]) || [];
+        }
+      }
+    } catch (err) {
+      stack = [];
+    } finally {
+      markupOverlay.style.display = prevDisplay;
+    }
+    // 遮罩已经藏了，这里再滤一遍探针自己的节点（徽标、刚画的框）
+    return stack.filter(function (el) {
+      return el && !(el.id && el.id.indexOf('__prototype_') === 0) && el !== markupOverlay;
+    });
+  }
+
+  /** 元素的一行短描述，给「层叠」列表和角标用 */
+  function shortElementDesc(el) {
+    const tag = el.tagName ? el.tagName.toLowerCase() : '?';
+    const cls = typeof el.className === 'string' ? el.className.split(' ').filter(Boolean)[0] : '';
+    return cls ? tag + '.' + cls : tag;
+  }
+
+  /**
+   * 把「用户框住的这块」翻译成模型能用的定位信息。
+   * 圈选那条路早就这么干了（__PROTOTYPE_INSPECT_RESULT__），圈改原先只发了个
+   * rect —— 于是模型只知道"有人写了句批注"，压根不知道批的是哪一块，
+   * 只能按文字猜（实测：框了顶部标签栏写「背景色改橙色」，结果改了整页背景）。
+   */
+  function describeBoxTarget(rect) {
+    const stack = elementsInsideBox(rect);
+    if (!stack.length) return null;
+
+    // 跟圈选同一条规则：优先取最内层「有用户源码位置」的元素，
+    // 中间的组件库包装层（ElOnlyChild 之类）对用户没有意义。
+    let picked = null;
+    for (let i = 0; i < stack.length; i++) {
+      const loc = readOwnLoc(stack[i]);
+      if (loc && isUserFile(loc.file)) { picked = stack[i]; break; }
+    }
+    if (!picked) picked = stack[0];
+
+    const meta = resolveComponentMetadata(picked);
+    const tagName = picked.tagName ? picked.tagName.toLowerCase() : '';
+    const className = typeof picked.className === 'string' ? picked.className : '';
+    const id = picked.id || '';
+    const text = (picked.innerText || picked.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 120);
+
+    let selector = tagName;
+    if (id) selector += '#' + id;
+    else if (className) {
+      const first = className.split(' ').filter(Boolean)[0];
+      if (first) selector += '.' + first;
+    }
+
+    return {
+      tagName: tagName,
+      className: className,
+      id: id,
+      text: text,
+      selector: selector,
+      framework: meta.framework,
+      componentName: meta.componentName || '',
+      sourceFile: meta.sourceFile || '',
+      sourceLine: meta.sourceLine,
+      outerHTMLSnippet: (picked.outerHTML || '').slice(0, 300),
+      // 由内到外的层叠：用户框的常常是一个"块"，让模型看见它套在谁里面
+      stack: stack.slice(0, 6).map(shortElementDesc)
+    };
   }
 
   function setInspectMode(mode) {
