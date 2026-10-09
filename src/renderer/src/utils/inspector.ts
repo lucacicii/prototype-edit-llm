@@ -46,10 +46,10 @@ export function buildInspectTarget(el: HTMLElement, sourceCode: string): Inspect
 
   // 猜测所属组件
   let componentName = tagName
-  if (tagName.startsWith('el-') || tagName.startsWith('wb-')) {
+  if (tagName.startsWith('el-')) {
     componentName = tagName
-  } else if (className.includes('el-') || className.includes('wb-')) {
-    const match = className.match(/\b(el-[a-z0-9-]+|wb-[a-z0-9-]+)\b/)
+  } else if (className.includes('el-')) {
+    const match = className.match(/\b(el-[a-z0-9-]+)\b/)
     if (match) componentName = match[1]
   }
 
@@ -104,13 +104,10 @@ export function locateCodeSnippet(
     }
   }
 
-  // 2. 尝试匹配标签名或常见 Element/Wb 组件
+  // 2. 尝试匹配标签名或常见 Element 组件
   const tagKeywords = [
     tagLower,
     tagLower.replace('el-', ''),
-    tagLower.replace('wb-', ''),
-    'wb-table',
-    'wb-filter-form',
     'el-button',
     'el-form-item'
   ]

@@ -66,10 +66,12 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
     applyEdit: async (code) => {
       activeCode = code
       if (active) {
+        // The preview host serves one active prototype file; switching
+        // prototypes overwrites it, so the route stays a single component.
         const file = path.join(
           options.workspaceDir,
           'runtime-host/src/views/prototypes',
-          `${active.prototypeId}.vue`
+          'active.vue'
         )
         await fs.mkdir(path.dirname(file), { recursive: true })
         await fs.writeFile(file, code, 'utf-8')

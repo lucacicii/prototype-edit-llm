@@ -80,9 +80,11 @@ app.whenReady().then(async () => {
     return hostManager.getHostUrl()
   })
 
-  ipcMain.handle('host:save-prototype-file', async (_, { prototypeId, code }: { prototypeId: string; code: string }) => {
+  // The preview host renders a single active prototype file (`/prototypes/:id`
+  // is a dynamic segment over one component), so the file name is fixed.
+  ipcMain.handle('host:save-prototype-file', async (_, { code }: { prototypeId: string; code: string }) => {
     try {
-      const filePath = join(__dirname, `../../runtime-host/src/views/prototypes/${prototypeId}.vue`)
+      const filePath = join(__dirname, `../../runtime-host/src/views/prototypes/active.vue`)
       await fs.writeFile(filePath, code, 'utf-8')
       return { success: true, filePath }
     } catch (err: any) {

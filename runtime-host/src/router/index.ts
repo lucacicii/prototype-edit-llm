@@ -7,19 +7,13 @@ export const router = createRouter({
     {
       path: '/',
       component: MainLayout,
-      redirect: '/prototypes/merchant-mgmt',
+      redirect: '/prototypes/blank-prototype',
       children: [
         {
-          path: '/prototypes/merchant-mgmt',
-          name: 'MerchantMgmt',
-          component: () => import('../views/prototypes/merchant-mgmt.vue'),
-          meta: { title: '客户与商户管理' }
-        },
-        {
-          path: '/prototypes/material-mgmt',
-          name: 'MaterialMgmt',
-          component: () => import('../views/prototypes/material-mgmt.vue'),
-          meta: { title: '企业商品与物料管理' }
+          path: '/prototypes/:id',
+          name: 'Prototype',
+          component: () => import('../views/prototypes/active.vue'),
+          meta: { title: '原型预览' }
         }
       ]
     }

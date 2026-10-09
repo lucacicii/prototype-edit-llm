@@ -1,9 +1,16 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import Inspector from 'vite-plugin-vue-inspector'
 import path from 'path'
 
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [
+    vue(),
+    // 给每个元素挂上编译期源码位置，供预览里的「🎯 圈选」定位到具体文件行。
+    // Vue 编译后不保留行号，没有它就只能在组件粒度上猜。
+    // 关掉悬浮按钮与快捷键：预览里不能有任何东西抢用户的点击。
+    Inspector({ toggleButtonVisibility: 'never', toggleComboKey: false })
+  ],
   server: {
     port: 4321,
     strictPort: true,
@@ -15,10 +22,7 @@ export default defineConfig({
   },
   resolve: {
     alias: [
-      { find: /^@\/style\/(.*)/, replacement: '/Users/lucas/wb/refactoring/wb-tools/packages/wb-ui/src/style/$1' },
-      { find: '@', replacement: path.resolve(__dirname, 'src') },
-      { find: 'packages', replacement: path.resolve('/Users/lucas/wb/refactoring/wb-tools/packages/wb-ui/packages') },
-      { find: '@wb-ui', replacement: path.resolve('/Users/lucas/wb/refactoring/wb-tools/packages/wb-ui/packages') }
+      { find: '@', replacement: path.resolve(__dirname, 'src') }
     ]
   }
 })

@@ -12,8 +12,7 @@ export default defineConfig({
   renderer: {
     resolve: {
       alias: {
-        '@renderer': resolve('src/renderer/src'),
-        '@wb-ui': resolve('/Users/lucas/wb/refactoring/wb-tools/packages/wb-ui/packages')
+        '@renderer': resolve('src/renderer/src')
       }
     },
     server: {
