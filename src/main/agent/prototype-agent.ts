@@ -40,12 +40,21 @@ export interface PrototypeAgentDeps {
   settleMs?: number
 }
 
+/** 一次 run 携带的图片附件；`data` 是 base64，不含 `data:` 前缀。 */
+export interface RuntimeImageAttachment {
+  name: string
+  mimeType: string
+  data: string
+}
+
 export interface RunRequest {
   runId: string
   prompt: string
   history: RuntimeMessage[]
   model: RuntimeModel
   config: AgentConfigFile
+  /** 附着到本次追加的那条 user 消息上；为空时消息形状与改动前完全一致。 */
+  attachments?: RuntimeImageAttachment[]
 }
 
 export interface RunOutcome {
@@ -111,10 +120,22 @@ export class PrototypeAgent {
     const { client } = this.deps
     if (!client.isRunning) client.start()
 
-    const messages: RuntimeMessage[] = [
-      ...request.history,
-      { role: 'user', content: request.prompt }
-    ]
+    // 图片只挂在本轮新追加的那条 user 消息上：重放的 history 是纯文本，
+    // 历史轮次的图片字节早已不在（渲染层没把它们存进 store）。
+    const lastUser: RuntimeMessage = request.attachments?.length
+      ? {
+          role: 'user',
+          content: request.prompt,
+          parts: request.attachments.map((a) => ({
+            type: 'image' as const,
+            mimeType: a.mimeType,
+            data: a.data,
+            name: a.name
+          }))
+        }
+      : { role: 'user', content: request.prompt }
+
+    const messages: RuntimeMessage[] = [...request.history, lastUser]
 
     const outcome = new Promise<RunOutcome>((resolve, reject) => {
       this.active.set(request.runId, { resolve, reject })

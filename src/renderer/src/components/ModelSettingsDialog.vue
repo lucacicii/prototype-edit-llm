@@ -231,22 +231,11 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-
-interface ThunderModelView {
-  selectionId: string
-  provider: string
-  id: string
-  name: string
-  api: string
-  baseUrl: string
-  hasApiKey: boolean
-  reasoning: boolean
-  contextWindow: number
-  maxTokens: number
-  thinkingLevels: string[]
-  defaultThinkingLevel: string
-  available: boolean
-}
+import {
+  useAgentModelConfig,
+  DEFAULT_THINKING_LEVELS,
+  type ThunderModelView
+} from '../composables/useAgentModelConfig'
 
 const props = defineProps<{ visible: boolean }>()
 const emit = defineEmits<{
@@ -266,7 +255,6 @@ const API_OPTIONS = [
   { label: 'anthropic-messages', value: 'anthropic-messages' },
   { label: 'google-generative-ai', value: 'google-generative-ai' }
 ]
-const DEFAULT_THINKING_LEVELS = ['off', 'low', 'medium', 'high']
 
 const form = reactive({
   provider: '',
@@ -285,9 +273,15 @@ const form = reactive({
   requestTimeoutMs: undefined as number | undefined
 })
 
+const modelConfig = useAgentModelConfig()
+
 const mode = ref<'thunder' | 'manual'>('thunder')
-const models = ref<ThunderModelView[]>([])
-const modelSources = ref<string[]>([])
+// 模型目录走共享 composable：输入区的下拉读的是同一份，弹窗里刷新过它也就跟着新。
+// selectionId / selectedModel / thinkingOptions 仍按弹窗自己的待保存状态推导 ——
+// 选中模型后直接改共享状态的话，用户点「取消」也会把输入区改掉。
+const models = modelConfig.models
+const modelSources = modelConfig.modelSources
+const groupedModels = modelConfig.groupedModels
 const selectionId = ref('')
 const tools = ref<{ name: string; description: string; effect: string }[]>([])
 const runtimePath = ref('')
@@ -299,22 +293,6 @@ const saving = ref(false)
 const runtimeOk = ref<boolean | null>(null)
 const runtimeVersion = ref('')
 const runtimeError = ref('')
-
-const groupedModels = computed(() => {
-  const groups: { provider: string; items: (ThunderModelView & { label: string })[] }[] = []
-  for (const item of models.value) {
-    const label = `${item.name === item.id ? item.id : `${item.name} (${item.id})`}${
-      item.available ? '' : ' · 不可用'
-    }`
-    let group = groups.find((g) => g.provider === item.provider)
-    if (!group) {
-      group = { provider: item.provider, items: [] }
-      groups.push(group)
-    }
-    group.items.push({ ...item, label })
-  }
-  return groups
-})
 
 const selectedModel = computed(() =>
   models.value.find((m) => m.selectionId === selectionId.value)
@@ -360,13 +338,14 @@ async function load() {
 
   loading.value = true
   try {
+    // 目录走共享 composable（输入区的下拉读同一份），这里只取表单要用的字段
+    await modelConfig.refresh()
+
     const res = await window.agent.getConfig()
     runtimePath.value = res.runtimePath ?? ''
     configPath.value = res.path ?? ''
     envLocked.value = Boolean(res.envLocked)
     tools.value = res.tools ?? []
-    models.value = (res.models ?? []) as ThunderModelView[]
-    modelSources.value = res.modelSources ?? []
 
     const model = res.config?.model as
       | { provider?: string; id?: string; name?: string; api?: string; baseUrl?: string; apiKey?: string }
@@ -497,6 +476,8 @@ async function handleSave() {
     }
 
     configPath.value = res.path ?? configPath.value
+    // 输入区的两个下拉读的是同一份共享状态，保存完立刻让它跟上
+    await modelConfig.refresh()
     ElMessage.success('模型配置已保存')
     emit('saved', { configured: true })
     visible.value = false
