@@ -64,7 +64,7 @@
           v-for="log in filteredLogs"
           :key="log.id"
           class="p-1.5 rounded flex flex-col gap-1 border transition hover:bg-slate-900/60"
-          :class="getLogItemClass(log.level)"
+          :class="getLogItemClass(log)"
         >
           <div class="flex items-start justify-between gap-2">
             <div class="flex items-start gap-2 flex-1 min-w-0">
@@ -73,24 +73,32 @@
               </span>
               <span
                 class="px-1.5 py-0.2 rounded text-[10px] uppercase font-bold flex-shrink-0"
-                :class="getLevelBadgeClass(log.level)"
+                :class="getLevelBadgeClass(log)"
+                :title="getOriginTitle(log)"
               >
-                {{ log.category }}:{{ log.level }}
+                {{ getBadgeLabel(log) }}
               </span>
               <span class="break-all whitespace-pre-wrap leading-tight text-[11px] font-mono flex-1">
-                {{ log.text }}
+                <span v-if="isProbeLog(log)" class="text-sky-400/80">[工具探针·非原型代码] </span>{{ log.text }}
               </span>
             </div>
 
-            <!-- 如果是报错，显示快速让 AI 修复按钮 -->
+            <!-- 报错才给快速修复；探针自己的报错不引导去改原型（那修不好它） -->
             <button
-              v-if="log.level === 'error'"
+              v-if="log.level === 'error' && !isProbeLog(log)"
               @click="$emit('fix-error', log)"
               class="px-2 py-0.5 bg-red-600/30 hover:bg-red-600/50 text-red-200 border border-red-500/40 rounded text-[10px] flex-shrink-0 transition flex items-center gap-1"
             >
               <span>🤖</span>
               <span>AI 修复</span>
             </button>
+            <span
+              v-else-if="isProbeLog(log) && log.level === 'error'"
+              class="px-2 py-0.5 bg-sky-600/20 text-sky-300/80 border border-sky-600/30 rounded text-[10px] flex-shrink-0 cursor-help"
+              :title="getOriginTitle(log)"
+            >
+              工具侧问题
+            </span>
           </div>
 
           <!-- 堆栈详情展开 -->
@@ -214,15 +222,34 @@ function formatTime(ts: number) {
   return d.toTimeString().split(' ')[0] + '.' + String(d.getMilliseconds()).padStart(3, '0')
 }
 
-function getLogItemClass(level: string) {
-  if (level === 'error') return 'bg-red-950/20 border-red-900/40 text-red-200'
-  if (level === 'warn') return 'bg-amber-950/20 border-amber-900/40 text-amber-200'
+/** 注入探针（工具自己的脚本）的报错：标出来，并且不引导去改原型。 */
+function isProbeLog(log: any) {
+  return log?.origin === 'probe'
+}
+
+function getOriginTitle(log: any) {
+  return isProbeLog(log)
+    ? '来自原型工具注入的圈选/圈改探针脚本，不是原型代码。原型无需改动。'
+    : '来自原型页面自身的代码。'
+}
+
+function getBadgeLabel(log: any) {
+  const category = isProbeLog(log) ? 'probe' : log?.category
+  return `${category}:${log?.level}`
+}
+
+function getLogItemClass(log: any) {
+  // 探针报错用冷色：它跟原型无关，不该跟原型报错一样刺眼
+  if (isProbeLog(log) && log.level === 'error') return 'bg-sky-950/20 border-sky-900/40 text-sky-200'
+  if (log?.level === 'error') return 'bg-red-950/20 border-red-900/40 text-red-200'
+  if (log?.level === 'warn') return 'bg-amber-950/20 border-amber-900/40 text-amber-200'
   return 'bg-slate-900/40 border-slate-800 text-slate-300'
 }
 
-function getLevelBadgeClass(level: string) {
-  if (level === 'error') return 'bg-red-600 text-white'
-  if (level === 'warn') return 'bg-amber-600 text-white'
+function getLevelBadgeClass(log: any) {
+  if (isProbeLog(log) && log.level === 'error') return 'bg-sky-700 text-white'
+  if (log?.level === 'error') return 'bg-red-600 text-white'
+  if (log?.level === 'warn') return 'bg-amber-600 text-white'
   return 'bg-slate-700 text-slate-200'
 }
 

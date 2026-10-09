@@ -895,4 +895,8 @@ export const BROWSER_PROBE_SCRIPT = `
     }
   };
 })();
+// 给注入脚本一个名字：executeJavaScript 进来的脚本默认没有 URL，栈帧全是
+// \`<anonymous>:641:22\`，跟原型代码的报错长得一模一样，控制台分不出是谁炸的。
+// 带上 sourceURL 后探针自己的栈帧都长这样，cdp-debug-bridge 靠它认领错误。
+//# sourceURL=__prototype_probe__.js
 `;

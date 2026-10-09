@@ -244,6 +244,7 @@ export class BrowserViewManager {
         warningCount: 0,
         errors: [],
         warnings: [],
+        probeErrorCount: 0,
         summary: 'CDP 未激活'
       }
     }

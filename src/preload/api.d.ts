@@ -47,8 +47,12 @@ export interface IBrowserAPI {
       line?: number
       column?: number
       stack?: string
+      /** 'probe' = 工具注入脚本，'prototype' = 原型自己的代码。 */
+      origin?: 'prototype' | 'probe'
     }>
     warnings: Array<any>
+    /** 探针报错条数；这些不进 errors，也不触发自愈。 */
+    probeErrorCount: number
     summary: string
   }>
   clearDiagnostics: () => Promise<boolean>
