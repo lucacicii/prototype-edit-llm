@@ -1,7 +1,11 @@
 import { spawn, ChildProcess } from 'child_process'
+import { promises as fs, existsSync } from 'fs'
+import { dirname, join } from 'path'
 import http from 'http'
-import { runtimeHostDir } from './app-paths'
+import { app } from 'electron'
+import { bundledRuntimeHostDir, isPackaged, runtimeHostDir } from './app-paths'
 
+/** 预览宿主（一个真 Vite dev server）的生命周期。 */
 export class HostServerManager {
   private static instance: HostServerManager
   private process: ChildProcess | null = null
@@ -26,15 +30,12 @@ export class HostServerManager {
       return this.hostUrl
     }
 
+    await this.ensureProvisioned()
+
     const hostDir = runtimeHostDir()
-    const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx'
 
     try {
-      this.process = spawn(npxCmd, ['vite', '--port', '4321', '--strictPort'], {
-        cwd: hostDir,
-        shell: true,
-        env: { ...process.env, FORCE_COLOR: '1' }
-      })
+      this.process = this.spawnVite(hostDir)
 
       this.process.stdout?.on('data', (data) => {
         const msg = data.toString()
@@ -58,6 +59,66 @@ export class HostServerManager {
     }
 
     return this.hostUrl
+  }
+
+  private spawnVite(hostDir: string): ChildProcess {
+    if (!isPackaged()) {
+      // dev：照旧用用户 PATH 里的 npx，跑仓库里的 runtime-host。
+      const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx'
+      return spawn(npxCmd, ['vite', '--port', '4321', '--strictPort'], {
+        cwd: hostDir,
+        shell: true,
+        env: { ...process.env, FORCE_COLOR: '1' }
+      })
+    }
+
+    // 打包态：包里没有 npx 可指望，用 Electron 自带的 Node 直接跑 Vite 的 CLI。
+    // ELECTRON_RUN_AS_NODE 放在子进程的 env 里（不是我们自己的），只影响这一个。
+    return spawn(
+      process.execPath,
+      [join(hostDir, 'node_modules', 'vite', 'bin', 'vite.js'), '--port', '4321', '--strictPort'],
+      {
+        cwd: hostDir,
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+      }
+    )
+  }
+
+  /**
+   * 打包态：把随包的预览宿主铺一份到可写的 userData 下再跑。
+   *
+   * 不能在 Resources/runtime-host 里就地跑：.app 包内等同只读，而 Vite 要在那儿
+   * 写自己的依赖缓存，我们每改一次原型还要重写 active.vue —— 往包体里写还会
+   * 破坏签名。首启复制约 165M（SSD 上一两秒），之后靠版本戳判断是否要重铺：
+   * app 一升级就重铺，免得旧的 Vite 配置残留下来。
+   *
+   * pnpm 的 node_modules 软链是相对的（`element-plus -> .pnpm/...`），整树复制
+   * 后依然自洽，所以这里用 verbatimSymlinks 保住链接原样。
+   */
+  private async ensureProvisioned(): Promise<void> {
+    const bundled = bundledRuntimeHostDir()
+    if (!bundled) return // dev：直接用仓库里的 runtime-host
+
+    const target = runtimeHostDir()
+    const stampFile = join(target, '.runtime-host-version')
+    const viteCli = join(target, 'node_modules', 'vite', 'bin', 'vite.js')
+
+    try {
+      const stamp = await fs.readFile(stampFile, 'utf-8').catch(() => null)
+      if (stamp?.trim() === app.getVersion() && existsSync(viteCli)) {
+        return
+      }
+      console.log(`[preview] 铺设预览宿主：${bundled} → ${target}（首次或版本变化，约 165M）`)
+      await fs.rm(target, { recursive: true, force: true })
+      await fs.mkdir(dirname(target), { recursive: true })
+      await fs.cp(bundled, target, { recursive: true, verbatimSymlinks: true })
+      await fs.writeFile(stampFile, app.getVersion(), 'utf-8')
+      console.log('[preview] 预览宿主就绪')
+    } catch (err: any) {
+      // 不抛：让它继续走到 startServer 的 waitForServer，那里会失败并留下日志，
+      // 而这里的一句「为什么没铺成」通常才是真正的线索。
+      console.error('[preview] 铺设预览宿主失败：', err?.message ?? err)
+    }
   }
 
   public stopServer() {

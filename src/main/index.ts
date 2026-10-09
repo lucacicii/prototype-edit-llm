@@ -12,6 +12,14 @@ import { HostServerManager } from './host-server-manager'
 import { activePrototypeFile, workspaceDir } from './app-paths'
 import { applyPackagedRuntimeEnv } from './runtime-env'
 
+// 打包版的 userData 必须与 dev 分开，否则两边共用一份 localStorage、一份工作区；
+// 而 Electron 的 app.getName() 取自 package.json 的 name（prototype-edit-llm），
+// 不是 electron-builder 的 productName —— 不显式改掉，打包版就会把 185M 的
+// runtime-host/ 和 bin/node 写进 dev 的 userData（实测过）。
+// 只在打包态改：dev 的 userData 里是用户真实的原型与对话，改名字等于换库。
+// 字符串与 electron-builder.yml 的 productName 必须保持一致。
+if (app.isPackaged) app.setName('Prototype Studio')
+
 // 强制内核级别停用所有 HTTP 缓存及 GPU Shader 缓存
 app.commandLine.appendSwitch('disable-http-cache')
 app.commandLine.appendSwitch('disable-gpu-shader-disk-cache')
@@ -69,6 +77,14 @@ function createWindow(): void {
 
 app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.electron.prototype-editor')
+
+  // 打包版的图标由 electron-builder.yml 的 mac.icon 烤进 bundle，dev 下 dock 显示
+  // 的却是 Electron 本体那个默认图；手动指过去，否则开发时看见的是「Electron」。
+  // 路径按 out/main/ 往上两级找仓库根的 build/，打包版里没有这个目录，故只在 dev 走。
+  if (is.dev && process.platform === 'darwin') {
+    const devIcon = join(__dirname, '../../build/icon.png')
+    if (existsSync(devIcon)) app.dock?.setIcon(devIcon)
+  }
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)

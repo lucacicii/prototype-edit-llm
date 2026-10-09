@@ -1,6 +1,7 @@
 node_modules
 out
 dist
+build/sidecars
 *.local
 .prototype-agent.json
 .prototype-history
