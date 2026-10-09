@@ -453,6 +453,15 @@
           </div>
 
           <button
+            @click="isHistoryOpen = true"
+            title="查看这个原型的历史版本，可随时回滚"
+            class="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-100 text-xs font-medium rounded-lg shadow transition flex items-center gap-1.5"
+          >
+            <span>🕘</span>
+            <span>版本{{ currentVersionNo ? ` v${currentVersionNo}` : '' }}</span>
+          </button>
+
+          <button
             @click="isExportDialogOpen = true"
             class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg shadow transition flex items-center gap-1.5"
           >
@@ -497,6 +506,17 @@
       @closed="handleDialogClosed"
     />
 
+    <!-- 版本历史（.prototype-history，可随时回滚） -->
+    <VersionHistoryDialog
+      :visible="isHistoryOpen"
+      :active-prototype-id="prototypeStore.activeId"
+      :prototype-name="currentPrototype?.name || ''"
+      :current-code="currentPrototype?.vueCode || ''"
+      @update:visible="isHistoryOpen = $event"
+      @rollback="handleRollback"
+      @closed="handleDialogClosed"
+    />
+
     <!-- 模型 / Agent 设置弹窗 -->
     <ModelSettingsDialog
       v-model="isSettingsOpen"
@@ -519,11 +539,12 @@
 
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import PrototypeSidebar from './components/PrototypeSidebar.vue'
 import EmbeddedBrowserViewer from './components/EmbeddedBrowserViewer.vue'
 import MonacoEditor from './components/MonacoEditor.vue'
 import ExportDialog from './components/ExportDialog.vue'
+import VersionHistoryDialog from './components/VersionHistoryDialog.vue'
 import ModelSettingsDialog from './components/ModelSettingsDialog.vue'
 import { usePrototypeStore, PrototypeItem, RunStats } from './stores/prototypeStore'
 import { locateCodeSnippet } from './utils/inspector'
@@ -537,6 +558,9 @@ const currentWorkspace = ref<any>(null)
 
 const activeTab = ref<'preview' | 'code'>('preview')
 const isExportDialogOpen = ref(false)
+const isHistoryOpen = ref(false)
+/** 当前原型最新的版本号；只用来在按钮上显示「版本 v5」，权威在磁盘上。 */
+const currentVersionNo = ref<number | null>(null)
 const isSettingsOpen = ref(false)
 // 弹窗期间必须藏起原生 BrowserView，否则它会盖在对话框上
 const browserSuspended = ref(false)
@@ -968,14 +992,14 @@ onMounted(async () => {
 // it after the close transition finishes (@closed), otherwise the view would
 // pop back over the fading dialog.
 watch(
-  () => isSettingsOpen.value || isExportDialogOpen.value,
+  () => isSettingsOpen.value || isExportDialogOpen.value || isHistoryOpen.value,
   (open) => {
     if (open) browserSuspended.value = true
   }
 )
 
 function handleDialogClosed() {
-  if (!isSettingsOpen.value && !isExportDialogOpen.value) {
+  if (!isSettingsOpen.value && !isExportDialogOpen.value && !isHistoryOpen.value) {
     browserSuspended.value = false
   }
 }
@@ -985,6 +1009,7 @@ function handleSelectPrototype(id: string) {
   clearSelectionState()
   // 确保写回文件至 runtime-host
   syncActivePrototypeToFile()
+  void refreshVersionNo()
 }
 
 function handleCreatePrototype(data: { name: string; description: string }) {
@@ -1003,7 +1028,12 @@ function handleClonePrototype(item: PrototypeItem) {
 
 function handleDeletePrototype(id: string) {
   prototypeStore.deletePrototype(id)
+  // store 在「只剩最后一个」时会静默拒绝，所以以列表为准；真删掉了才丢版本历史
+  if (!prototypeStore.prototypes.some((p) => p.id === id)) {
+    void window.historyApi?.deleteAll({ prototypeId: id }).catch(() => {})
+  }
   syncActivePrototypeToFile()
+  void refreshVersionNo()
   ElMessage.info('已移除原型')
 }
 
@@ -1279,9 +1309,105 @@ async function syncActivePrototypeToFile() {
 // 所以这一步正常开屏不会真的落盘、也不会白白让预览刷新。
 onMounted(() => {
   if (prototypeStore.hydratedFromSnapshot) syncActivePrototypeToFile()
+  void refreshVersionNo()
 })
 
+/** 当前原型最新的版本号（只读索引，用来在按钮上显示「版本 v3」）。 */
+async function refreshVersionNo(): Promise<void> {
+  const p = currentPrototype.value
+  if (!p || !window.historyApi) {
+    currentVersionNo.value = null
+    return
+  }
+  const res = await window.historyApi.list({ prototypeId: p.id }).catch(() => null)
+  currentVersionNo.value = res?.ok ? (res.latestVersion ?? null) : null
+}
+
+/**
+ * 版本标签取用户那句诉求：跳过圈改/圈选模板头与「- 目标元素:」这类字段行。
+ * 圈改只有批注没有正文时退回第一条批注。
+ */
+function summarizeInstruction(text: string): string {
+  const raw = String(text ?? '')
+  const isTemplateLine = (l: string) =>
+    /^【(圈改批注诉求|圈选位置|圈改位置)/.test(l) ||
+    /^-\s*(批注|目标元素|选择器|源码位置|元素文本|框选范围|元素层叠|所在组件|类名)/.test(l)
+  const userLine = raw
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .find((l) => !isTemplateLine(l))
+  const note = raw.match(/^-\s*批注[:：]\s*(.+)$/m)?.[1]?.trim()
+  const chosen = (userLine ?? note ?? '').replace(/^【[^】]*】/, '').trim()
+  return chosen.slice(0, 40)
+}
+
+/**
+ * 代码变更的唯一出口：更新 store + 落一版版本快照。以后新加的写代码路径都走这里。
+ *
+ * 版本落盘是 fire-and-forget：它失败绝不能挡住编辑，也不能拖慢流式输出；
+ * 内容与最新一版相同的话主进程自己会 no-op（run 结束那次 res.code 常常就是这样）。
+ */
+function applyCodeChange(id: string, newCode: string, label: string, runId?: string): void {
+  const p = prototypeStore.prototypes.find((x) => x.id === id)
+  const prev = p?.vueCode
+  prototypeStore.updateCode(id, newCode)
+  if (!p || prev === undefined || prev === newCode || !window.historyApi) return
+  void window.historyApi
+    .record({ prototypeId: id, code: newCode, label, kind: 'auto', seedCode: prev, runId })
+    .then((res) => {
+      if (res?.ok && typeof res.version === 'number') currentVersionNo.value = res.version
+    })
+    .catch(() => {
+      /* 见上：版本功能不能影响编辑 */
+    })
+}
+
+/** 回滚：先把当前代码存一版（回滚本身可逆），再换代码、写盘、往对话里追一条记录。 */
+async function handleRollback(payload: { version: number; code: string; label: string }): Promise<void> {
+  const p = currentPrototype.value
+  if (!p) return
+  const id = p.id
+  if (payload.code === p.vueCode) {
+    ElMessage.info(`当前代码已经是 v${payload.version}`)
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `回滚到 v${payload.version}（${payload.label}）？\n当前代码会先自动存为一个新版本，之后仍可再回滚回来。`,
+      '回滚确认',
+      { type: 'warning', confirmButtonText: '回滚', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+
+  // 无条件先存「回滚前」：内容与最新版相同时主进程会自己 no-op，这边不用判断
+  await window.historyApi
+    ?.record({
+      prototypeId: id,
+      code: p.vueCode,
+      label: '回滚前自动保存',
+      kind: 'rollback-safety'
+    })
+    .catch(() => {})
+
+  // 这里刻意不走 applyCodeChange：回滚不该再产生一版「回滚到 vN」
+  prototypeStore.updateCode(id, payload.code)
+  if (currentPrototype.value?.id === id) await syncActivePrototypeToFile()
+
+  p.chatMessages.push({
+    role: 'assistant',
+    content: `⏪ 已回滚到 v${payload.version}（${payload.label}）。之后的版本都还在版本列表里，可以再切回去。`,
+    timestamp: Date.now()
+  })
+  void refreshVersionNo()
+  ElMessage.success(`已回滚到 v${payload.version}`)
+}
+
 function handleCodeManualUpdate(newCode: string) {
+  // 注意：这条路目前是死的（MonacoEditor 声明 modelValue，这里传的是 :code），
+  // 所以手工改源码暂时不产生版本；修它是另一件事，别混进来。
   if (currentPrototype.value) {
     prototypeStore.updateCode(currentPrototype.value.id, newCode)
     syncActivePrototypeToFile()
@@ -1290,7 +1416,8 @@ function handleCodeManualUpdate(newCode: string) {
 
 async function handleCodeSelfDebugUpdate(newCode: string) {
   if (currentPrototype.value) {
-    prototypeStore.updateCode(currentPrototype.value.id, newCode)
+    // 自闭环修复不经过 agent-bridge，版本得从这儿收
+    applyCodeChange(currentPrototype.value.id, newCode, '自测自愈自动修复')
     await syncActivePrototypeToFile()
   }
 }
@@ -1419,8 +1546,9 @@ async function handleSend() {
       handleStreamFrame(frame)
     })
     // The agent edits through apply_prototype_edit; keep the editor in sync.
+    // 顺手落一版历史（applyCodeChange）：一轮 run 可能改好几次，每次一个版本号。
     const offCode = window.agent.onCodeUpdated((data: { code: string }) => {
-      prototypeStore.updateCode(p.id, data.code)
+      applyCodeChange(p.id, data.code, summarizeInstruction(instruction), runId)
     })
 
     let res: any
@@ -1454,7 +1582,8 @@ async function handleSend() {
     }
 
     if (res.code && res.code !== p.vueCode) {
-      prototypeStore.updateCode(p.id, res.code)
+      // 只在 onCodeUpdated 那一轮没落上时兜底；内容相同的话主进程会 no-op
+      applyCodeChange(p.id, res.code, summarizeInstruction(instruction), runId)
     }
     await syncActivePrototypeToFile()
 
