@@ -8,11 +8,11 @@
  */
 
 import { ChildProcess, spawn } from 'child_process'
-import { app } from 'electron'
 import { EventEmitter } from 'events'
 import * as fs from 'fs'
 import * as path from 'path'
 import * as readline from 'readline'
+import { isPackaged } from '../app-paths'
 
 /** pi-ai model descriptor; the runtime forwards it to the pi bridge verbatim. */
 export interface RuntimeModel {
@@ -285,9 +285,8 @@ export function resolveRuntimeBinary(): string {
     return process.env.THUNDER_RUNTIME_BIN
   }
 
-  const isPackaged = typeof app !== 'undefined' && app ? app.isPackaged : false
   const resourcesPath = (process as any).resourcesPath as string | undefined
-  if (isPackaged && resourcesPath) {
+  if (isPackaged() && resourcesPath) {
     const packagedPath = path.join(resourcesPath, 'bin', name)
     if (fs.existsSync(packagedPath)) {
       return packagedPath

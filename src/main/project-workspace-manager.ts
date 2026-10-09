@@ -1,5 +1,6 @@
 import { promises as fs } from 'fs'
 import * as path from 'path'
+import { runtimeHostDir } from './app-paths'
 
 export interface ProjectWorkspace {
   id: string
@@ -32,7 +33,7 @@ export class ProjectWorkspaceManager {
       name: '内置原型工程 (runtime-host)',
       type: 'local-directory',
       url: 'http://127.0.0.1:4321',
-      rootPath: path.resolve(__dirname, '../../runtime-host'),
+      rootPath: runtimeHostDir(),
       framework: 'vue3',
       uiLibrary: 'Element Plus',
       devTool: 'vite'

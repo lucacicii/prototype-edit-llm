@@ -9,6 +9,8 @@ import { setupHistoryIpc } from './ipc/history-bridge'
 import { setupBrowserIpc } from './ipc/browser-bridge'
 import { BrowserViewManager } from './browser-view-manager'
 import { HostServerManager } from './host-server-manager'
+import { activePrototypeFile, workspaceDir } from './app-paths'
+import { applyPackagedRuntimeEnv } from './runtime-env'
 
 // 强制内核级别停用所有 HTTP 缓存及 GPU Shader 缓存
 app.commandLine.appendSwitch('disable-http-cache')
@@ -72,6 +74,10 @@ app.whenReady().then(async () => {
     optimizer.watchWindowShortcuts(window)
   })
 
+  // 先备好打包运行时（node 垫片 + pi-ai bridge 指向），再起任何子进程：
+  // HostServerManager 与 thunder 都靠 PATH / 环境变量找东西。dev 下是空操作。
+  await applyPackagedRuntimeEnv()
+
   // 启动 runtime-host 本地纯净 Vite 服务 (方案 C)
   const hostManager = HostServerManager.getInstance()
   await hostManager.startServer()
@@ -90,7 +96,7 @@ app.whenReady().then(async () => {
   // 幂等写入把这条路堵死，顺带也消掉了切换原型时无意义的预览闪烁。
   ipcMain.handle('host:save-prototype-file', async (_, { code }: { prototypeId: string; code: string }) => {
     try {
-      const filePath = join(__dirname, `../../runtime-host/src/views/prototypes/active.vue`)
+      const filePath = activePrototypeFile()
       const current = await fs.readFile(filePath, 'utf-8').catch(() => null)
       if (current === code) {
         return { success: true, filePath, unchanged: true }
@@ -104,9 +110,9 @@ app.whenReady().then(async () => {
 
   setupThunderIpc()
   setupProjectIpc()
-  setupAgentIpc({ workspaceDir: process.cwd() })
+  setupAgentIpc({ workspaceDir: workspaceDir() })
   // 原型版本仓（.prototype-history）：跟 agent 同一个工作区口径
-  setupHistoryIpc({ workspaceDir: process.cwd() })
+  setupHistoryIpc({ workspaceDir: workspaceDir() })
 
   createWindow()
 

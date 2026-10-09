@@ -1,19 +1,17 @@
 import { ipcMain } from 'electron'
 import { ThunderClient } from './thunder-client'
-import * as path from 'path'
+import { workspaceDir } from '../app-paths'
 
 export function setupThunderIpc(): ThunderClient {
-  const thunderRepoPath = '/Users/lucas/wz/GitHub/thunder'
-  const binaryPath = path.join(thunderRepoPath, 'target/debug/thunder-daemon')
-
+  // No explicit binaryPath: passing one bypassed ThunderClient.resolveBinaryPath(),
+  // which is the only thing that knows about $THUNDER_DAEMON_BIN and about a
+  // packaged build's Resources/bin. Leaving it undefined lets that resolver run.
   const client = new ThunderClient({
-    binaryPath,
-    workspaceDir: process.cwd()
+    workspaceDir: workspaceDir()
   })
 
   try {
     client.start()
-    console.log('[Thunder] daemon sidecar started from', binaryPath)
   } catch (err) {
     console.warn('[Thunder] failed to start daemon immediately:', err)
   }
