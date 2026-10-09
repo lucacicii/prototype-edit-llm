@@ -23,6 +23,24 @@ export interface DiagnosticSnapshot {
   errors: { text: string }[]
 }
 
+/**
+ * 用户在预览里指的那个元素。
+ *
+ * 圈选直接给元素本身；圈改给的是「框住的那块」—— 判断规则一样，
+ * 所以只留一条通道，探针那边多认出来的字段都是可选的。
+ */
+export interface PointedTarget {
+  tagName: string
+  text: string
+  className?: string
+  selector?: string
+  componentName?: string
+  sourceFile?: string
+  sourceLine?: number | null
+  /** 该点的元素层叠（由内到外），圈改才有。 */
+  stack?: string[]
+}
+
 export interface PrototypeAgentDeps {
   client: RuntimeClient
   workspaceDir: string
@@ -32,8 +50,11 @@ export interface PrototypeAgentDeps {
   applyEdit: (code: string) => Promise<void>
   /** Runtime errors collected from the embedded browser over CDP. */
   getDiagnostics: () => DiagnosticSnapshot
-  /** The element the user圈选'd, when the request came from a selection. */
-  getInspectTarget: () => { tagName: string; text: string } | undefined
+  /**
+   * 用户在预览里指向的元素：圈选是他点中的那个，圈改是他框住那块里认出来的那个。
+   * 两者都没有时返回 undefined。
+   */
+  getInspectTarget: () => PointedTarget | undefined
   /** Forward every loop frame to the renderer for live display. */
   onFrame: (frame: RuntimeFrame) => void
   /** How long to let HMR settle before asking the browser for diagnostics. */
@@ -82,7 +103,9 @@ const TOOLS: RuntimeToolSpec[] = [
   },
   {
     name: 'get_inspect_target',
-    description: '获取用户在页面上圈选的元素（标签名、文本内容）及批注。',
+    description:
+      '获取用户在预览页面上指向的元素：圈选时是他点中的那个，圈改（画方框）时是框内认出来的那个。' +
+      '返回标签名、选择器、所在组件、源码位置、文本与元素层叠。',
     parameters: { type: 'object', properties: {} },
     effect: 'read'
   },
@@ -226,8 +249,18 @@ export class PrototypeAgent {
       }
       case 'get_inspect_target': {
         const target = this.deps.getInspectTarget()
-        if (!target) return '用户当前没有圈选任何元素。'
-        return `用户圈选：<${target.tagName}> ${target.text}`
+        if (!target) return '用户当前没有圈选或圈改任何元素。'
+        const lines = [`用户指向的元素：<${target.tagName}>`]
+        if (target.componentName) lines.push(`- 所在组件: <${target.componentName}>`)
+        if (target.selector) lines.push(`- 选择器: ${target.selector}`)
+        if (target.sourceFile) {
+          lines.push(`- 源码位置: ${target.sourceFile}${target.sourceLine ? ':' + target.sourceLine : ''}`)
+        }
+        if (target.text) lines.push(`- 元素文本: "${target.text}"`)
+        if (target.stack && target.stack.length > 1) {
+          lines.push(`- 元素层叠（由内到外）: ${target.stack.join(' < ')}`)
+        }
+        return lines.join('\n')
       }
       case 'apply_prototype_edit': {
         const code = typeof args.code === 'string' ? args.code : ''
