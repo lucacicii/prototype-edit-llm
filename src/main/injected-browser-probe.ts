@@ -568,6 +568,9 @@ export const BROWSER_PROBE_SCRIPT = `
   }
 
   function handleKeyDown(e) {
+    // 批注输入框开着时 ESC 归它管：这里的监听是 document 捕获阶段，
+    // 会先于输入框自己的 keydown 触发，不挡一下就会把整个圈改模式关掉。
+    if (isNoteDialogOpen) return;
     if (e.key === 'Escape') {
       if (currentMode !== 'off') {
         setInspectMode('off');
@@ -581,6 +584,151 @@ export const BROWSER_PROBE_SCRIPT = `
   let isDrawing = null;
   let startX = 0, startY = 0;
   let currentRectEl = null;
+  // Electron 渲染进程不实现 window.prompt/alert/confirm（调用直接抛
+  // "prompt() is and will not be supported."），批注输入框只能自己画。
+  let noteDialogEl = null;
+  let isNoteDialogOpen = false;
+
+  function closeNoteDialog() {
+    if (noteDialogEl) {
+      noteDialogEl.remove();
+      noteDialogEl = null;
+    }
+    isNoteDialogOpen = false;
+  }
+
+  /**
+   * 圈改批注输入框（window.prompt 的替代品）。
+   * onDone(null) = 取消；onDone(text) = 确认，text 已 trim、可能为空串。
+   */
+  function showNoteDialog(defaultValue, onDone) {
+    closeNoteDialog();
+    isNoteDialogOpen = true;
+
+    const wrap = document.createElement('div');
+    wrap.id = '__prototype_markup_dialog__';
+    wrap.style.position = 'fixed';
+    wrap.style.top = '0';
+    wrap.style.left = '0';
+    wrap.style.width = '100vw';
+    wrap.style.height = '100vh';
+    wrap.style.zIndex = '2147483647';
+    wrap.style.display = 'flex';
+    wrap.style.alignItems = 'center';
+    wrap.style.justifyContent = 'center';
+    wrap.style.backgroundColor = 'rgba(15, 23, 42, 0.45)';
+
+    const panel = document.createElement('div');
+    panel.style.width = '380px';
+    panel.style.maxWidth = 'calc(100vw - 48px)';
+    panel.style.boxSizing = 'border-box';
+    panel.style.backgroundColor = '#1e293b';
+    panel.style.color = '#e2e8f0';
+    panel.style.border = '1px solid #334155';
+    panel.style.borderRadius = '10px';
+    panel.style.padding = '14px';
+    panel.style.boxShadow = '0 12px 32px rgba(0, 0, 0, 0.45)';
+    panel.style.fontFamily = 'system-ui, -apple-system, "PingFang SC", sans-serif';
+
+    const label = document.createElement('div');
+    label.textContent = '请输入针对此区域的圈改批注需求：';
+    label.style.fontSize = '13px';
+    label.style.marginBottom = '8px';
+
+    const input = document.createElement('textarea');
+    input.rows = 3;
+    input.value = defaultValue || '';
+    input.style.width = '100%';
+    input.style.boxSizing = 'border-box';
+    input.style.resize = 'vertical';
+    input.style.backgroundColor = '#0f172a';
+    input.style.color = '#e2e8f0';
+    input.style.border = '1px solid #334155';
+    input.style.borderRadius = '6px';
+    input.style.padding = '8px';
+    input.style.fontSize = '12px';
+    input.style.lineHeight = '1.5';
+    input.style.fontFamily = 'inherit';
+    input.style.outline = 'none';
+
+    const hint = document.createElement('div');
+    hint.textContent = 'Enter 确认 · Shift+Enter 换行 · ESC 取消';
+    hint.style.fontSize = '11px';
+    hint.style.color = '#64748b';
+    hint.style.marginTop = '6px';
+
+    const actions = document.createElement('div');
+    actions.style.display = 'flex';
+    actions.style.justifyContent = 'flex-end';
+    actions.style.gap = '8px';
+    actions.style.marginTop = '12px';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.textContent = '取消';
+    cancelBtn.style.backgroundColor = '#334155';
+    cancelBtn.style.color = '#e2e8f0';
+    cancelBtn.style.border = 'none';
+    cancelBtn.style.borderRadius = '6px';
+    cancelBtn.style.padding = '6px 14px';
+    cancelBtn.style.fontSize = '12px';
+    cancelBtn.style.cursor = 'pointer';
+
+    const okBtn = document.createElement('button');
+    okBtn.type = 'button';
+    okBtn.textContent = '确定';
+    okBtn.style.backgroundColor = '#0284c7';
+    okBtn.style.color = '#fff';
+    okBtn.style.border = 'none';
+    okBtn.style.borderRadius = '6px';
+    okBtn.style.padding = '6px 14px';
+    okBtn.style.fontSize = '12px';
+    okBtn.style.fontWeight = 'bold';
+    okBtn.style.cursor = 'pointer';
+
+    function finish(value) {
+      closeNoteDialog();
+      onDone(value);
+    }
+
+    cancelBtn.addEventListener('click', () => finish(null));
+    okBtn.addEventListener('click', () => finish(input.value.trim()));
+
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        finish(null);
+      } else if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        finish(input.value.trim());
+      }
+    });
+
+    // 点面板外的遮罩 = 取消；点面板本身不冒泡上去
+    wrap.addEventListener('mousedown', (e) => {
+      if (e.target === wrap) e.preventDefault();
+    });
+    wrap.addEventListener('click', (e) => {
+      if (e.target === wrap) finish(null);
+    });
+    panel.addEventListener('mousedown', (e) => e.stopPropagation());
+    panel.addEventListener('click', (e) => e.stopPropagation());
+
+    actions.appendChild(cancelBtn);
+    actions.appendChild(okBtn);
+    panel.appendChild(label);
+    panel.appendChild(input);
+    panel.appendChild(hint);
+    panel.appendChild(actions);
+    wrap.appendChild(panel);
+    document.body.appendChild(wrap);
+    noteDialogEl = wrap;
+
+    // 与 prompt() 一致：默认文案预先选中，直接打字即替换
+    input.focus();
+    input.select();
+  }
 
   function initMarkupOverlay() {
     if (markupOverlay) return;
@@ -612,6 +760,7 @@ export const BROWSER_PROBE_SCRIPT = `
     markupOverlay.appendChild(tip);
 
     markupOverlay.addEventListener('mousedown', (e) => {
+      if (isNoteDialogOpen) return;
       if (e.target !== markupOverlay) return;
       isDrawing = true;
       startX = e.clientX;
@@ -644,39 +793,44 @@ export const BROWSER_PROBE_SCRIPT = `
     markupOverlay.addEventListener('mouseup', (e) => {
       if (!isDrawing || !currentRectEl) return;
       isDrawing = false;
-      const rect = currentRectEl.getBoundingClientRect();
-      if (rect.width > 20 && rect.height > 20) {
-        const note = prompt('请输入针对此区域的圈改批注需求：', '调整此区域布局');
-        if (note) {
-          const badge = document.createElement('div');
-          badge.style.position = 'absolute';
-          badge.style.bottom = '-24px';
-          badge.style.left = '0';
-          badge.style.backgroundColor = '#b45309';
-          badge.style.color = '#fff';
-          badge.style.padding = '2px 8px';
-          badge.style.fontSize = '11px';
-          badge.style.borderRadius = '3px';
-          badge.textContent = note;
-          currentRectEl.appendChild(badge);
-
-          const payload = {
-            note,
-            rect: {
-              left: Math.round(rect.left),
-              top: Math.round(rect.top),
-              width: Math.round(rect.width),
-              height: Math.round(rect.height)
-            }
-          };
-          console.log('__PROTOTYPE_MARKUP_RESULT__' + JSON.stringify(payload));
-        } else {
-          currentRectEl.remove();
-        }
-      } else {
-        currentRectEl.remove();
-      }
+      const box = currentRectEl;
       currentRectEl = null;
+      const rect = box.getBoundingClientRect();
+
+      // 太小的框是误拖，直接丢掉
+      if (rect.width <= 20 || rect.height <= 20) {
+        box.remove();
+        return;
+      }
+
+      showNoteDialog('调整此区域布局', (note) => {
+        if (!note) {
+          box.remove();
+          return;
+        }
+        const badge = document.createElement('div');
+        badge.style.position = 'absolute';
+        badge.style.bottom = '-24px';
+        badge.style.left = '0';
+        badge.style.backgroundColor = '#b45309';
+        badge.style.color = '#fff';
+        badge.style.padding = '2px 8px';
+        badge.style.fontSize = '11px';
+        badge.style.borderRadius = '3px';
+        badge.textContent = note;
+        box.appendChild(badge);
+
+        const payload = {
+          note,
+          rect: {
+            left: Math.round(rect.left),
+            top: Math.round(rect.top),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height)
+          }
+        };
+        console.log('__PROTOTYPE_MARKUP_RESULT__' + JSON.stringify(payload));
+      });
     });
 
     document.body.appendChild(markupOverlay);
@@ -700,6 +854,9 @@ export const BROWSER_PROBE_SCRIPT = `
       document.removeEventListener('click', handleClick, true);
       document.addEventListener('keydown', handleKeyDown, true);
     } else {
+      closeNoteDialog();
+      isDrawing = false;
+      currentRectEl = null;
       if (highlightBox) highlightBox.style.display = 'none';
       if (markupOverlay) markupOverlay.style.display = 'none';
       document.removeEventListener('mousemove', handleMouseMove, true);
@@ -728,6 +885,7 @@ export const BROWSER_PROBE_SCRIPT = `
     checkViteOverlay: checkViteOverlay,
     resolveComponentMetadata: resolveComponentMetadata,
     clearMarkups: function() {
+      closeNoteDialog();
       if (markupOverlay) {
         const boxes = markupOverlay.querySelectorAll('div');
         boxes.forEach(b => {
