@@ -4,6 +4,7 @@ dist
 *.local
 .prototype-agent.json
 .probe
+.work
 .DS_Store
 .vscode
 .idea
