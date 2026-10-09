@@ -10,6 +10,9 @@
     "clean": "rm -rf node_modules/.vite out dist",
     "build": "electron-vite build",
     "postinstall": "electron-builder install-app-deps",
+    "build:sidecars": "node scripts/prepare-sidecars.mjs",
+    "prebuild:mac": "node scripts/prepare-sidecars.mjs",
+    "prebuild:unpack": "node scripts/prepare-sidecars.mjs",
     "build:unpack": "npm run build && electron-builder --dir",
     "build:mac": "npm run build && electron-builder --mac"
   },
