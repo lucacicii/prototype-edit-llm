@@ -499,8 +499,15 @@
     </main>
 
     <!-- 导出弹窗 -->
+    <!-- 这两个弹窗声明的是 visible prop（与 VersionHistoryDialog 同款），
+         所以父组件必须用 :visible + @update:visible。写成 v-model 的话传下去的是
+         modelValue，props.visible 恒为 undefined：弹窗只因为未声明的 attr 落到了
+         根元素 el-dialog 上才显示得出来，而 setter emit 的 update:visible 没人听 ——
+         症状就是「关不掉，并且打开时不加载」（ModelSettingsDialog 的 readiness /
+         runtimePath 都靠 watch(visible) 触发 load()）。 -->
     <ExportDialog
-      v-model="isExportDialogOpen"
+      :visible="isExportDialogOpen"
+      @update:visible="isExportDialogOpen = $event"
       :code-content="currentPrototype?.vueCode || ''"
       :default-file-name="`${currentPrototype?.id || 'index'}.vue`"
       @closed="handleDialogClosed"
@@ -519,7 +526,8 @@
 
     <!-- 模型 / Agent 设置弹窗 -->
     <ModelSettingsDialog
-      v-model="isSettingsOpen"
+      :visible="isSettingsOpen"
+      @update:visible="isSettingsOpen = $event"
       @saved="handleSettingsSaved"
       @closed="handleDialogClosed"
     />

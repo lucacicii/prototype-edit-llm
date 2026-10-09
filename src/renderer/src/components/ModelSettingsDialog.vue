@@ -16,7 +16,18 @@
         检测运行时
       </el-button>
     </div>
-    <div class="status-path" v-if="runtimePath">{{ runtimePath }}</div>
+    <!-- 三项就绪表：内核 / Node / bridge。打包版出问题时就靠它一眼看出缺哪一环，
+         而不是又变成「模型调用莫名失败」。 -->
+    <div class="readiness" v-if="readiness.length">
+      <div v-for="item in readiness" :key="item.label" class="readiness-row">
+        <span class="readiness-mark" :class="item.ok ? 'ok' : 'bad'">
+          {{ item.ok ? '✓' : '✗' }}
+        </span>
+        <span class="readiness-label">{{ item.label }}</span>
+        <span class="readiness-detail" :title="item.detail">{{ item.detail }}</span>
+      </div>
+    </div>
+    <div class="status-path" v-else-if="runtimePath">{{ runtimePath }}</div>
 
     <el-alert
       v-if="envLocked"
@@ -285,6 +296,12 @@ const groupedModels = modelConfig.groupedModels
 const selectionId = ref('')
 const tools = ref<{ name: string; description: string; effect: string }[]>([])
 const runtimePath = ref('')
+interface ReadinessItem {
+  label: string
+  ok: boolean
+  detail: string
+}
+const readiness = ref<ReadinessItem[]>([])
 const configPath = ref('')
 const envLocked = ref(false)
 const loading = ref(false)
@@ -322,11 +339,15 @@ const statusText = computed(() => {
   return `thunder-runtime 不可用：${runtimeError.value}`
 })
 
+// immediate：万一将来有人把它挂进 v-if（挂载时 visible 已经是 true），
+// 不 fire 的 watch 会让弹窗永远停在「尚未检测」。今天父组件是常驻挂载，
+// 这一条只是把那个坑堵死。
 watch(
   () => props.visible,
   (open) => {
     if (open) void load()
-  }
+  },
+  { immediate: true }
 )
 
 async function load() {
@@ -343,6 +364,7 @@ async function load() {
 
     const res = await window.agent.getConfig()
     runtimePath.value = res.runtimePath ?? ''
+    readiness.value = res.readiness ?? []
     configPath.value = res.path ?? ''
     envLocked.value = Boolean(res.envLocked)
     tools.value = res.tools ?? []
@@ -420,6 +442,7 @@ async function handleCheck() {
     runtimeVersion.value = res?.version ?? ''
     runtimeError.value = res?.error ?? ''
     if (res?.runtimePath) runtimePath.value = res.runtimePath
+    if (res?.readiness) readiness.value = res.readiness
   } catch (err: any) {
     runtimeOk.value = false
     runtimeError.value = err?.message ?? String(err)
@@ -524,6 +547,49 @@ async function handleSave() {
   font-size: 11px;
   color: #a8abb2;
   word-break: break-all;
+}
+
+.readiness {
+  margin: 4px 0 12px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.readiness-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.readiness-mark {
+  width: 10px;
+  flex: none;
+  font-weight: 600;
+}
+
+.readiness-mark.ok {
+  color: #67c23a;
+}
+
+.readiness-mark.bad {
+  color: #f56c6c;
+}
+
+.readiness-label {
+  flex: none;
+  color: #606266;
+}
+
+/* 路径通常很长：允许省略，完整值仍在 title 里 */
+.readiness-detail {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #a8abb2;
 }
 
 .source-head {
