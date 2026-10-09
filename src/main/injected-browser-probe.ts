@@ -18,6 +18,226 @@ export const BROWSER_PROBE_SCRIPT = `
   let currentHoverEl = null;
 
   // --- Framework & Source Location Resolution ---
+
+  // 组件库内部包装（ElOnlyChild / Wave / BaseTransition …）很多没有指向用户源码的
+  // 元数据。所以不能停在"第一个有名字的组件"，要一路向上找到**第一个带可用源码位置**的，
+  // 并且优先用户自己的文件（node_modules 里的路径对用户没有意义）。
+  function isUserFile(f) { return !!f && f.indexOf('node_modules') === -1; }
+
+  // 编译期注入的位置串，格式 "src/views/order/List.vue:42:5"（file:line:col）
+  function parseLoc(raw) {
+    if (!raw || typeof raw !== 'string') return null;
+    const parts = raw.split(':');
+    if (!parts[0]) return null;
+    const line = parseInt(parts[1], 10);
+    return { file: parts[0], line: isNaN(line) ? null : line };
+  }
+
+  /**
+   * 元素自身的精确源码位置。
+   *
+   * 属性可能是真的 DOM 属性（code-inspector 等），也可能被
+   * vite-plugin-vue-inspector 从 props 里**摘掉**后转存到
+   * vnode.props.__v_inspector（不可枚举，DOM 上看不见）——后者是它的默认行为，
+   * 所以只查 DOM 属性是永远拿不到 Vue 行号的。
+   */
+  function readOwnLoc(el) {
+    const fromAttr = parseLoc(
+      el.getAttribute('data-v-inspector') ||
+      el.getAttribute('data-loc') ||
+      el.getAttribute('data-source') ||
+      el.getAttribute('data-inspector-loc')
+    );
+    if (fromAttr) return fromAttr;
+    const props = el.__vnode && el.__vnode.props;
+    return props ? parseLoc(props.__v_inspector) : null;
+  }
+
+  // --- React 行号校正 ---
+  //
+  // @vitejs/plugin-react 会先给模块套一段 refresh wrapper，**之后**才轮到 esbuild 做 JSX
+  // 转换；esbuild 写进 __source.lineNumber 的是「wrapper + 原文」坐标系的行号，于是 React
+  // 的行号恒定多出 wrapper 的行数（本项目实测 +19）。
+  //
+  // 这个偏移**不能写死**：wrapper 随插件版本变，写死会在升级后静默偏掉。
+  // 改为拿模块自己的 sourcemap 现算 —— 转换后模块里每个 __source 字面量都带着（偏移过的）
+  // 行号，把它的生成行回映射到原始文件，差值就是该文件里恒定的偏移。
+  const reactLineOffset = new Map(); // 绝对路径 -> 偏移 | false（算不出来）
+  const reactOffsetJobs = new Map();
+
+  const B64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+  // 只要「某生成行第一个映射段指向的原始行」，所以不需要完整的 sourcemap consumer。
+  function originalLineOfGenerated(mappings, targetLine) {
+    let srcLine = 0, srcCol = 0, srcIdx = 0;
+    const lines = mappings.split(';');
+    for (let gl = 1; gl <= targetLine && gl <= lines.length; gl++) {
+      const segs = lines[gl - 1].split(',');
+      let genCol = 0;
+      let hit = null;
+      for (let si = 0; si < segs.length; si++) {
+        const seg = segs[si];
+        if (!seg) continue;
+        const vals = [];
+        let shift = 0, val = 0;
+        for (let i = 0; i < seg.length; i++) {
+          const d = B64_CHARS.indexOf(seg[i]);
+          if (d < 0) continue;
+          val += (d & 31) << shift;
+          if (d & 32) { shift += 5; }
+          // 符号位是最低位，量值就是 val >>> 1（别写成 ^ -(bit) 那套，那是另一种编码）
+          else { vals.push(val & 1 ? -(val >>> 1) : (val >>> 1)); val = 0; shift = 0; }
+        }
+        genCol += vals[0] || 0;
+        // 字段 1..3 是 source / line / column 的增量，必须一路累积才不失步
+        if (vals.length >= 4) {
+          srcIdx += vals[1]; srcLine += vals[2]; srcCol += vals[3];
+          if (hit === null && genCol === 0) hit = srcLine;
+        }
+      }
+      if (gl === targetLine) return hit;
+    }
+    return null;
+  }
+
+  function calibrateReactLineOffset(file) {
+    if (reactLineOffset.has(file)) return Promise.resolve(reactLineOffset.get(file));
+    if (reactOffsetJobs.has(file)) return reactOffsetJobs.get(file);
+
+    const job = (async () => {
+      try {
+        // Vite dev 用 /@fs/ 暴露原始文件，取到的就是浏览器实际执行的那份转换产物
+        const res = await fetch('/@fs' + encodeURI(file));
+        if (!res.ok) return false;
+        const text = await res.text();
+
+        const m = text.match(/sourceMappingURL=data:application\\/json[^,\\n]*;base64,([A-Za-z0-9+/=]+)/);
+        if (!m) return false;
+        const bin = atob(m[1]);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const map = JSON.parse(new TextDecoder('utf-8').decode(bytes));
+        if (!map || typeof map.mappings !== 'string') return false;
+
+        const re = /lineNumber:\\s*(\\d+),\\s*\\n\\s*columnNumber:\\s*\\d+/g;
+        const seen = [];
+        let mm;
+        while ((mm = re.exec(text)) !== null && seen.length < 6) {
+          const genLine = text.slice(0, mm.index).split('\\n').length;
+          const origLine = originalLineOfGenerated(map.mappings, genLine);
+          if (origLine !== null) seen.push(parseInt(mm[1], 10) - (origLine + 1));
+        }
+        if (!seen.length) return false;
+        // 同一文件里偏移必须处处一致；不一致说明推导有问题 —— 宁可不改，也不报一个错行号
+        for (let i = 1; i < seen.length; i++) if (seen[i] !== seen[0]) return false;
+        return seen[0];
+      } catch (err) {
+        return false;
+      }
+    })();
+
+    reactOffsetJobs.set(file, job);
+    job.then(function (v) {
+      reactLineOffset.set(file, v);
+      reactOffsetJobs.delete(file);
+    });
+    return job;
+  }
+
+  // 徽标用：算出偏移前先不显示行号，免得闪一个错的
+  function correctedReactLine(meta) {
+    if (meta.framework !== 'react' || !meta.sourceFile || meta.sourceLine == null) return meta.sourceLine;
+    const offset = reactLineOffset.get(meta.sourceFile);
+    if (offset === undefined) return null;
+    if (offset === false) return meta.sourceLine; // 算不出来就保持原样，不引入退化
+    const fixed = meta.sourceLine - offset;
+    return fixed >= 1 ? fixed : meta.sourceLine;
+  }
+
+  /**
+   * Element Plus 表格的列（表头 <th> / 单元格 <td>）。
+   *
+   * <el-table-column> 是"不渲染任何 DOM"的组件：表头由 ElTableHeader 渲染、单元格由
+   * ElTableBody 渲染，所以从 <th>/<td> 沿组件链上溯只会停在 <el-table> 那一行 ——
+   * 「用户指的这一格属于哪一列」在链上根本没有信息（实测：表头一律报 <el-table> 的行）。
+   * 但列 vnode 是 <el-table> 默认插槽的子节点，位置就挂在它自己的 __v_inspector 上，
+   * 按列序（表头另可先按 label 文本匹配）对回去即可。
+   *
+   * 只在别处都拿不到用户文件位置时才用；对不上就返回 null，保持原行为。
+   */
+  function locateTableColumn(el) {
+    try {
+      const tag = el.tagName;
+      if (tag !== 'TH' && tag !== 'TD') return null;
+      if (!el.classList || !el.classList.contains('el-table__cell')) return null;
+      const tableEl = el.closest ? el.closest('.el-table') : null;
+      if (!tableEl) return null;
+
+      // 列序：表头取同行 th 里的序号，单元格取 cellIndex（两者与列序一致，已实测）
+      let index = -1;
+      if (tag === 'TH') {
+        const sibs = [];
+        const kids = el.parentNode ? el.parentNode.children : [];
+        for (let i = 0; i < kids.length; i++) if (kids[i].tagName === 'TH') sibs.push(kids[i]);
+        index = sibs.indexOf(el);
+      } else {
+        index = el.cellIndex;
+      }
+      if (index < 0) return null;
+
+      let inst = tableEl.__vueParentComponent;
+      let g = 0;
+      while (inst && g++ < 30) {
+        const n = inst.type && (inst.type.name || inst.type.__name);
+        if (n === 'ElTable') break;
+        inst = inst.parent || null;
+      }
+      if (!inst || !inst.type) return null;
+
+      let cols = null;
+      if (inst.slots && typeof inst.slots.default === 'function') {
+        try { cols = inst.slots.default(); } catch (e) { cols = null; }
+      }
+      if (!Array.isArray(cols) && inst.vnode && Array.isArray(inst.vnode.children)) cols = inst.vnode.children;
+      if (!Array.isArray(cols)) return null;
+
+      // v-for 的列被包在一个 Fragment 里，v-if 掉的列是注释 vnode —— 摊平/剔除掉，
+      // 否则列序会和真实渲染出来的 th/td 错位。
+      const flat = [];
+      const push = (arr) => {
+        for (let a = 0; a < arr.length; a++) {
+          const v = arr[a];
+          if (!v) continue;
+          if (typeof v.type === 'symbol') { if (Array.isArray(v.children)) push(v.children); continue; }
+          const t = typeof v.type;
+          if (t !== 'object' && t !== 'function') continue;
+          flat.push(v);
+        }
+      };
+      push(cols);
+      if (!flat.length) return null;
+
+      let pick = null;
+      if (tag === 'TH') {
+        // 表头有文本：优先按 label 精确匹配（对 gutter / 隐藏列造成的列序漂移不敏感），
+        // 但同名 label 多于一个时不可信，退回列序。
+        const text = (el.textContent || '').trim();
+        if (text) {
+          const hits = flat.filter((v) => v.props && typeof v.props.label === 'string' && v.props.label.trim() === text);
+          if (hits.length === 1) pick = hits[0];
+        }
+      }
+      if (!pick && index < flat.length) pick = flat[index];
+      if (!pick || !pick.props) return null;
+
+      const loc = parseLoc(pick.props.__v_inspector);
+      if (!loc || !isUserFile(loc.file)) return null;
+      return loc;
+    } catch (err) {
+      return null;
+    }
+  }
+
   function resolveComponentMetadata(el) {
     let framework = 'native-dom';
     let componentName = '';
@@ -25,46 +245,91 @@ export const BROWSER_PROBE_SCRIPT = `
     let sourceLine = null;
     let propsSnippet = '';
 
-    // 1. Check for compiler-generated inspection attributes (vite-plugin-vue-inspector, code-inspector, etc.)
-    const locAttr = el.getAttribute('data-v-inspector') || 
-                    el.getAttribute('data-loc') || 
-                    el.getAttribute('data-source') ||
-                    el.getAttribute('data-inspector-loc');
-    if (locAttr) {
-      // e.g. "src/views/order/List.vue:42:5"
-      const parts = locAttr.split(':');
-      sourceFile = parts[0] || '';
-      if (parts[1]) sourceLine = parseInt(parts[1], 10);
+    // 1. 元素自身的编译期位置。这是最精确的答案：用户指的是**这个标签**，
+    //    所以它优先于「往上找到的第一个组件」。
+    //    但如果它落在 node_modules 里（组件库自带的 .vue 也会被插件注入），
+    //    对用户就没意义 —— 那种情况留给组件链去找用户自己的文件，它只做兜底。
+    const ownLoc = readOwnLoc(el);
+    const ownLocUsable = ownLoc && isUserFile(ownLoc.file);
+    if (ownLocUsable) {
+      sourceFile = ownLoc.file;
+      if (ownLoc.line != null) sourceLine = ownLoc.line;
+    }
+
+    // 1b. Element Plus 表格的列（表头 / 单元格）。列组件不渲染 DOM，组件链上只有
+    //     <el-table> 自己，所以必须在走链之前单独对回去 —— 否则表头一律报成表格那一行。
+    if (!sourceFile) {
+      const colLoc = locateTableColumn(el);
+      if (colLoc) {
+        sourceFile = colLoc.file;
+        if (colLoc.line != null) sourceLine = colLoc.line;
+        componentName = 'ElTableColumn';
+      }
     }
 
     // 2. Vue 3 Inspection (via __vnode / __vueParentComponent)
     if (el.__vnode) {
       framework = 'vue3';
-      let vnode = el.__vnode;
-      // find nearest meaningful component
-      while (vnode) {
-        if (vnode.type && typeof vnode.type === 'object') {
-          const comp = vnode.type;
-          const name = comp.__name || comp.name || comp.displayName;
-          if (name && name !== 'Anonymous') {
-            componentName = name;
-            if (comp.__file && !sourceFile) {
-              sourceFile = comp.__file;
+      let firstName = '';
+      let anyFile = '';
+      let anyName = '';
+
+      // 2a. vnode 链（部分构建不填充 vnode.parent，能走就走）
+      let vnode = (!sourceFile || !componentName) ? el.__vnode : null;
+      let vguard = 0;
+      while (vnode && vguard++ < 60) {
+        const comp = vnode.type;
+        if (comp && typeof comp === 'object') {
+          // 顺序是 name → __name：SFC 编译产物只有 __name（用户组件靠它），
+          // 而组件库两个都有，__name 是小写的标签名（'button' / 'select'），
+          // 拿它当组件名没有意义。
+          const name = comp.name || comp.__name || comp.displayName;
+          if (name && name !== 'Anonymous' && !firstName) firstName = name;
+          if (comp.__file) {
+            if (!anyFile) { anyFile = comp.__file; anyName = name || firstName; }
+            if (isUserFile(comp.__file)) {
+              componentName = name || firstName;
+              if (!sourceFile) sourceFile = comp.__file;
+              break;
             }
-            break;
           }
         }
         vnode = vnode.parent || null;
       }
 
-      // Check __vueParentComponent if not found
-      if (!componentName && el.__vueParentComponent) {
-        const parentType = el.__vueParentComponent.type;
-        if (parentType) {
-          componentName = parentType.__name || parentType.name || '';
-          if (parentType.__file && !sourceFile) sourceFile = parentType.__file;
+      // 2b. 组件实例链 —— 实测这条链才是一路可达用户组件的（vnode.parent 常常是空的）
+      if ((!sourceFile || !componentName) && el.__vueParentComponent) {
+        let inst = el.__vueParentComponent;
+        let iguard = 0;
+        while (inst && iguard++ < 60) {
+          const t = inst.type || {};
+          const name = t.name || t.__name || t.displayName;
+          if (name && name !== 'Anonymous' && !firstName) firstName = name;
+          // 组件标签（<el-button> 之类）自己渲染出来的 DOM 上没有本文件的行号——
+          // 位置挂在**使用处那个 vnode** 上，也就是实例的 inst.vnode。
+          // 只在组件来自依赖（自己没有用户侧 __file）时才用它：用户自己的组件
+          // 有能力通过元素自身的 ownLoc 报出精确位置，不该被"使用处"顶掉。
+          const useLoc = inst.vnode && inst.vnode.props ? parseLoc(inst.vnode.props.__v_inspector) : null;
+          if (!(t.__file && isUserFile(t.__file)) && useLoc && isUserFile(useLoc.file)) {
+            componentName = name || firstName;
+            if (!sourceFile) sourceFile = useLoc.file;
+            if (sourceLine == null) sourceLine = useLoc.line;
+            break;
+          }
+          if (t.__file) {
+            if (!anyFile) { anyFile = t.__file; anyName = name || firstName; }
+            if (isUserFile(t.__file)) {
+              componentName = name || firstName;
+              if (!sourceFile) sourceFile = t.__file;
+              break;
+            }
+          }
+          inst = inst.parent || null;
         }
       }
+
+      if (!sourceFile && anyFile) { sourceFile = anyFile; componentName = anyName; }
+      if (!componentName) componentName = firstName;
     }
 
     // 3. React Inspection (via __reactFiber$...)
@@ -73,34 +338,62 @@ export const BROWSER_PROBE_SCRIPT = `
       if (fiberKey) {
         framework = 'react';
         let fiber = el[fiberKey];
-        while (fiber) {
-          if (fiber.type) {
-            const name = typeof fiber.type === 'function' ? (fiber.type.displayName || fiber.type.name) :
-                         typeof fiber.type === 'object' ? (fiber.type.displayName || fiber.type.name) : null;
-            if (name && name !== 'Fragment' && !name.startsWith('_')) {
-              componentName = name;
-              if (fiber._debugSource && !sourceFile) {
-                sourceFile = fiber._debugSource.fileName || '';
-                sourceLine = fiber._debugSource.lineNumber || null;
-              }
+        let firstName = '';
+        let anyFile = '';
+        let anyName = '';
+        let anyLine = null;
+        let guard = 0;
+        while (fiber && guard++ < 60) {
+          const t = fiber.type;
+          // 宿主元素（type 是字符串）的 _debugSource 指向**定义处**；
+          // 组件帧的 _debugSource 指向该组件被**使用**的位置，是更弱的信号。
+          const isHost = typeof t === 'string';
+          const name = (!isHost && t) ? (typeof t === 'function' ? (t.displayName || t.name)
+                       : typeof t === 'object' ? (t.displayName || (t.render && t.render.name)) : null) : null;
+          if (name && name !== 'Fragment' && name.indexOf('_') !== 0 && !firstName) firstName = name;
+          if (fiber._debugSource && fiber._debugSource.fileName) {
+            const f = fiber._debugSource.fileName;
+            if (!anyFile) { anyFile = f; anyName = name || firstName; anyLine = fiber._debugSource.lineNumber || null; }
+            if (isUserFile(f)) {
+              componentName = name || firstName;
+              if (!sourceFile) sourceFile = f;
+              if (sourceLine == null) sourceLine = fiber._debugSource.lineNumber || null;
               break;
             }
           }
           fiber = fiber.return;
         }
+        if (!sourceFile && anyFile) { sourceFile = anyFile; sourceLine = anyLine; componentName = anyName; }
+        if (!componentName) componentName = firstName;
       }
     }
 
     // 4. Vue 2 Inspection (via __vue__)
     if (!componentName && (el.__vue__ || (el.parentElement && el.parentElement.__vue__))) {
       framework = 'vue2';
-      const vueInst = el.__vue__ || el.parentElement.__vue__;
-      if (vueInst && vueInst.$options) {
-        componentName = vueInst.$options._componentTag || vueInst.$options.name || '';
-        if (vueInst.$options.__file && !sourceFile) {
-          sourceFile = vueInst.$options.__file;
+      let vueInst = el.__vue__ || el.parentElement.__vue__;
+      let firstName = '';
+      let anyFile = '';
+      let anyName = '';
+      let guard = 0;
+      while (vueInst && guard++ < 60) {
+        const opts = vueInst.$options || {};
+        const name = opts._componentTag || opts.name || '';
+        if (name && !firstName) firstName = name;
+        if (opts.__file) {
+          if (!anyFile) { anyFile = opts.__file; anyName = name || firstName; }
+          if (isUserFile(opts.__file)) { componentName = name || firstName; if (!sourceFile) sourceFile = opts.__file; break; }
         }
+        vueInst = vueInst.$parent;
       }
+      if (!sourceFile && anyFile) { sourceFile = anyFile; componentName = anyName; }
+      if (!componentName) componentName = firstName;
+    }
+
+    // 兜底：只有 node_modules 里的位置可用时也比什么都没有强（至少给出行号）。
+    if (!sourceFile && ownLoc) {
+      sourceFile = ownLoc.file;
+      if (ownLoc.line != null) sourceLine = ownLoc.line;
     }
 
     // Fallback: derive component name from tag or classes
@@ -110,7 +403,7 @@ export const BROWSER_PROBE_SCRIPT = `
         componentName = tagName;
       } else {
         const cls = typeof el.className === 'string' ? el.className : '';
-        const match = cls.match(/\\b(el-[a-z0-9-]+|wb-[a-z0-9-]+|ant-[a-z0-9-]+)\\b/);
+        const match = cls.match(/\\b(el-[a-z0-9-]+|ant-[a-z0-9-]+)\\b/);
         if (match) {
           componentName = match[1];
         }
@@ -161,9 +454,20 @@ export const BROWSER_PROBE_SCRIPT = `
     document.body.appendChild(highlightBox);
   }
 
+  // document.elementFromPoint 不穿透 shadow root —— 阴影内的元素会被报成宿主。
+  // 鼠标事件是 composed 的，composedPath()[0] 才是真正被指到的元素。
+  // 注意：closed 模式的 shadow root 对外仍是封闭的，这里也拿不到内部元素。
+  function pickEventTarget(e) {
+    if (typeof e.composedPath === 'function') {
+      const path = e.composedPath();
+      if (path && path.length && path[0] && path[0].nodeType === 1) return path[0];
+    }
+    return document.elementFromPoint(e.clientX, e.clientY);
+  }
+
   function handleMouseMove(e) {
     if (currentMode !== 'inspect') return;
-    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const el = pickEventTarget(e);
     if (!el || el === highlightBox || highlightBox?.contains(el) || el.id?.startsWith('__prototype_')) return;
 
     currentHoverEl = el;
@@ -181,11 +485,15 @@ export const BROWSER_PROBE_SCRIPT = `
       const meta = resolveComponentMetadata(el);
       const tag = el.tagName.toLowerCase();
       const txt = (el.innerText || el.textContent || '').trim().slice(0, 14);
-      
+
+      // 悬停时就顺手把偏移算出来 —— 用户点下去的时候通常已经就绪
+      if (meta.framework === 'react' && meta.sourceFile) calibrateReactLineOffset(meta.sourceFile);
+      const shownLine = correctedReactLine(meta);
+
       let badgeHtml = '<span style=\"font-weight:bold;\">&lt;' + (meta.componentName || tag) + '&gt;</span>';
       if (meta.sourceFile) {
         const fileName = meta.sourceFile.split('/').pop();
-        badgeHtml += ' <span style=\"opacity:0.8;font-size:10px;\">(' + fileName + (meta.sourceLine ? ':' + meta.sourceLine : '') + ')</span>';
+        badgeHtml += ' <span style=\"opacity:0.8;font-size:10px;\">(' + fileName + (shownLine ? ':' + shownLine : '') + ')</span>';
       } else if (txt) {
         badgeHtml += ' <span style=\"opacity:0.9;\">\"' + txt + '\"</span>';
       }
@@ -236,7 +544,24 @@ export const BROWSER_PROBE_SCRIPT = `
         outerHTMLSnippet: (el.outerHTML || '').slice(0, 300)
       };
 
-      console.log('__PROTOTYPE_INSPECT_RESULT__' + JSON.stringify(payload));
+      setInspectMode('off');
+
+      // React 的行号要等一次偏移现算（异步读模块 sourcemap）。
+      // 宁可晚几十毫秒上报，也不报一个必然错的行号。
+      if (meta.framework === 'react' && meta.sourceFile && meta.sourceLine != null) {
+        calibrateReactLineOffset(meta.sourceFile).then(function (offset) {
+          let line = meta.sourceLine;
+          if (offset) {
+            const fixed = meta.sourceLine - offset;
+            if (fixed >= 1) line = fixed;
+          }
+          payload.sourceLine = line;
+          console.log('__PROTOTYPE_INSPECT_RESULT__' + JSON.stringify(payload));
+        });
+      } else {
+        console.log('__PROTOTYPE_INSPECT_RESULT__' + JSON.stringify(payload));
+      }
+      return;
     }
 
     setInspectMode('off');
