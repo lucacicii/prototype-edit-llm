@@ -2,6 +2,8 @@ import { ElectronAPI } from '@electron-toolkit/preload'
 // 只借类型：圈选/圈改指向的元素在主进程那侧已经有权威定义，别在这儿再抄一份
 // （上一版就是抄了个 {tagName,text} 的窄版，把字段丢失藏到了编译期）。
 import type { PointedTarget } from '../main/agent/prototype-agent'
+// 版本元数据的权威定义在主进程那侧（同 PointedTarget 的口径，不在这儿抄一份）
+import type { VersionKind, VersionMeta } from '../main/ipc/history-bridge'
 
 export interface ProjectWorkspace {
   id: string
@@ -79,6 +81,49 @@ export interface IThunderAPI {
 export interface IHostAPI {
   getHostUrl: () => Promise<string>
   savePrototypeFile: (params: { prototypeId: string; code: string }) => Promise<{ success: boolean; filePath?: string; error?: string }>
+}
+
+export interface IHistoryAPI {
+  /** 列出版本；带上 currentCode 才能标出「当前」是哪一版（回滚后它不是最新版）。 */
+  list: (params: {
+    prototypeId: string
+    currentCode?: string
+  }) => Promise<{
+    ok: boolean
+    versions?: VersionMeta[]
+    currentVersion?: number | null
+    latestVersion?: number | null
+    error?: string
+  }>
+  read: (params: {
+    prototypeId: string
+    version: number
+  }) => Promise<{ ok: boolean; code?: string; meta?: VersionMeta | null; error?: string }>
+  /** `seedCode` 只在「这个原型还没有任何版本」时用来补一个起始版本。 */
+  record: (params: {
+    prototypeId: string
+    code: string
+    label?: string
+    kind?: VersionKind
+    seedCode?: string
+    runId?: string
+    pinned?: boolean
+  }) => Promise<{
+    ok: boolean
+    version?: number
+    /** 内容与最新一版相同，什么也没写。 */
+    unchanged?: boolean
+    seeded?: boolean
+    pruned?: number[]
+    error?: string
+  }>
+  rename: (params: {
+    prototypeId: string
+    version: number
+    label: string
+  }) => Promise<{ ok: boolean; meta?: VersionMeta; error?: string }>
+  deleteVersion: (params: { prototypeId: string; version: number }) => Promise<{ ok: boolean; error?: string }>
+  deleteAll: (params: { prototypeId: string }) => Promise<{ ok: boolean; error?: string }>
 }
 
 export interface IProjectAPI {
@@ -179,6 +224,7 @@ declare global {
     thunder: IThunderAPI
     project: IProjectAPI
     hostApi: IHostAPI
+    historyApi: IHistoryAPI
     browser: IBrowserAPI
     agent: IAgentAPI
   }

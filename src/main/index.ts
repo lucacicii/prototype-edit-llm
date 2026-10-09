@@ -5,6 +5,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { setupThunderIpc } from './ipc/thunder-bridge'
 import { setupAgentIpc } from './ipc/agent-bridge'
 import { setupProjectIpc } from './ipc/project-bridge'
+import { setupHistoryIpc } from './ipc/history-bridge'
 import { setupBrowserIpc } from './ipc/browser-bridge'
 import { BrowserViewManager } from './browser-view-manager'
 import { HostServerManager } from './host-server-manager'
@@ -104,6 +105,8 @@ app.whenReady().then(async () => {
   setupThunderIpc()
   setupProjectIpc()
   setupAgentIpc({ workspaceDir: process.cwd() })
+  // 原型版本仓（.prototype-history）：跟 agent 同一个工作区口径
+  setupHistoryIpc({ workspaceDir: process.cwd() })
 
   createWindow()
 
