@@ -132,6 +132,8 @@ export interface IAgentAPI {
   setConfig: (config: any) => Promise<{ ok: boolean; error?: string; path?: string }>
   tools: () => Promise<Array<{ name: string; description: string; effect?: string }>>
   run: (params: {
+    /** 渲染层生成并传入，让「停止」按钮能按 run 取消（main 端不传则自己生成）。 */
+    runId?: string
     prototypeId: string
     prompt: string
     code: string
@@ -141,6 +143,7 @@ export interface IAgentAPI {
     ok: boolean
     runId?: string
     error?: string
+    /** 'cancelled' 表示用户点了停止 —— 正常结束，不是错误。 */
     finishReason?: string
     finalContent?: string | null
     code?: string
