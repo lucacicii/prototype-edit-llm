@@ -39,6 +39,8 @@ export interface PointedTarget {
   sourceLine?: number | null
   /** 该点的元素层叠（由内到外），圈改才有。 */
   stack?: string[]
+  /** 圈改时该框的批注文字（用户画框时写的）；圈选时为空。 */
+  note?: string
 }
 
 export interface PrototypeAgentDeps {
@@ -51,10 +53,11 @@ export interface PrototypeAgentDeps {
   /** Runtime errors collected from the embedded browser over CDP. */
   getDiagnostics: () => DiagnosticSnapshot
   /**
-   * 用户在预览里指向的元素：圈选是他点中的那个，圈改是他框住那块里认出来的那个。
-   * 两者都没有时返回 undefined。
+   * 用户在预览里指向的元素：圈选是他点中的那个（最多一个），圈改是他框住的
+   * 每一块里认出来的那个（可以有好几处，各带自己的批注）。顺序就是给模型看的
+   * 顺序。两者都没有时返回空数组。
    */
-  getInspectTarget: () => PointedTarget | undefined
+  getPointedTargets: () => PointedTarget[]
   /** Forward every loop frame to the renderer for live display. */
   onFrame: (frame: RuntimeFrame) => void
   /** How long to let HMR settle before asking the browser for diagnostics. */
@@ -104,8 +107,8 @@ const TOOLS: RuntimeToolSpec[] = [
   {
     name: 'get_inspect_target',
     description:
-      '获取用户在预览页面上指向的元素：圈选时是他点中的那个，圈改（画方框）时是框内认出来的那个。' +
-      '返回标签名、选择器、所在组件、源码位置、文本与元素层叠。',
+      '获取用户在预览页面上指向的元素：圈选时是他点中的那个，圈改（画方框）时是框内认出来的那个' +
+      '（可能一次框了好几处，各带序号与批注）。返回标签名、类名、选择器、所在组件、源码位置、文本与元素层叠。',
     parameters: { type: 'object', properties: {} },
     effect: 'read'
   },
@@ -248,19 +251,37 @@ export class PrototypeAgent {
         return `${diag.errorCount} 项运行期报错：\n${lines.join('\n')}`
       }
       case 'get_inspect_target': {
-        const target = this.deps.getInspectTarget()
-        if (!target) return '用户当前没有圈选或圈改任何元素。'
-        const lines = [`用户指向的元素：<${target.tagName}>`]
-        if (target.componentName) lines.push(`- 所在组件: <${target.componentName}>`)
-        if (target.selector) lines.push(`- 选择器: ${target.selector}`)
-        if (target.sourceFile) {
-          lines.push(`- 源码位置: ${target.sourceFile}${target.sourceLine ? ':' + target.sourceLine : ''}`)
+        const targets = this.deps.getPointedTargets()
+        if (!targets.length) return '用户当前没有圈选或圈改任何元素。'
+        const describe = (target: PointedTarget) => {
+          const lines = [`- 目标元素: <${target.tagName}>`]
+          if (target.note) lines.push(`- 该处批注: ${target.note}`)
+          // 原生元素上 componentName 往往就是标签名，写「所在组件: <div>」是噪音
+          if (target.componentName && target.componentName.toLowerCase() !== target.tagName.toLowerCase()) {
+            lines.push(`- 所在组件: <${target.componentName}>`)
+          }
+          if (target.className) lines.push(`- 类名: ${target.className}`)
+          if (target.selector) lines.push(`- 选择器: ${target.selector}`)
+          if (target.sourceFile) {
+            lines.push(`- 源码位置: ${target.sourceFile}${target.sourceLine ? ':' + target.sourceLine : ''}`)
+          }
+          if (target.text) lines.push(`- 元素文本: "${target.text}"`)
+          if (target.stack && target.stack.length > 1) {
+            lines.push(`- 元素层叠（由内到外）: ${target.stack.join(' < ')}`)
+          }
+          return lines
         }
-        if (target.text) lines.push(`- 元素文本: "${target.text}"`)
-        if (target.stack && target.stack.length > 1) {
-          lines.push(`- 元素层叠（由内到外）: ${target.stack.join(' < ')}`)
+        // 只有一处时保持老措辞（模型对这条已经很熟）；多处时按序号列出来，
+        // 序号与指令里的【圈改位置 N】一一对应。
+        if (targets.length === 1) {
+          return [`用户指向的元素：<${targets[0].tagName}>`, ...describe(targets[0]).slice(1)].join('\n')
         }
-        return lines.join('\n')
+        const blocks = [`用户指向了 ${targets.length} 处元素：`]
+        targets.forEach((t, i) => {
+          blocks.push(`【${i + 1}】`)
+          blocks.push(...describe(t))
+        })
+        return blocks.join('\n')
       }
       case 'apply_prototype_edit': {
         const code = typeof args.code === 'string' ? args.code : ''

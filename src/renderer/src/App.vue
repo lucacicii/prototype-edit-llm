@@ -95,50 +95,61 @@
         </button>
       </div>
 
-      <!-- 圈改标注需求提示卡片 -->
+      <!-- 圈改标注需求提示卡片（可以有好几处，一处一批注，全部一起发） -->
       <div
-        v-if="markupAnnotation"
-        class="bg-amber-950/80 border-b border-amber-800/80 p-3 flex items-start justify-between text-xs animate-fadeIn"
+        v-if="markupAnnotations.length"
+        class="bg-amber-950/80 border-b border-amber-800/80 p-3 text-xs animate-fadeIn"
       >
-        <div class="flex-1 pr-2">
-          <div class="font-semibold text-amber-300 flex items-center gap-1.5 mb-1">
-            <span>✏️ 圈改标注需求</span>
-            <span
-              v-if="markupAnnotation.target"
-              class="px-1.5 rounded bg-amber-900/70 text-amber-200 font-mono text-[10px] font-normal"
-              :title="markupAnnotation.target.sourceFile
-                ? `源码位置: ${markupAnnotation.target.sourceFile}${markupAnnotation.target.sourceLine ? ':' + markupAnnotation.target.sourceLine : ''}`
-                : '未取到源码位置'"
-            >
-              📍 &lt;{{ markupAnnotation.target.componentName || markupAnnotation.target.tagName }}&gt;
-            </span>
-            <span
-              v-else
-              class="px-1.5 rounded bg-red-900/60 text-red-200 text-[10px] font-normal"
-              title="框内没有取到元素，模型只能靠批注文字判断位置"
-            >
-              未定位到元素
-            </span>
-          </div>
-          <div class="text-amber-200/90 text-[11px] leading-relaxed">
-            "{{ markupAnnotation.note }}"
-          </div>
-          <div
-            v-if="markupAnnotation.target"
-            class="text-amber-300/70 font-mono text-[10px] truncate mt-0.5"
-          >
-            {{ markupAnnotation.target.selector || markupAnnotation.target.tagName }}
-            <template v-if="markupAnnotation.target.sourceFile">
-              · {{ getCleanFileName(markupAnnotation.target.sourceFile) }}{{ markupAnnotation.target.sourceLine ? ':' + markupAnnotation.target.sourceLine : '' }}
-            </template>
-          </div>
+        <div class="font-semibold text-amber-300 mb-1.5">
+          ✏️ 圈改标注需求<template v-if="markupAnnotations.length > 1">（{{ markupAnnotations.length }} 处）</template>
         </div>
-        <button
-          @click="markupAnnotation = null"
-          class="text-amber-400 hover:text-white text-xs px-1"
+        <div
+          v-for="(m, i) in markupAnnotations"
+          :key="m.id ?? i"
+          class="flex items-start justify-between gap-2 py-1"
+          :class="i > 0 ? 'border-t border-amber-800/50' : ''"
         >
-          ✕
-        </button>
+          <div class="flex-1 min-w-0">
+            <div class="font-semibold text-amber-300 flex items-center gap-1.5 mb-1">
+              <span class="font-mono text-[10px] text-amber-400/80">#{{ i + 1 }}</span>
+              <span
+                v-if="m.target"
+                class="px-1.5 rounded bg-amber-900/70 text-amber-200 font-mono text-[10px] font-normal"
+                :title="m.target.sourceFile
+                  ? `源码位置: ${m.target.sourceFile}${m.target.sourceLine ? ':' + m.target.sourceLine : ''}`
+                  : '未取到源码位置'"
+              >
+                📍 &lt;{{ targetLabel(m.target) }}&gt;
+              </span>
+              <span
+                v-else
+                class="px-1.5 rounded bg-red-900/60 text-red-200 text-[10px] font-normal"
+                title="框内没有取到元素，模型只能靠批注文字判断位置"
+              >
+                未定位到元素
+              </span>
+            </div>
+            <div class="text-amber-200/90 text-[11px] leading-relaxed">
+              "{{ m.note }}"
+            </div>
+            <div
+              v-if="m.target"
+              class="text-amber-300/70 font-mono text-[10px] truncate mt-0.5"
+            >
+              {{ m.target.selector || m.target.tagName }}
+              <template v-if="m.target.sourceFile">
+                · {{ getCleanFileName(m.target.sourceFile) }}{{ m.target.sourceLine ? ':' + m.target.sourceLine : '' }}
+              </template>
+            </div>
+          </div>
+          <button
+            @click="removeMarkupAnnotation(i)"
+            class="text-amber-400 hover:text-white text-xs px-1"
+            title="删掉这一处批注（预览里对应的框一起消失，其余不动）"
+          >
+            ✕
+          </button>
+        </div>
       </div>
 
       <!-- 对话消息列表 -->
@@ -461,8 +472,10 @@
           :current-workspace="currentWorkspace"
           :is-visible="activeTab === 'preview'"
           :suspended="browserSuspended"
+          :markup-count="markupAnnotations.length"
           @inspect-selected="onInspectElementSelected"
           @markup-saved="onMarkupSaved"
+          @selection-cleared="clearSelectionState"
           @code-updated="handleCodeSelfDebugUpdate"
           @trigger-chat-fix="handleTriggerChatFix"
         />
@@ -889,8 +902,8 @@ async function handleCancelRun() {
 
 // 当前圈选选中的目标 DOM 信息
 const inspectTarget = ref<any | null>(null)
-// 当前圈改标注
-const markupAnnotation = ref<MarkupAnnotation | null>(null)
+// 当前圈改标注 —— 一处一批注，可以连着框好几处，一次发送全带上
+const markupAnnotations = ref<MarkupAnnotation[]>([])
 
 const currentTitle = computed(() => {
   if (currentWorkspace.value && currentWorkspace.value.id !== 'default-host') {
@@ -969,8 +982,7 @@ function handleDialogClosed() {
 
 function handleSelectPrototype(id: string) {
   prototypeStore.setActive(id)
-  clearInspectTarget()
-  markupAnnotation.value = null
+  clearSelectionState()
   // 确保写回文件至 runtime-host
   syncActivePrototypeToFile()
 }
@@ -1025,8 +1037,7 @@ async function onInspectElementSelected(target: any) {
     lineNumber: lineNumber || calculatedLine
   }
 
-  const compLabel = target.componentName || target.tagName
-  ElMessage.success(`已圈选 <${compLabel}>，支持针对该组件输入修改诉求`)
+  ElMessage.success(`已圈选 <${targetLabel(target)}>，支持针对该组件输入修改诉求`)
 }
 
 function clearInspectTarget() {
@@ -1038,54 +1049,124 @@ function getCleanFileName(p: string) {
   return p.split('/').pop() || p
 }
 
-type MarkupAnnotation = { note: string; rect: any; target?: any }
+type MarkupAnnotation = { id?: string; note: string; rect: any; target?: any }
+
+/**
+ * 「组件名」其实等于标签名时（原生 div 上的常见情形）对人是纯噪音：三处批注的
+ * 卡片上全是 📍 <div>，根本分不清谁是谁。真组件名优先，否则退回选择器。
+ */
+function componentLabel(t: any): string {
+  const comp = String(t?.componentName || '')
+  const tag = String(t?.tagName || '')
+  return comp && comp.toLowerCase() !== tag.toLowerCase() ? comp : ''
+}
+
+function targetLabel(t: any): string {
+  return componentLabel(t) || String(t?.selector || t?.tagName || '')
+}
+
+/** 框选范围那一行（视口坐标，只作参考，真正定位靠元素） */
+function markupRectLine(r: any): string | null {
+  if (!r) return null
+  return `- 框选范围（视口坐标，仅供参考）: left=${r.left} top=${r.top} w=${r.width} h=${r.height}`
+}
+
+/** 一处圈改的明细行：认出来的元素是什么、在哪一行源码上 */
+function markupTargetLines(t: any): string[] {
+  if (!t) {
+    return ['- 目标元素: 这一框里没认出具体元素，请按批注判断改哪一块；判断不了就不要动全局样式。']
+  }
+  const lines: string[] = []
+  const firstClass = String(t.className || '')
+    .split(' ')
+    .filter(Boolean)[0]
+  let desc = `- 目标元素: <${t.tagName}`
+  if (firstClass) desc += ` class="${firstClass}"`
+  desc += '>'
+  const comp = componentLabel(t)
+  if (comp) desc += `（所在组件 <${comp}>）`
+  lines.push(desc)
+  if (t.text) lines.push(`- 该元素文本: "${t.text}"`)
+  if (t.sourceFile) {
+    lines.push(`- 源码位置: ${t.sourceFile}${t.sourceLine ? ':' + t.sourceLine : ''}`)
+  }
+  if (Array.isArray(t.stack) && t.stack.length > 1) {
+    lines.push(`- 该点元素层叠（由内到外）: ${t.stack.join(' < ')}`)
+  }
+  if (t.outerHTMLSnippet) lines.push(`- 元素 HTML: ${t.outerHTMLSnippet}`)
+  return lines
+}
 
 /**
  * 圈改请求的提示词：必须先把「框在哪」讲清楚。
  *
  * 原先只发一句批注文字，模型无从知道批的哪一块，只能按字面猜 ——
  * 实测：在顶部标签栏上画框写「修改一下背景色为橙色」，它把整页背景改成了橙色渐变。
- * 定位信息放在批注文字之后、且明确要求只改这一块。
+ *
+ * 单框时逐字沿用修好后的那版措辞（实测能只改 .page-header，不要回归）；
+ * 多框时改用编号块，且把批注写进各自的块里 —— 这样「第 N 句批注」和
+ * 「第 N 块区域」不需要跨块对齐就能对上。
  */
-function buildMarkupInstruction(markup: MarkupAnnotation, text: string): string {
-  const t = markup?.target
-  const r = markup?.rect
-  const lines: string[] = [`【圈改批注诉求】: ${markup.note}`]
-
-  if (t) {
-    lines.push('【圈改位置】: 用户在预览里框选了一块区域后写的批注，请只改这一块，不要动整页/全局样式。')
-    const firstClass = String(t.className || '')
-      .split(' ')
-      .filter(Boolean)[0]
-    let desc = `- 目标元素: <${t.tagName}`
-    if (firstClass) desc += ` class="${firstClass}"`
-    desc += '>'
-    if (t.componentName) desc += `（所在组件 <${t.componentName}>）`
-    lines.push(desc)
-    if (t.text) lines.push(`- 该元素文本: "${t.text}"`)
-    if (t.sourceFile) {
-      lines.push(`- 源码位置: ${t.sourceFile}${t.sourceLine ? ':' + t.sourceLine : ''}`)
-    }
-    if (Array.isArray(t.stack) && t.stack.length > 1) {
-      lines.push(`- 该点元素层叠（由内到外）: ${t.stack.join(' < ')}`)
-    }
-    if (t.outerHTMLSnippet) lines.push(`- 元素 HTML: ${t.outerHTMLSnippet}`)
-  } else {
+function buildMarkupInstruction(markups: MarkupAnnotation[]): string {
+  if (markups.length === 1) {
+    const m = markups[0]
+    const lines = [`【圈改批注诉求】: ${m.note}`]
     lines.push(
-      '【圈改位置】: 这次没能在框内定位到具体元素，请先按批注判断改哪一块；判断不了就不要动全局样式。'
+      m.target
+        ? '【圈改位置】: 用户在预览里框选了一块区域后写的批注，请只改这一块，不要动整页/全局样式。'
+        : '【圈改位置】: 这次没能在框内定位到具体元素，请先按批注判断改哪一块；判断不了就不要动全局样式。'
     )
+    lines.push(...markupTargetLines(m.target))
+    const rectLine = markupRectLine(m.rect)
+    if (rectLine) lines.push(rectLine)
+    return lines.join('\n')
   }
-  if (r) {
-    lines.push(`- 框选范围（视口坐标，仅供参考）: left=${r.left} top=${r.top} w=${r.width} h=${r.height}`)
+
+  const lines = [
+    `【圈改批注诉求】用户在预览里框选了 ${markups.length} 处区域并分别写了批注，请逐处修改：每一处只改它自己那一块，不要把某一处的诉求套用到整页或其他块上。`
+  ]
+  markups.forEach((m, i) => {
+    lines.push(`【圈改位置 ${i + 1}】`)
+    lines.push(`- 批注: ${m.note}`)
+    lines.push(...markupTargetLines(m.target))
+    const rectLine = markupRectLine(m.rect)
+    if (rectLine) lines.push(rectLine)
+  })
+  return lines.join('\n')
+}
+
+/**
+ * 圈选请求的提示词。
+ *
+ * 圈选这条路以前只把目标塞进 run 参数（而且只传了 tagName+text），模型不问就
+ * 不知道圈的是谁、更不知道在哪一行 —— 这里跟圈改对称地把位置内联进指令。
+ */
+function buildInspectInstruction(target: any): string {
+  const lines = [
+    '【圈选位置】: 用户在预览里点选了一个具体元素，请只改这个元素及其子元素，不要动整页/全局样式。'
+  ]
+  const firstClass = String(target.className || '')
+    .split(' ')
+    .filter(Boolean)[0]
+  let desc = `- 目标元素: <${target.tagName}`
+  if (firstClass) desc += ` class="${firstClass}"`
+  desc += '>'
+  const comp = componentLabel(target)
+  if (comp) desc += `（所在组件 <${comp}>）`
+  lines.push(desc)
+  if (target.selector) lines.push(`- 选择器: ${target.selector}`)
+  if (target.text) lines.push(`- 该元素文本: "${target.text}"`)
+  if (target.sourceFile) {
+    lines.push(`- 源码位置: ${target.sourceFile}${target.sourceLine ? ':' + target.sourceLine : ''}`)
   }
-  if (text && text !== markup.note) lines.push(text)
+  if (target.outerHTMLSnippet) lines.push(`- 元素 HTML: ${target.outerHTMLSnippet}`)
   return lines.join('\n')
 }
 
 /**
  * IPC 边界上必须递**纯数据**。
  *
- * markupAnnotation 是 Vue 的 ref，读出来是响应式 Proxy —— 直接把
+ * markupAnnotations 是 Vue 的 ref，读出来是响应式 Proxy —— 直接把
  * markup.rect / markup.target 塞进 ipcRenderer.invoke，主进程侧会炸
  * 「An object could not be cloned.」，请求根本到不了模型
  * （实测：页面三秒后回一句"生成异常"，代码一个字没改）。
@@ -1094,6 +1175,7 @@ function buildMarkupInstruction(markup: MarkupAnnotation, text: string): string 
 function toPlainMarkupTarget(markup: MarkupAnnotation) {
   const t = markup.target
   return {
+    id: String(markup.id ?? ''),
     note: String(markup.note ?? ''),
     rect: {
       left: Number(markup.rect?.left ?? 0),
@@ -1116,21 +1198,55 @@ function toPlainMarkupTarget(markup: MarkupAnnotation) {
   }
 }
 
-// 圈改标注事件捕获
+/**
+ * 圈选目标 → 可跨 IPC 的纯数据。只挑要传的字段：`inspectTarget` 身上还挂着
+ * `codeSnippet` / `resolvedLocalPath`（渲染层自己用的），别整个展开递过去。
+ */
+function toPlainPointedTarget(t: any) {
+  if (!t) return undefined
+  return {
+    tagName: String(t.tagName ?? ''),
+    text: String(t.text ?? ''),
+    className: String(t.className ?? ''),
+    selector: String(t.selector ?? ''),
+    componentName: String(t.componentName ?? ''),
+    sourceFile: String(t.sourceFile ?? ''),
+    sourceLine: typeof t.sourceLine === 'number' ? t.sourceLine : null
+  }
+}
+
+// 圈改标注事件捕获。一处一批注，可以连着框好几处，全部攒起来一次发送。
 function onMarkupSaved(data: MarkupAnnotation) {
-  markupAnnotation.value = data
+  const at = data.id ? markupAnnotations.value.findIndex((m) => m.id === data.id) : -1
+  if (at >= 0) markupAnnotations.value[at] = data
+  else markupAnnotations.value.push(data)
   // 只在输入框空着时回填批注 —— 用户可能已经打了一半需求再去画框，
   // 那是他写的东西，不该被批注顶掉（批注本身在卡片里、也照样会随请求发出去）。
   if (!promptInput.value.trim()) promptInput.value = data.note
   const t = data.target
+  const nth = markupAnnotations.value.length
   ElMessage.success(
     t
-      ? `已捕获圈改批注: "${data.note}" · 定位到 <${t.componentName || t.tagName}>`
-      : `已捕获圈改批注: "${data.note}" · 未定位到元素`
+      ? `已捕获第 ${nth} 处圈改批注: "${data.note}" · 定位到 <${targetLabel(t)}>`
+      : `已捕获第 ${nth} 处圈改批注: "${data.note}" · 未定位到元素`
   )
 }
 
+/** 删掉其中一处批注：预览里对应的框也要跟着消失（其余框不动） */
+function removeMarkupAnnotation(index: number) {
+  const [removed] = markupAnnotations.value.splice(index, 1)
+  if (removed?.id) window.browser?.clearMarkups(removed.id)
+}
+
+/** 圈选/圈改的选中状态一并清掉，并让预览退出圈改模式（框由探针自己清） */
+function clearSelectionState() {
+  markupAnnotations.value = []
+  clearInspectTarget()
+  embeddedBrowserRef.value?.exitInspectMode?.()
+}
+
 function resetChat() {
+  clearSelectionState()
   if (currentPrototype.value) {
     currentPrototype.value.chatMessages = [
       {
@@ -1192,15 +1308,19 @@ async function handleSend() {
 
   const p = currentPrototype.value
   const target = inspectTarget.value
-  const markup = markupAnnotation.value
+  const markups = markupAnnotations.value
 
   const textFiles = staged.filter((a) => a.kind === 'text')
   const images = staged.filter((a) => a.kind === 'image')
 
-  let instruction = text
-  if (markup) {
-    instruction = buildMarkupInstruction(markup, text)
-  }
+  // 位置信息一律内联进指令：模型不必先调工具才知道改哪一块。
+  // 圈改的批注可能有好几处，各自成块。
+  const blocks: string[] = []
+  if (target) blocks.push(buildInspectInstruction(target))
+  if (markups.length) blocks.push(buildMarkupInstruction(markups))
+  // 输入框里的批注是画框时自动回填的，跟批注本身重复，不用再说一遍
+  const notes = new Set(markups.map((m) => (m.note || '').trim()))
+  let instruction = [...blocks, text && !notes.has(text) ? text : ''].filter(Boolean).join('\n')
 
   // 文本附件内联成引用块。正文自带 ``` 时改用四反引号围栏，否则代码块会被提前闭合。
   if (textFiles.length) {
@@ -1248,8 +1368,9 @@ async function handleSend() {
 
   promptInput.value = ''
   pendingAttachments.value = []
-  clearInspectTarget()
-  markupAnnotation.value = null
+  // 批注已经进请求了：卡片、画面上那些框、圈改模式一起收掉。
+  // 留着框不但挡视线，重进圈改还会被当成新的一处重新采样。
+  clearSelectionState()
 
   // runId 由渲染层生成并传入 —— 进度帧靠它认领，「停止」按钮也靠它取消。
   // （main 端不传则自己生成；加随机后缀避免同一毫秒两次发送撞 id，
@@ -1310,10 +1431,12 @@ async function handleSend() {
         prompt: instruction,
         code: p.vueCode,
         history,
-        inspectTarget: target ? { tagName: target.tagName, text: target.text } : undefined,
-        // 框住的那块也走一条通道：指令里已经写清楚了，但模型要是回头调
+        // 圈选的目标带上全部身份字段（选择器/组件/源码位置）—— 以前这里砍成
+        // 了 {tagName,text}，模型调 get_inspect_target 也问不出源码在哪一行。
+        inspectTarget: toPlainPointedTarget(target),
+        // 框住的那几块也走一条通道：指令里已经写清楚了，但模型要是回头调
         // get_inspect_target，得能问出同一个答案，而不是「没有圈选任何元素」。
-        markupTarget: markup ? toPlainMarkupTarget(markup) : undefined,
+        markupTargets: markups.length ? markups.map(toPlainMarkupTarget) : undefined,
         attachments: outgoingImages.length ? outgoingImages : undefined
       })
     } finally {

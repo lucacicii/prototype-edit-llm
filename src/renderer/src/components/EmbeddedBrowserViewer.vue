@@ -106,7 +106,7 @@
           title="在页面上框选区域并输入批注需求"
         >
           <span>✏️</span>
-          <span>{{ inspectMode === 'markup' ? '标注中(ESC退出)' : '圈改' }}</span>
+          <span>{{ inspectMode === 'markup' ? `标注中(${markupCount || 0})(ESC退出)` : '圈改' }}</span>
         </button>
 
         <!-- 🛠️ Chrome 原生 DevTools -->
@@ -187,11 +187,18 @@ const props = defineProps<{
    * it has to step aside or it will cover the dialog.
    */
   suspended?: boolean
+  /** 已捕获的圈改批注数，显示在「标注中(N)」上，让画面上有几处一眼可见。 */
+  markupCount?: number
 }>()
 
 const emit = defineEmits<{
   (e: 'inspect-selected', target: any): void
   (e: 'markup-saved', data: any): void
+  /**
+   * 预览里的框被清掉了（退出圈改 / ESC）。框是探针自己清的，但批注卡片在
+   * App 里 —— 不发这个事件，就会留下「框没了、请求却还带着那处圈改」的错位。
+   */
+  (e: 'selection-cleared'): void
   (e: 'code-updated', code: string): void
   (e: 'trigger-chat-fix', prompt: string): void
 }>()
@@ -273,13 +280,22 @@ onMounted(async () => {
         emit('inspect-selected', target)
       }),
       window.browser.onMarkupSaved((data) => {
-        inspectMode.value = 'off'
+        // 这里**不能**把模式置 off：圈改要能连着框好几处，框完一格就退出的话
+        // 第二格根本画不出来。以前置 off 只是渲染层的自我欺骗（探针还在
+        // markup 模式），现在两边老实保持 markup，直到用户 ESC / 再点一次 /
+        // 发送（App 调 exitInspectMode）。
         emit('markup-saved', data)
       }),
       window.browser.onInspectCancelled(() => {
         inspectMode.value = 'off'
+        emit('selection-cleared')
       })
     )
+
+    // 渲染层刚加载完，不知道预览里是不是还停在上一次的圈改/圈选模式（探针
+    // 的 document 是独立的，渲染层刷新不会动它）。先对一次表：退出模式 +
+    // 清掉可能残留的框，再导航。
+    await window.browser.setInspectMode('off')
 
     // 初始化导航
     await window.browser.loadUrl(inputUrl.value)
@@ -449,12 +465,21 @@ function toggleInspect() {
 
 function toggleMarkup() {
   if (inspectMode.value === 'markup') {
+    // 退出即清框（探针侧 setMode('off') 会清），App 收到事件后把批注卡片
+    // 一起收掉 —— 两边都清，「退出圈改」才是一次干净的中止。
     inspectMode.value = 'off'
     window.browser?.setInspectMode('off')
+    emit('selection-cleared')
   } else {
     inspectMode.value = 'markup'
     window.browser?.setInspectMode('markup')
   }
+}
+
+/** 发送后由 App 调用：退出圈改模式并把残留的框清掉 */
+function exitInspectMode() {
+  inspectMode.value = 'off'
+  window.browser?.setInspectMode('off')
 }
 
 function toggleDevTools() {
@@ -519,6 +544,7 @@ function getSelfDebugBtnLabel() {
 
 defineExpose({
   syncBounds,
+  exitInspectMode,
   runSelfDebug,
   navigateToUrl: (url: string) => {
     inputUrl.value = url

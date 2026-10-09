@@ -221,6 +221,24 @@ export class BrowserViewManager {
     }
   }
 
+  /**
+   * 清掉预览里画过的圈改框。带 id 只清那一个（批注卡片上那一行的 ✕），
+   * 不带就全清。渲染层发完请求也要清 —— 框是「这一轮批注」的临时记号，
+   * 留着不但挡视线，重进圈改还会被当成新框重新采样。
+   */
+  public async clearMarkups(id?: string): Promise<void> {
+    if (!this.browserView) return
+    try {
+      await this.browserView.webContents.executeJavaScript(`
+        if (window.__PROTOTYPE_PROBE__) {
+          window.__PROTOTYPE_PROBE__.clearMarkups(${JSON.stringify(id ?? null)});
+        }
+      `)
+    } catch (e) {
+      console.warn('[BrowserView] clearMarkups failed:', e)
+    }
+  }
+
   public async capturePage(): Promise<string> {
     if (!this.browserView) return ''
     try {

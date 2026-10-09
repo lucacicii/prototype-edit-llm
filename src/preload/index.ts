@@ -79,6 +79,8 @@ const browserApi = {
   // 圈改与标注探针
   setInspectMode: (mode: 'inspect' | 'markup' | 'off') =>
     ipcRenderer.invoke('browser:set-inspect-mode', mode),
+  // 不带 id = 清掉所有圈改框；带 id = 只清那一个
+  clearMarkups: (id?: string) => ipcRenderer.invoke('browser:clear-markups', id),
   capturePage: () => ipcRenderer.invoke('browser:capture-page'),
 
   // CDP 运行期诊断与自闭环
