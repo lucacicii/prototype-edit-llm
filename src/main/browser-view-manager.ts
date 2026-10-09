@@ -1,4 +1,4 @@
-import { BrowserView, BrowserWindow } from 'electron'
+import { BrowserView, BrowserWindow, WebContents } from 'electron'
 import { CdpDebugBridge, DiagnosticSnapshot } from './cdp-debug-bridge'
 import { BROWSER_PROBE_SCRIPT } from './injected-browser-probe'
 
@@ -208,10 +208,29 @@ export class BrowserViewManager {
     this.browserView.webContents.closeDevTools()
   }
 
+  /**
+   * 能执行探针脚本的 webContents，还没有就返回 null。
+   *
+   * 一个从未导航过的 BrowserView 没有可执行脚本的渲染帧，此时
+   * `webContents.executeJavaScript()` **永不 settle** —— 不是 reject，是一直
+   * pending，于是调用方永远卡在这一行（渲染层的 `onMounted` 正是先
+   * `setInspectMode('off')` 再 `loadUrl`，一卡住预览就永远不导航）。
+   * 实测是 Electron 自身行为（29 与 44 一致），与 debugger 是否 attach、
+   * 视图是否 setBrowserView 都无关；唯一能把渲染帧拉起来的是导航。
+   *
+   * 所以「首帧导航之前」的探针调用必须当空操作：那时本来也没有探针可谈。
+   */
+  private probeWebContents(): WebContents | null {
+    const wc = this.browserView?.webContents
+    if (!wc || wc.isDestroyed() || !wc.getURL()) return null
+    return wc
+  }
+
   public async setInspectMode(mode: 'inspect' | 'markup' | 'off'): Promise<void> {
-    if (!this.browserView) return
+    const wc = this.probeWebContents()
+    if (!wc) return
     try {
-      await this.browserView.webContents.executeJavaScript(`
+      await wc.executeJavaScript(`
         if (window.__PROTOTYPE_PROBE__) {
           window.__PROTOTYPE_PROBE__.setMode('${mode}');
         }
@@ -227,9 +246,10 @@ export class BrowserViewManager {
    * 留着不但挡视线，重进圈改还会被当成新框重新采样。
    */
   public async clearMarkups(id?: string): Promise<void> {
-    if (!this.browserView) return
+    const wc = this.probeWebContents()
+    if (!wc) return
     try {
-      await this.browserView.webContents.executeJavaScript(`
+      await wc.executeJavaScript(`
         if (window.__PROTOTYPE_PROBE__) {
           window.__PROTOTYPE_PROBE__.clearMarkups(${JSON.stringify(id ?? null)});
         }
