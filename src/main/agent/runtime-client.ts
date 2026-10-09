@@ -8,7 +8,9 @@
  */
 
 import { ChildProcess, spawn } from 'child_process'
+import { app } from 'electron'
 import { EventEmitter } from 'events'
+import * as fs from 'fs'
 import * as path from 'path'
 import * as readline from 'readline'
 
@@ -157,7 +159,24 @@ export class RuntimeClient extends EventEmitter {
 
   /** Begin a run. Events arrive on `observation`, `tool_call`, `gate_request`. */
   public startRun(req: RuntimeRunRequest): Promise<void> {
-    return this.request('start', req as unknown as Record<string, any>).then((frame) => {
+    const payload: Record<string, any> = {
+      run_id: req.runId,
+      model: req.model,
+      messages: req.messages,
+      tools: req.tools
+    }
+    if (req.systemPrompt !== undefined) payload.system_prompt = req.systemPrompt
+    if (req.maxTurns !== undefined) payload.max_turns = req.maxTurns
+    if (req.temperature !== undefined) payload.temperature = req.temperature
+    if (req.thinkingLevel !== undefined) payload.thinking_level = req.thinkingLevel
+    if (req.requestTimeoutMs !== undefined) payload.request_timeout_ms = req.requestTimeoutMs
+    if (req.sessionId !== undefined) payload.session_id = req.sessionId
+    if (req.gate !== undefined) {
+      payload.gate = {
+        max_rounds: req.gate.maxRounds
+      }
+    }
+    return this.request('start', payload).then((frame) => {
       if (frame.type === 'response' && !frame.ok) {
         throw new Error(frame.error ?? 'run could not be started')
       }
@@ -223,6 +242,20 @@ export class RuntimeClient extends EventEmitter {
         this.pending.delete(id)
         p.resolve(frame)
       }
+    } else if (frame.type === 'error') {
+      const id = (frame as any).id as string | undefined
+      if (id && this.pending.has(id)) {
+        const p = this.pending.get(id)!
+        clearTimeout(p.timer)
+        this.pending.delete(id)
+        p.reject(new Error(frame.message))
+      } else if (this.pending.size === 1) {
+        for (const [, p] of this.pending) {
+          clearTimeout(p.timer)
+          p.reject(new Error(frame.message))
+        }
+        this.pending.clear()
+      }
     }
   }
 }
@@ -233,9 +266,29 @@ export class RuntimeClient extends EventEmitter {
  */
 export function resolveRuntimeBinary(): string {
   const name = process.platform === 'win32' ? 'thunder-runtime.exe' : 'thunder-runtime'
+  if (process.env.THUNDER_RUNTIME_BIN && fs.existsSync(process.env.THUNDER_RUNTIME_BIN)) {
+    return process.env.THUNDER_RUNTIME_BIN
+  }
+
+  const isPackaged = typeof app !== 'undefined' && app ? app.isPackaged : false
   const resourcesPath = (process as any).resourcesPath as string | undefined
-  if (resourcesPath) return path.join(resourcesPath, 'bin', name)
+  if (isPackaged && resourcesPath) {
+    const packagedPath = path.join(resourcesPath, 'bin', name)
+    if (fs.existsSync(packagedPath)) {
+      return packagedPath
+    }
+  }
 
   const thunderRepo = process.env.THUNDER_REPO || '/Users/lucas/wz/GitHub/thunder'
+  const candidates = [
+    path.join(thunderRepo, 'target', 'debug', name),
+    path.join(thunderRepo, 'target', 'release', name),
+    path.resolve(process.cwd(), '../thunder/target/debug', name),
+    path.resolve(process.cwd(), '../thunder/target/release', name),
+    ...(resourcesPath ? [path.join(resourcesPath, 'bin', name)] : [])
+  ]
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate
+  }
   return path.join(thunderRepo, 'target', 'debug', name)
 }
