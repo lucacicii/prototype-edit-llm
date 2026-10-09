@@ -7,7 +7,9 @@
  */
 
 import { ChildProcess, spawn } from 'child_process';
+import { app } from 'electron';
 import { EventEmitter } from 'events';
+import * as fs from 'fs';
 import * as path from 'path';
 import * as readline from 'readline';
 
@@ -266,12 +268,34 @@ export class ThunderClient extends EventEmitter {
     const isWin = process.platform === 'win32';
     const binName = isWin ? 'thunder-daemon.exe' : 'thunder-daemon';
 
-    // In Electron packaged app, binary is located in process.resourcesPath/bin
-    if (typeof process !== 'undefined' && (process as any).resourcesPath) {
-      return path.join((process as any).resourcesPath, 'bin', binName);
+    if (process.env.THUNDER_DAEMON_BIN && fs.existsSync(process.env.THUNDER_DAEMON_BIN)) {
+      return process.env.THUNDER_DAEMON_BIN;
     }
 
-    // Default to workspace cargo build target (debug/release)
-    return path.join(__dirname, '../../thunder-agent-daemon/target/debug', binName);
+    const isPackaged = typeof app !== 'undefined' && app ? app.isPackaged : false;
+    const resourcesPath = (process as any).resourcesPath as string | undefined;
+
+    if (isPackaged && resourcesPath) {
+      const packagedPath = path.join(resourcesPath, 'bin', binName);
+      if (fs.existsSync(packagedPath)) {
+        return packagedPath;
+      }
+    }
+
+    const thunderRepo = process.env.THUNDER_REPO || '/Users/lucas/wz/GitHub/thunder';
+    const candidates = [
+      path.join(thunderRepo, 'target/debug', binName),
+      path.join(thunderRepo, 'target/release', binName),
+      path.join(__dirname, '../../thunder-agent-daemon/target/debug', binName),
+      ...(resourcesPath ? [path.join(resourcesPath, 'bin', binName)] : [])
+    ];
+
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+
+    return path.join(thunderRepo, 'target/debug', binName);
   }
 }
