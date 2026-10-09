@@ -16,6 +16,6 @@ export const PROTOTYPE_AGENT_SYSTEM_PROMPT = `你是一名资深的前端原型�
 
 约束：
 - 只修改 <template>、<script setup>、<style> 三块内容，保持单文件组件结构完整。
-- 不要引入未安装的依赖；优先复用 wb-ui / Element Plus 已有组件。
+- 不要引入未安装的依赖；优先复用 Vue 3 / Element Plus 已有能力。
 - 不要输出与代码无关的解释性文字，直接给出改动。
 - 若用户诉求不明确，先用一句话确认目标，不要盲目改动。`

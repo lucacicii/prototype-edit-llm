@@ -10,21 +10,12 @@
       <nav class="sidebar-menu">
         <div class="menu-group-label">业务原型项目</div>
         <router-link
-          to="/prototypes/merchant-mgmt"
+          to="/prototypes/blank-prototype"
           class="menu-item"
           active-class="active"
         >
-          <span class="icon">🏢</span>
-          <span>客户与商户管理</span>
-        </router-link>
-
-        <router-link
-          to="/prototypes/material-mgmt"
-          class="menu-item"
-          active-class="active"
-        >
-          <span class="icon">📦</span>
-          <span>企业商品与物料管理</span>
+          <span class="icon">📄</span>
+          <span>空白原型</span>
         </router-link>
 
         <div class="menu-group-label" style="margin-top: 16px;">基础支持</div>

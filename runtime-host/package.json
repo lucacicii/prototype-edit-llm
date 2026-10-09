@@ -8,17 +8,18 @@
     "build": "vite build"
   },
   "dependencies": {
-    "vue": "^3.4.21",
-    "vue-router": "^4.3.0",
-    "pinia": "^2.1.7",
-    "element-plus": "^2.6.1",
     "@element-plus/icons-vue": "^2.3.1",
     "@vueuse/core": "^10.9.0",
-    "lodash-es": "^4.17.21"
+    "element-plus": "^2.6.1",
+    "lodash-es": "^4.17.21",
+    "pinia": "^2.1.7",
+    "vue": "^3.4.21",
+    "vue-router": "^4.3.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.4",
     "typescript": "^5.4.2",
-    "vite": "^5.1.6"
+    "vite": "^5.1.6",
+    "vite-plugin-vue-inspector": "^5.4.0"
   }
 }

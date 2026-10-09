@@ -1,7 +1,7 @@
 {
   "name": "prototype-edit-llm",
   "version": "0.1.0",
-  "description": "Natural language driven UI prototype editor with wb-ui and thunder",
+  "description": "Natural language driven Vue 3 prototype editor with thunder",
   "main": "./out/main/index.js",
   "author": "lucas",
   "scripts": {

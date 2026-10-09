@@ -34,7 +34,7 @@ export class ProjectWorkspaceManager {
       url: 'http://127.0.0.1:4321',
       rootPath: path.resolve(__dirname, '../../runtime-host'),
       framework: 'vue3',
-      uiLibrary: 'wb-ui + Element Plus',
+      uiLibrary: 'Element Plus',
       devTool: 'vite'
     }
     this.workspaces.push(this.currentWorkspace)
