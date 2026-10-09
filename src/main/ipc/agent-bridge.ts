@@ -12,6 +12,7 @@ import { promises as fs } from 'fs'
 import * as path from 'path'
 import { BrowserViewManager } from '../browser-view-manager'
 import { activePrototypeFile } from '../app-paths'
+import { agentReadiness } from '../runtime-env'
 import { resolveRuntimeBinary, RuntimeClient } from '../agent/runtime-client'
 import { PointedTarget, PrototypeAgent } from '../agent/prototype-agent'
 import {
@@ -118,17 +119,24 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
   ipcMain.handle('agent:ping', async () => {
     try {
       if (!client.isRunning) client.start()
-      return { ok: true, version: await client.ping(5_000), runtimePath: resolveRuntimeBinary() }
+      const readiness = await agentReadiness()
+      return {
+        ok: true,
+        version: await client.ping(5_000),
+        runtimePath: resolveRuntimeBinary(),
+        readiness
+      }
     } catch (err: any) {
       return {
         ok: false,
         error: err?.message ?? String(err),
-        runtimePath: resolveRuntimeBinary()
+        runtimePath: resolveRuntimeBinary(),
+        readiness: await agentReadiness()
       }
     }
   })
 
-  ipcMain.handle('agent:get-config', () => {
+  ipcMain.handle('agent:get-config', async () => {
     const loaded = loadModelConfig(options.workspaceDir)
     // Read fresh every time, so the 「刷新」button and edits to models.json
     // are both just another call to this handler.
@@ -144,6 +152,8 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
       // When the env var wins, saving is still useful but won't take effect.
       envLocked: Boolean(process.env.PROTOTYPE_AGENT_MODEL?.trim()),
       runtimePath: resolveRuntimeBinary(),
+      // 三项就绪表（内核 / Node / bridge）：打包版缺哪一环，一眼能看出来。
+      readiness: await agentReadiness(),
       models: redactCatalog(catalog),
       utilityModel: catalog.utilityModel,
       modelSources: catalog.sources,
