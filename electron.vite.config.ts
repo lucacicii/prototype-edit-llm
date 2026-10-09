@@ -28,8 +28,10 @@ export default defineConfig({
       //
       // 直接在监视这一层排除，比在 HMR 层拦更可靠（chokidar 不上报，就没有后续）。
       // 预览该热更还是会热更 —— 那是 runtime-host 自己的 dev server 的事。
+      // 同样的道理适用于 .prototype-history：版本快照是被主进程写进仓库根的，
+      // 不在这里排除的话，「存一版」就会把界面整页刷掉（正在跑的 run 一起没）。
       watch: {
-        ignored: ['**/runtime-host/**']
+        ignored: ['**/runtime-host/**', '**/.prototype-history/**']
       }
     },
     optimizeDeps: {

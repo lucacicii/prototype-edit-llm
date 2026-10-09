@@ -3,6 +3,7 @@ out
 dist
 *.local
 .prototype-agent.json
+.prototype-history
 .probe
 .work
 .DS_Store

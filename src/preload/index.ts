@@ -22,6 +22,30 @@ const hostApi = {
     ipcRenderer.invoke('host:save-prototype-file', params)
 }
 
+// 名字带 Api 后缀是必要的：window.history 是 DOM 全局，不能占用那个名字。
+const historyApi = {
+  // 原型版本仓（工作区 .prototype-history）
+  list: (params: { prototypeId: string; currentCode?: string }) =>
+    ipcRenderer.invoke('history:list', params),
+  read: (params: { prototypeId: string; version: number }) =>
+    ipcRenderer.invoke('history:read', params),
+  record: (params: {
+    prototypeId: string
+    code: string
+    label?: string
+    kind?: 'seed' | 'auto' | 'manual' | 'rollback-safety'
+    /** 该原型还没有任何版本时，先把改动前的代码存成 v1。 */
+    seedCode?: string
+    runId?: string
+    pinned?: boolean
+  }) => ipcRenderer.invoke('history:record', params),
+  rename: (params: { prototypeId: string; version: number; label: string }) =>
+    ipcRenderer.invoke('history:rename', params),
+  deleteVersion: (params: { prototypeId: string; version: number }) =>
+    ipcRenderer.invoke('history:delete', params),
+  deleteAll: (params: { prototypeId: string }) => ipcRenderer.invoke('history:delete-all', params)
+}
+
 const agentApi = {
   // 原型 Agent（thunder-runtime 通用内核）
   ping: () => ipcRenderer.invoke('agent:ping'),
@@ -126,6 +150,7 @@ if (process.contextIsolated) {
     contextBridge.exposeInMainWorld('thunder', thunderApi)
     contextBridge.exposeInMainWorld('project', projectApi)
     contextBridge.exposeInMainWorld('hostApi', hostApi)
+    contextBridge.exposeInMainWorld('historyApi', historyApi)
     contextBridge.exposeInMainWorld('browser', browserApi)
     contextBridge.exposeInMainWorld('agent', agentApi)
   } catch (error) {
@@ -140,6 +165,8 @@ if (process.contextIsolated) {
   window.project = projectApi
   // @ts-ignore
   window.hostApi = hostApi
+  // @ts-ignore
+  window.historyApi = historyApi
   // @ts-ignore
   window.browser = browserApi
   // @ts-ignore
