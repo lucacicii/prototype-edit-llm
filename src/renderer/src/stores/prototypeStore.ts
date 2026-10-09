@@ -50,6 +50,20 @@ export interface PrototypeItem {
       tagName: string
       text?: string
     }
+    /**
+     * 本条消息的附件，**只留元数据**。
+     *
+     * 整个 store 会被序列化进 localStorage（STORAGE_KEY），一张 5MB 的图片
+     * 转成 base64 就够撑爆配额 —— 所以 data / previewUrl 一律不入库。
+     * 代价是图片只对附加它的那一轮可见，之后只剩文件名。
+     */
+    attachments?: {
+      kind: 'image' | 'text'
+      name: string
+      mimeType?: string
+      bytes: number
+      truncated?: boolean
+    }[]
     /** 助手消息的本轮统计（页脚的「N 轮 · N tokens · N.Ns」）。 */
     stats?: RunStats
   }[]

@@ -121,6 +121,8 @@ export interface IAgentAPI {
       thinkingLevels: string[]
       defaultThinkingLevel: string
       available: boolean
+      /** 支持的输入模态；含 'image' 才吃图（models.json 的 input）。 */
+      input?: string[]
     }>
     utilityModel?: string
     modelSources?: string[]
@@ -139,6 +141,8 @@ export interface IAgentAPI {
     code: string
     history?: Array<{ role: string; content: string | null }>
     inspectTarget?: { tagName: string; text: string }
+    /** 图片附件；`data` 是 base64，不含 `data:` 前缀。 */
+    attachments?: Array<{ name: string; mimeType: string; data: string }>
   }) => Promise<{
     ok: boolean
     runId?: string

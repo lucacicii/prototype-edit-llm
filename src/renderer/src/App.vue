@@ -152,6 +152,15 @@
               >
                 <span>🎯 锚点: &lt;{{ msg.inspectContext.tagName }}&gt;</span>
               </div>
+              <!-- 附件只留元数据：图片字节没进 store，历史里只剩名字 -->
+              <div v-if="msg.attachments?.length" class="mb-1.5 flex flex-wrap gap-1">
+                <span
+                  v-for="(att, ai) in msg.attachments"
+                  :key="ai"
+                  class="rounded border border-slate-700 bg-slate-800 px-1.5 py-0.5 text-[10px] font-mono text-slate-400"
+                  :title="att.kind === 'image' ? '图片未随历史保存（仅附加它的那一轮对模型可见）' : att.name"
+                >{{ att.kind === 'image' ? '🖼' : '📄' }} {{ att.name }}</span>
+              </div>
               <div class="whitespace-pre-wrap">{{ msg.content }}</div>
             </div>
 
@@ -218,24 +227,158 @@
         </div>
       </div>
 
-      <!-- 输入栏 -->
+      <!-- 输入栏：附件 chips / textarea / 指标条 / 工具行 -->
       <div class="p-3 border-t border-slate-800 bg-slate-900">
-        <div class="relative">
+        <!-- 待发送附件 -->
+        <div v-if="pendingAttachments.length" class="mb-2 flex flex-wrap gap-1.5">
+          <div
+            v-for="att in pendingAttachments"
+            :key="att.id"
+            class="flex items-center gap-1.5 rounded border border-slate-700 bg-slate-800 px-1.5 py-1"
+          >
+            <button
+              v-if="att.kind === 'image'"
+              type="button"
+              :title="att.name"
+              @click="lightboxUrl = att.previewUrl ?? null"
+            >
+              <img :src="att.previewUrl" :alt="att.name" class="h-14 w-14 rounded object-cover" />
+            </button>
+            <span v-else class="flex items-center gap-1 text-[10px] text-slate-300" :title="att.name">
+              <span aria-hidden="true">📄</span>
+              <span class="max-w-[140px] truncate font-mono">{{ att.name }}</span>
+              <span class="text-slate-500">{{ Math.ceil(att.bytes / 1024) }}KB{{ att.truncated ? '+' : '' }}</span>
+            </span>
+            <button
+              type="button"
+              class="rounded px-1 text-[11px] text-slate-500 hover:bg-red-500/10 hover:text-red-300"
+              :aria-label="`移除 ${att.name}`"
+              @click="removeAttachment(att.id)"
+            >✕</button>
+          </div>
+        </div>
+
+        <div
+          class="rounded-lg border border-slate-700 bg-slate-800 focus-within:ring-1 focus-within:ring-sky-500"
+          @dragover="handleDragOver"
+          @drop="handleDrop"
+        >
           <textarea
             v-model="promptInput"
             :disabled="isGenerating"
             :placeholder="inspectTarget ? '针对圈选区域输入修改意见 (如：把按钮改为深色、加一个导出操作)...' : '输入需求 (如：在筛选栏新增状态选择，表格操作列加审核)...'"
-            class="w-full bg-slate-800 text-slate-100 placeholder-slate-500 text-xs rounded-lg p-2.5 pb-8 resize-none focus:outline-none focus:ring-1 focus:ring-sky-500 border border-slate-700 disabled:opacity-50"
+            class="w-full bg-transparent text-slate-100 placeholder-slate-500 text-xs rounded-lg p-2.5 resize-none focus:outline-none disabled:opacity-50"
             rows="3"
+            @paste="handlePaste"
             @keydown.enter.prevent="handleSend"
           />
-          <button
-            @click="handleSend"
-            :disabled="isGenerating || !promptInput.trim()"
-            class="absolute right-2 bottom-2 px-3 py-1 bg-sky-600 hover:bg-sky-500 disabled:bg-slate-700 text-white text-xs font-medium rounded transition flex items-center gap-1"
-          >
-            <span>发送迭代</span>
-          </button>
+
+          <!-- 指标条：只有两项，都来自真实帧数据 -->
+          <div class="flex items-center gap-3 border-t border-slate-700/60 px-2.5 py-1 text-[11px] font-mono text-slate-500 tabular-nums">
+            <span :title="metricsTps === null ? '协议在第一轮结束前不提供吞吐值' : '最近一轮 / 最近一次运行的真实吞吐'">
+              ⚡ {{ metricsTps === null ? '— tok/s' : `${metricsTps.toFixed(1)} tok/s` }}
+            </span>
+            <span :title="contextUsedTokens === null ? '尚无实测值，按字符数 / 3 粗估（误差可达 30-50%）' : '最后一轮的 prompt + completion tokens'">
+              上下文 {{ formatTokenCount(contextUsed) }} / {{ formatCompactTokens(contextWindowLimit) }}
+              (<span :class="contextPercent >= 80 ? 'text-amber-400' : ''">{{ contextPercent }}%</span>)
+            </span>
+          </div>
+
+          <!-- 工具行 -->
+          <div class="flex items-center gap-2 border-t border-slate-700/60 px-2 py-1.5">
+            <input
+              ref="fileInputRef"
+              type="file"
+              multiple
+              class="hidden"
+              accept="image/png,image/jpeg,image/jpg,image/webp,image/gif,.txt,.md,.markdown,.json,.jsonc,.js,.mjs,.jsx,.ts,.tsx,.vue,.css,.scss,.less,.html,.xml,.yml,.yaml,.csv,.tsv,.log,.sql,.py,.go,.rs,.java,.sh,.toml,.ini"
+              @change="handleFileInputChange"
+            />
+            <button
+              type="button"
+              class="flex h-6 w-6 items-center justify-center rounded text-slate-400 transition hover:bg-slate-700 hover:text-slate-200 disabled:opacity-40"
+              :disabled="isGenerating || !modelConfig.supportsImages.value"
+              :title="modelConfig.supportsImages.value ? '添加图片或文本/代码文件（也可粘贴、拖放）' : '当前模型不支持图片输入；文本文件仍可添加'"
+              aria-label="添加附件"
+              @click="fileInputRef?.click()"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+              </svg>
+            </button>
+
+            <span class="flex items-center gap-1 text-[11px] text-slate-400">
+              <span aria-hidden="true">🤖</span>
+              <select
+                class="max-w-[152px] rounded border border-slate-700 bg-slate-900 px-1 py-0.5 text-[11px] text-slate-200 disabled:opacity-50"
+                :value="modelConfig.selectionId.value"
+                :disabled="isGenerating || modelConfig.envLocked.value"
+                :title="modelConfig.envLocked.value ? 'PROTOTYPE_AGENT_MODEL 环境变量正在覆盖模型，改动不会生效' : '全局模型（写入 .prototype-agent.json）'"
+                @change="handleComposerModelChange(($event.target as HTMLSelectElement).value)"
+              >
+                <option value="" disabled>选择模型</option>
+                <optgroup
+                  v-for="g in modelConfig.groupedModels.value"
+                  :key="g.provider"
+                  :label="g.provider"
+                >
+                  <!-- 输入区只放模型名：带上 id 会被 128px 截成半截（设置弹窗里仍用 full label 区分） -->
+                  <option
+                    v-for="m in g.items"
+                    :key="m.selectionId"
+                    :value="m.selectionId"
+                    :disabled="!m.available"
+                  >{{ m.name }}</option>
+                </optgroup>
+              </select>
+            </span>
+
+            <span class="flex items-center gap-1 text-[11px] text-slate-400">
+              <span aria-hidden="true">✨</span>
+              <select
+                class="rounded border border-slate-700 bg-slate-900 px-1 py-0.5 text-[11px] text-slate-200 disabled:opacity-50"
+                :value="modelConfig.thinkingLevel.value"
+                :disabled="isGenerating || modelConfig.envLocked.value || modelConfig.thinkingOptions.value.length <= 1"
+                :title="modelConfig.envLocked.value ? '环境变量锁定中' : '思考档位（全局）'"
+                @change="handleComposerThinkingChange(($event.target as HTMLSelectElement).value)"
+              >
+                <option
+                  v-for="lv in modelConfig.thinkingOptions.value"
+                  :key="lv"
+                  :value="lv"
+                >{{ lv }}</option>
+              </select>
+            </span>
+
+            <span class="flex-1"></span>
+
+            <button
+              v-if="!isGenerating"
+              type="button"
+              class="flex h-7 w-7 items-center justify-center rounded-full bg-sky-600 text-white transition hover:bg-sky-500 disabled:bg-slate-700 disabled:text-slate-500"
+              :disabled="!promptInput.trim() && pendingAttachments.length === 0"
+              title="发送迭代"
+              aria-label="发送迭代"
+              @click="handleSend"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 19V5" />
+                <path d="m5 12 7-7 7 7" />
+              </svg>
+            </button>
+            <button
+              v-else
+              type="button"
+              class="flex h-7 w-7 items-center justify-center rounded-full border border-slate-700 text-slate-300 transition hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-300"
+              title="停止本次生成"
+              aria-label="停止"
+              @click="handleCancelRun"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <rect x="6" y="6" width="12" height="12" rx="2" />
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
     </section>
@@ -319,9 +462,20 @@
     <!-- 模型 / Agent 设置弹窗 -->
     <ModelSettingsDialog
       v-model="isSettingsOpen"
-      @saved="refreshAgentStatus"
+      @saved="handleSettingsSaved"
       @closed="handleDialogClosed"
     />
+
+    <!-- 附件图片灯箱 -->
+    <div
+      v-if="lightboxUrl"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-8"
+      role="dialog"
+      aria-modal="true"
+      @click="lightboxUrl = null"
+    >
+      <img :src="lightboxUrl" alt="" class="max-h-full max-w-full rounded shadow-2xl" />
+    </div>
   </div>
 </template>
 
@@ -335,8 +489,11 @@ import ExportDialog from './components/ExportDialog.vue'
 import ModelSettingsDialog from './components/ModelSettingsDialog.vue'
 import { usePrototypeStore, PrototypeItem, RunStats } from './stores/prototypeStore'
 import { locateCodeSnippet } from './utils/inspector'
+import { useAgentModelConfig } from './composables/useAgentModelConfig'
 
 const prototypeStore = usePrototypeStore()
+// 模型 / 档位的共享状态：输入区的两个下拉和「⚙️ 模型设置」弹窗读同一份
+const modelConfig = useAgentModelConfig()
 const currentPrototype = computed(() => prototypeStore.currentPrototype)
 const currentWorkspace = ref<any>(null)
 
@@ -368,6 +525,145 @@ const runStats = ref<RunStats | null>(null)
 let runTimer: ReturnType<typeof setInterval> | undefined
 let runStartWall = 0
 
+// —— 指标条专用状态 ——
+// 与上面那批不同：这三个**不在 finally 里归零**，否则 run 一结束指标条就空了。
+// 只在每次 run 开始时重置。
+const liveTurnTps = ref<number | null>(null)      // 本 run 最近一轮的真实吞吐
+const lastRunTps = ref<number | null>(null)       // 上次 run 的平均吞吐
+const contextUsedTokens = ref<number | null>(null) // 最后一轮的 prompt+completion（真值）
+
+// —— 待发送附件 ——
+// 图片的 base64 与预览只活在内存里：store 会把整个对话写进 localStorage，
+// 图片字节进了快照就能撑爆配额（见 prototypeStore 的 attachments 注释）。
+interface PendingAttachment {
+  id: string
+  kind: 'image' | 'text'
+  name: string
+  mimeType: string
+  bytes: number
+  previewUrl?: string
+  /** 图片：base64，**不含** `data:` 前缀（协议要求）。 */
+  data?: string
+  /** 文本：已按上限截断的内容。 */
+  text?: string
+  truncated?: boolean
+}
+
+const pendingAttachments = ref<PendingAttachment[]>([])
+const lightboxUrl = ref<string | null>(null)
+const fileInputRef = ref<HTMLInputElement>()
+
+const ALLOWED_IMAGE_MIME = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif'])
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024 // 5MB
+const MAX_ATTACHMENTS = 10
+const MAX_TEXT_BYTES = 64 * 1024 // 64KB
+
+/** 可内联的文本/代码后缀。`.env` 故意不在列 —— 本应用会把配置写进工作区，
+ *  不该让人一键把密钥读进对话。 */
+const TEXT_EXTENSIONS = new Set([
+  'txt', 'md', 'markdown', 'json', 'jsonc', 'js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx', 'vue',
+  'css', 'scss', 'less', 'html', 'htm', 'xml', 'yml', 'yaml', 'csv', 'tsv', 'log', 'sql',
+  'py', 'java', 'go', 'rs', 'rb', 'php', 'sh', 'bash', 'zsh', 'toml', 'ini', 'conf',
+  'c', 'h', 'cpp', 'hpp', 'cs', 'kt', 'swift'
+])
+
+function newAttachmentId(prefix: string) {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+}
+
+function readAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result ?? ''))
+    reader.onerror = () => reject(reader.error ?? new Error('读取失败'))
+    reader.readAsDataURL(file)
+  })
+}
+
+function classifyFile(file: File): 'image' | 'text' | 'reject' {
+  const mime = (file.type || '').toLowerCase()
+  if (mime.startsWith('image/')) return ALLOWED_IMAGE_MIME.has(mime) ? 'image' : 'reject'
+  const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
+  return TEXT_EXTENSIONS.has(ext) ? 'text' : 'reject'
+}
+
+/** 三条入口（选文件 / 粘贴 / 拖放）共用这一处收口。 */
+async function addFiles(files: File[]) {
+  const accepted: PendingAttachment[] = []
+  let skipped = 0
+  for (const file of files) {
+    if (pendingAttachments.value.length + accepted.length >= MAX_ATTACHMENTS) {
+      skipped++
+      continue
+    }
+    const kind = classifyFile(file)
+    if (kind === 'image') {
+      if (file.size > MAX_IMAGE_BYTES) {
+        skipped++
+        continue
+      }
+      const dataUrl = await readAsDataUrl(file)
+      accepted.push({
+        id: newAttachmentId('img'),
+        kind,
+        // 粘贴截图时系统常常不给 MIME，退回 png
+        name: file.name || '粘贴的图片',
+        mimeType: file.type || 'image/png',
+        bytes: file.size,
+        previewUrl: dataUrl,
+        data: dataUrl.split(',')[1] ?? ''
+      })
+    } else if (kind === 'text') {
+      // 先 slice 再 text：64KB 的上限就落在这里，不能整文件读进来
+      const text = await file.slice(0, MAX_TEXT_BYTES).text()
+      accepted.push({
+        id: newAttachmentId('file'),
+        kind,
+        name: file.name,
+        mimeType: file.type || 'text/plain',
+        bytes: file.size,
+        text,
+        truncated: file.size > MAX_TEXT_BYTES
+      })
+    } else {
+      skipped++
+    }
+  }
+  if (accepted.length) pendingAttachments.value.push(...accepted)
+  if (skipped) ElMessage.warning(`已忽略 ${skipped} 个不支持或超出限制的文件`)
+}
+
+async function handleFileInputChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  if (input.files?.length) await addFiles(Array.from(input.files))
+  input.value = '' // 否则连续选同一个文件不会触发 change
+}
+
+async function handlePaste(e: ClipboardEvent) {
+  const items = Array.from(e.clipboardData?.items ?? []).filter((i) => i.type.startsWith('image/'))
+  if (!items.length) return // 纯文本正常粘贴
+  e.preventDefault()
+  await addFiles(items.map((i) => i.getAsFile()).filter((f): f is File => !!f))
+}
+
+function handleDragOver(e: DragEvent) {
+  if (e.dataTransfer?.types.includes('Files')) {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+  }
+}
+
+async function handleDrop(e: DragEvent) {
+  const files = Array.from(e.dataTransfer?.files ?? [])
+  if (!files.length) return
+  e.preventDefault()
+  await addFiles(files)
+}
+
+function removeAttachment(id: string) {
+  pendingAttachments.value = pendingAttachments.value.filter((a) => a.id !== id)
+}
+
 // 「已复制」只做本地 UI 反馈：按钮文案自己回弹，不弹全局 toast（与 panel 一致）
 const copiedIndex = ref<number>(-1)
 let copiedTimer: ReturnType<typeof setTimeout> | undefined
@@ -398,12 +694,78 @@ const statusLine = computed(() => {
   return `Thunder Agent 正在工作…${turnSuffix}`
 })
 
+// —— 指标条：tok/s 与上下文占用 ——
+
+/** 最近一条带统计的助手消息：刷新页面后指标条还能有数，靠的就是它。 */
+const lastAssistantStats = computed<RunStats | null>(() => {
+  const msgs = currentPrototype.value?.chatMessages ?? []
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].role === 'assistant' && msgs[i].stats) return msgs[i].stats ?? null
+  }
+  return null
+})
+
+/**
+ * 只用真数据。第一轮 turn_end 之前协议里没有任何吞吐值 ——
+ * 不拿 token_delta 的条数伪造，显示 `—`。
+ */
+const metricsTps = computed<number | null>(() => {
+  if (isGenerating.value) return liveTurnTps.value
+  return lastRunTps.value ?? lastAssistantStats.value?.tokensPerSecond ?? null
+})
+
+function formatTokenCount(n: number) {
+  return n.toLocaleString()
+}
+
+function formatCompactTokens(n: number) {
+  if (n >= 1_000_000) return `${Math.round(n / 1_000_000)}M`
+  if (n >= 1_000) return `${Math.round(n / 1_000)}k`
+  return String(n)
+}
+
+/**
+ * 兜底估算：字符数 / 3。**明确是估算** —— CJK 约 1 字/token、代码约 3-4 字符/token，
+ * 与真实 tokenizer 可能差 30-50%。只在还没有实测值时用。
+ * 窗口取最近 8 条，与 handleSend 送给 agent 的 history 窗口一致。
+ */
+const estimatedContextTokens = computed(() => {
+  const msgs = currentPrototype.value?.chatMessages ?? []
+  const chars = msgs
+    .filter((m) => m.role === 'user' || m.role === 'assistant')
+    .slice(-8)
+    .reduce((n, m) => n + (m.content?.length ?? 0), 0)
+  return Math.ceil((chars + promptInput.value.trim().length) / 3)
+})
+
+/** 实测优先：最后一轮的 prompt+completion 才是窗口占用（total_* 是跨轮累加）。 */
+const contextUsed = computed(() => contextUsedTokens.value ?? estimatedContextTokens.value)
+const contextWindowLimit = computed(() => modelConfig.selectedContextWindow.value)
+const contextPercent = computed(() =>
+  contextWindowLimit.value > 0
+    ? Math.min(100, Math.round((contextUsed.value / contextWindowLimit.value) * 100))
+    : 0
+)
+
+// —— 模型 / 档位下拉 ——
+async function handleComposerModelChange(value: string) {
+  await modelConfig.selectModel(value)
+  agentModelLabel.value = value ? modelConfig.selectedModel.value?.name ?? '' : agentModelLabel.value
+}
+
+async function handleComposerThinkingChange(value: string) {
+  await modelConfig.selectThinkingLevel(value)
+}
+
 // —— 进度区：thunder 每一帧的分发（帧词汇见 thunder-agent-loop/src/types/event.rs）——
 function handleStreamFrame(frame: any) {
   if (!frame) return
   // 顶层帧（run_id 标识属于哪次 run）
   if (frame.type === 'run_finished') {
     if (frame.stats) runStats.value = normalizeStats(frame.stats)
+    if (typeof frame.stats?.avg_tokens_per_second === 'number') {
+      lastRunTps.value = frame.stats.avg_tokens_per_second
+    }
     if (frame.finish_reason === 'cancelled') runPhase.value = 'cancelled'
     return
   }
@@ -445,6 +807,14 @@ function handleStreamFrame(frame: any) {
       break
     case 'turn_end':
       runTurn.value = ev.turn
+      // 这一轮的真实吞吐；第一轮 turn_end 之前协议里没有这个值
+      if (typeof ev.stats?.tokens_per_second === 'number') {
+        liveTurnTps.value = ev.stats.tokens_per_second
+      }
+      // 最后一轮的 prompt+completion 才接近窗口占用，total_* 是跨轮累加的
+      if (typeof ev.stats?.prompt_tokens === 'number') {
+        contextUsedTokens.value = (ev.stats.prompt_tokens ?? 0) + (ev.stats.completion_tokens ?? 0)
+      }
       break
     case 'gate_result':
       if (ev.verdict === 'fail') {
@@ -460,6 +830,9 @@ function handleStreamFrame(frame: any) {
       break
     case 'loop_complete':
       if (ev.stats) runStats.value = normalizeStats(ev.stats)
+      if (typeof ev.stats?.avg_tokens_per_second === 'number') {
+        lastRunTps.value = ev.stats.avg_tokens_per_second
+      }
       break
     case 'error':
       // recoverable 的瞬时失败：agent 会自己重试，只在状态行提示
@@ -524,7 +897,14 @@ async function refreshAgentStatus() {
   }
 }
 
+/** 弹窗保存后：输入区的两个下拉要立刻跟着变，不然会显示旧模型。 */
+async function handleSettingsSaved() {
+  await refreshAgentStatus()
+  await modelConfig.refresh()
+}
+
 onMounted(async () => {
+  await modelConfig.refresh()
   await refreshAgentStatus()
   if (agentConfigured.value) return
 
@@ -534,7 +914,7 @@ onMounted(async () => {
   if (cfg?.defaultModel) {
     const saved = await window.agent.setConfig({ ...(cfg.config ?? {}), model: cfg.defaultModel })
     if (saved?.ok) {
-      await refreshAgentStatus()
+      await handleSettingsSaved()
       if (agentConfigured.value) {
         ElMessage.success(`已自动选用模型 ${cfg.defaultModel.name ?? cfg.defaultModel.id}`)
         return
@@ -696,25 +1076,68 @@ function handleTriggerChatFix(prompt: string) {
 
 async function handleSend() {
   const text = promptInput.value.trim()
-  if (!text || isGenerating.value || !currentPrototype.value) return
+  const staged = pendingAttachments.value
+  // 有文本或有附件都算有效输入 —— 只发一张图也该走得通
+  if ((!text && staged.length === 0) || isGenerating.value || !currentPrototype.value) return
 
   const p = currentPrototype.value
   const target = inspectTarget.value
   const markup = markupAnnotation.value
+
+  const textFiles = staged.filter((a) => a.kind === 'text')
+  const images = staged.filter((a) => a.kind === 'image')
 
   let instruction = text
   if (markup) {
     instruction = `【圈改批注诉求】: ${markup.note}\n${text !== markup.note ? text : ''}`
   }
 
+  // 文本附件内联成引用块。正文自带 ``` 时改用四反引号围栏，否则代码块会被提前闭合。
+  if (textFiles.length) {
+    const blocks = textFiles.map((f) => {
+      const body = (f.text ?? '').trim()
+      const fence = body.includes('```') ? '````' : '```'
+      return `[Referenced File: ${f.name}${f.truncated ? ' (truncated)' : ''}]\n${fence}\n${body}\n${fence}\n[End Referenced File]`
+    })
+    instruction = [...blocks, instruction].filter(Boolean).join('\n\n')
+  }
+  // 只有图片、没有文字时补一句话，否则 prompt 是空串
+  if (!instruction && images.length) instruction = '请分析这张图片。'
+
+  // history 必须在 push **之前**算：push 完再从 chatMessages 里取，
+  // 这条消息会同时进 history，而 prototype-agent 又追加一次 prompt —
+  // 同一段需求被发两遍给模型。
+  const history = p.chatMessages
+    .filter((m) => m.role === 'user' || m.role === 'assistant')
+    .slice(-8)
+    .map((m) => ({ role: m.role, content: m.content }))
+
   p.chatMessages.push({
     role: 'user',
     content: instruction,
     timestamp: Date.now(),
-    inspectContext: target ? { tagName: target.tagName, text: target.text } : undefined
+    inspectContext: target ? { tagName: target.tagName, text: target.text } : undefined,
+    // 只留元数据；图片字节不进 store（见 prototypeStore 的 attachments 注释）
+    attachments: staged.length
+      ? staged.map((a) => ({
+          kind: a.kind,
+          name: a.name,
+          mimeType: a.mimeType,
+          bytes: a.bytes,
+          truncated: a.truncated
+        }))
+      : undefined
   })
 
+  const outgoingImages = modelConfig.supportsImages.value
+    ? images.map((a) => ({ name: a.name, mimeType: a.mimeType, data: a.data ?? '' }))
+    : []
+  if (images.length && !modelConfig.supportsImages.value) {
+    ElMessage.warning('当前模型不支持图片输入，已忽略图片附件')
+  }
+
   promptInput.value = ''
+  pendingAttachments.value = []
   clearInspectTarget()
   markupAnnotation.value = null
 
@@ -734,6 +1157,9 @@ async function handleSend() {
   runReasoning.value = false
   runNotice.value = ''
   runStats.value = null
+  // 指标条：吞吐与实测上下文按 run 重来（但不在 finally 里清，见上面的声明）
+  liveTurnTps.value = null
+  contextUsedTokens.value = null
   runStartWall = Date.now()
   clearInterval(runTimer)
   runTimer = setInterval(() => {
@@ -743,12 +1169,7 @@ async function handleSend() {
   isGenerating.value = true
   scrollToBottom()
 
-  // The agent keeps no state of its own; the app replays the recent turns on
-  // every request and stores whatever comes back.
-  const history = p.chatMessages
-    .filter((m) => m.role === 'user' || m.role === 'assistant')
-    .slice(-8)
-    .map((m) => ({ role: m.role, content: m.content }))
+  // history 在上面、push 之前就算好了：agent 自己不留状态，每次重放最近几轮。
 
   try {
     if (!window.agent?.run) {
@@ -779,7 +1200,8 @@ async function handleSend() {
         prompt: instruction,
         code: p.vueCode,
         history,
-        inspectTarget: target ? { tagName: target.tagName, text: target.text } : undefined
+        inspectTarget: target ? { tagName: target.tagName, text: target.text } : undefined,
+        attachments: outgoingImages.length ? outgoingImages : undefined
       })
     } finally {
       offStream?.()

@@ -33,6 +33,8 @@ export interface AgentRunParams {
   prototypeId: string
   history?: { role: 'user' | 'assistant' | 'tool' | 'system'; content: string | null }[]
   inspectTarget?: { tagName: string; text: string }
+  /** 图片附件：透传给 prototype-agent，落到本轮那条 user 消息的 parts 上。 */
+  attachments?: { name: string; mimeType: string; data: string }[]
 }
 
 /** The catalog minus secrets: the renderer only learns whether a key exists. */
@@ -181,7 +183,8 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
         prompt: params.prompt,
         history: (params.history ?? []).map((m) => m as any),
         model: resolved.model,
-        config: modelConfig
+        config: modelConfig,
+        attachments: params.attachments
       })
       return { ok: true, runId, ...outcome }
     } catch (err: any) {

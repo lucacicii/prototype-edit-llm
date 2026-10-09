@@ -43,9 +43,24 @@ export interface RuntimeToolSpec {
   effect?: string
 }
 
+/** thunder 的多模态 part（Rust `ContentPart`，message.rs:52-74）。 */
+export type RuntimeContentPart =
+  | { type: 'text'; text: string }
+  | {
+      type: 'image'
+      /** key 必须是 camelCase —— Rust 侧是 `#[serde(rename = "mimeType")]`。 */
+      mimeType: string
+      /** base64，**不含** `data:` 前缀（runtime 直接当字节用，带了前缀就是坏图）。 */
+      data: string
+      name?: string
+      path?: string
+      sha256?: string
+    }
+
 export type RuntimeMessage =
   | { role: 'system'; content: string }
-  | { role: 'user'; content: string }
+  // 纯文本消息不带 parts（协议侧 skip_serializing_if），形状与历史逐字节一致
+  | { role: 'user'; content: string; parts?: RuntimeContentPart[] }
   | { role: 'assistant'; content: string | null }
   | { role: 'tool'; tool_call_id: string; content: string }
 
