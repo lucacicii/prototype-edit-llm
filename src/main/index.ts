@@ -39,8 +39,7 @@ function createWindow(): void {
     webPreferences: {
       preload: existsSync(join(__dirname, '../preload/index.mjs')) ? join(__dirname, '../preload/index.mjs') : join(__dirname, '../preload/index.js'),
       sandbox: false,
-      contextIsolation: true,
-      cache: false // 禁用渲染缓存
+      contextIsolation: true
     }
   })
 

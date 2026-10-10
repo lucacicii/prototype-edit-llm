@@ -1,7 +1,7 @@
 {
   "name": "prototype-edit-llm",
   "version": "0.1.0",
-  "description": "Natural language driven Vue 3 prototype editor with thunder",
+  "description": "Natural language driven prototype editor with thunder and Lobe UI",
   "main": "./out/main/index.js",
   "author": "lucas",
   "scripts": {
@@ -20,22 +20,28 @@
     "build:mac": "npm run build && electron-builder --mac"
   },
   "dependencies": {
-    "@element-plus/icons-vue": "^2.3.1",
-    "@vueuse/core": "^10.9.0",
+    "@lobehub/icons": "^5.23.0",
+    "@lobehub/ui": "^5.57.3",
+    "@monaco-editor/react": "^4.7.0",
+    "antd": "^6.6.5",
+    "antd-style": "^4.1.0",
     "dayjs": "^1.11.10",
-    "element-plus": "^2.6.1",
     "lodash-es": "^4.17.21",
+    "lucide-react": "^1.55.0",
     "monaco-editor": "^0.46.0",
-    "pinia": "^2.1.7",
-    "vue": "^3.4.21"
+    "motion": "^12.43.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "zustand": "^5.0.15"
   },
   "devDependencies": {
     "@electron-toolkit/preload": "^3.0.0",
     "@electron-toolkit/utils": "^3.0.0",
     "@types/lodash-es": "^4.17.12",
     "@types/node": "^24.19.1",
-    "@vitejs/plugin-vue": "^5.0.4",
-    "@vue/compiler-sfc": "^3.4.21",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^4.7.0",
     "autoprefixer": "^10.6.1",
     "electron": "^44.7.0",
     "electron-builder": "^26.17.0",
@@ -45,8 +51,7 @@
     "sucrase": "^3.35.1",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.3.3",
-    "vite": "^5.1.4",
-    "vue-tsc": "^1.8.27"
+    "vite": "^5.1.4"
   },
   "type": "module"
 }

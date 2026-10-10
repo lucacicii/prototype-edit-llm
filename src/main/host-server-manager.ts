@@ -19,6 +19,10 @@ export class HostServerManager {
     return HostServerManager.instance
   }
 
+  public getIsRunning(): boolean {
+    return this.isRunning
+  }
+
   public getHostUrl(): string {
     return this.hostUrl
   }
@@ -48,7 +52,7 @@ export class HostServerManager {
         console.error('[HostServer Vite]', data.toString())
       })
 
-      this.process.on('close', (code) => {
+      this.process.on('close', (_code) => {
         this.isRunning = false
         this.process = null
       })

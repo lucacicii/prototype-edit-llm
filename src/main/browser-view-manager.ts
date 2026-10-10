@@ -34,6 +34,10 @@ export class BrowserViewManager {
     return BrowserViewManager.instance
   }
 
+  public getZoomFactor(): number {
+    return this.currentZoomFactor
+  }
+
   public init(ownerWindow: BrowserWindow): void {
     if (this.browserView) {
       return
