@@ -57,9 +57,10 @@ mac:
     - target: dmg
       arch: [arm64]
   # 应用图标（.app 与 dmg 都用它）。默认也会到 buildResources（build/）里找
-  # icon.icns，这里显式写出来是因为这个文件没有第二个来源：它是从
-  # ~/Downloads/Assets.xcassets/AppIcon.appiconset 的 16…1024 一整套 PNG 用
-  # iconutil 合成的，build/icon.png（1024）留作 dev dock 图标与非 mac 目标的备用。
+  # icon.icns，这里显式写出来是因为这个文件没有第二个来源：它以 build/icon.png
+  # 为母版（1024，内容 832×832 居中、四边留 96px 透明，符合 macOS 图标栅格），
+  # 用 sips 逐级降采样成 16…512@2x 再由 iconutil 合成；icon.png 同时是 dev dock
+  # 图标与非 mac 目标的备用图。换图就换这两份，再 build:mac。
   # 不配的后果实测过：CFBundleIconFile 会是 Electron 自带的 electron.icns。
   icon: build/icon.icns
   category: public.app-category.developer-tools
