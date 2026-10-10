@@ -23,12 +23,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
         width={900}
         destroyOnClose
         centered
+        className="settings-modal"
         styles={{
-          body: {
+          container: {
             padding: 0,
             overflow: 'hidden',
             backgroundColor: '#0f172a',
             border: '1px solid #1e293b'
+          },
+          body: {
+            padding: 0,
+            overflow: 'hidden'
           }
         }}
       >

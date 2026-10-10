@@ -30,3 +30,22 @@ html, body, #root, #app {
 .is-macos .traffic-light-inset {
   padding-left: 72px;
 }
+
+/* Ant Design Modal Container reset for frameless custom modals */
+.settings-modal .ant-modal-container {
+  padding: 0 !important;
+  overflow: hidden !important;
+  background-color: #0f172a !important;
+  border: 1px solid #1e293b !important;
+}
+
+.settings-modal .ant-modal-close {
+  top: 14px;
+  right: 14px;
+  color: #94a3b8;
+  z-index: 20;
+}
+
+.settings-modal .ant-modal-close:hover {
+  color: #f1f5f9;
+}
