@@ -75,9 +75,13 @@
             </span>
           </div>
 
-          <!-- 源码文件定位信息 -->
-          <div v-if="inspectTarget.sourceFile" class="text-sky-300/90 font-mono text-[10px] truncate mb-0.5">
+          <!-- 源码文件定位信息：精确位置直接给；推断位置标「推断」 -->
+          <div v-if="inspectTarget.sourceFile" class="font-mono text-[10px] truncate mb-0.5" :class="inspectTarget.sourceLocated === false ? 'text-amber-400/90' : 'text-sky-300/90'">
             📍 {{ getCleanFileName(inspectTarget.sourceFile) }}{{ inspectTarget.sourceLine ? ` : ${inspectTarget.sourceLine}` : '' }}
+            <span v-if="inspectTarget.sourceLocated === false" class="text-amber-300/80 text-[9px] ml-1" title="该位置是文本匹配推断的，不是框架注入的精确行号">（推断）</span>
+          </div>
+          <div v-else-if="inspectTarget.locateMode === 'none'" class="text-slate-400/80 font-mono text-[10px] truncate mb-0.5" title="当前预览没有框架源码元数据（原生 HTML 或外部页面），圈选仍可用，但源码定位不可用">
+            📍 源码定位不可用（无框架元数据）
           </div>
 
           <div class="text-sky-200/80 font-mono text-[11px] truncate mb-0.5">
@@ -116,7 +120,9 @@
                 v-if="m.target"
                 class="px-1.5 rounded bg-amber-900/70 text-amber-200 font-mono text-[10px] font-normal"
                 :title="m.target.sourceFile
-                  ? `源码位置: ${m.target.sourceFile}${m.target.sourceLine ? ':' + m.target.sourceLine : ''}`
+                  ? m.target.sourceLocated === false
+                    ? `推断源码位置（文本匹配，非精确行号）: ${m.target.sourceFile}${m.target.sourceLine ? ':' + m.target.sourceLine : ''}`
+                    : `源码位置: ${m.target.sourceFile}${m.target.sourceLine ? ':' + m.target.sourceLine : ''}`
                   : '未取到源码位置'"
               >
                 📍 &lt;{{ targetLabel(m.target) }}&gt;
@@ -134,11 +140,16 @@
             </div>
             <div
               v-if="m.target"
-              class="text-amber-300/70 font-mono text-[10px] truncate mt-0.5"
+              class="font-mono text-[10px] truncate mt-0.5"
+              :class="m.target.sourceLocated === false ? 'text-amber-400/80' : 'text-amber-300/70'"
             >
               {{ m.target.selector || m.target.tagName }}
               <template v-if="m.target.sourceFile">
-                · {{ getCleanFileName(m.target.sourceFile) }}{{ m.target.sourceLine ? ':' + m.target.sourceLine : '' }}
+                · {{ getCleanFileName(m.target.sourceFile) }}{{ m.target.sourceLine ? ':' + m.target.sourceLine : '' }}<span v-if="m.target.sourceLocated === false" title="该位置是文本匹配推断的">（推断）</span>
+              </template>
+              <template v-else>
+                <span v-if="m.target.locateMode !== 'text'" class="text-slate-400/70" title="当前预览没有框架源码元数据，模型以元素文本与选择器为主要依据">
+                · 源码定位不可用</span>
               </template>
             </div>
           </div>
@@ -509,7 +520,8 @@
       :visible="isExportDialogOpen"
       @update:visible="isExportDialogOpen = $event"
       :code-content="currentPrototype?.vueCode || ''"
-      :default-file-name="`${currentPrototype?.id || 'index'}.vue`"
+      :default-file-name="`${currentPrototype?.id || 'index'}.${currentPrototype?.techStack === 'react-ts' ? 'tsx' : currentPrototype?.techStack === 'native-html' ? 'html' : 'vue'}`"
+      :tech-stack="currentPrototype?.techStack"
       @closed="handleDialogClosed"
     />
 
@@ -1067,11 +1079,27 @@ async function onInspectElementSelected(target: any) {
     }
   }
 
-  const { snippet, lineNumber: calculatedLine } = locateCodeSnippet(sourceCode, {
-    tagName: target.tagName,
-    className: target.className || '',
-    textSnippet: target.text || ''
-  })
+  // 探针已给出精确位置（compiler/fiber 通道）时不再用文本匹配重算 ——
+  // 文本匹配可能命中另一处同款文本，反而把精确行号顶掉。
+  // 只有位置缺失或是推断来的，才补算文本匹配（结果仍是推断）。
+  let snippet = ''
+  let calculatedLine: number | undefined
+  if (target.sourceLocated === true && lineNumber) {
+    const start = Math.max(0, lineNumber - 3)
+    const end = Math.min(sourceCode.split('\n').length, lineNumber + 4)
+    snippet = sourceCode.split('\n').slice(start, end).join('\n')
+  } else {
+    const located = locateCodeSnippet(sourceCode, {
+      tagName: target.tagName,
+      className: target.className || '',
+      textSnippet: target.text || ''
+    })
+    snippet = located.snippet
+    calculatedLine = located.lineNumber
+    // 补算的位置是文本推断，标清楚；探针原本给的推断位置保持原样
+    target.sourceLocated = false
+    if (target.locateMode !== 'text') target.locateMode = 'text'
+  }
 
   inspectTarget.value = {
     ...target,
@@ -1130,7 +1158,9 @@ function markupTargetLines(t: any): string[] {
   lines.push(desc)
   if (t.text) lines.push(`- 该元素文本: "${t.text}"`)
   if (t.sourceFile) {
-    lines.push(`- 源码位置: ${t.sourceFile}${t.sourceLine ? ':' + t.sourceLine : ''}`)
+    // 推断位置（文本匹配）要显式告诉模型，别让它当精确行号用
+    const qualifier = t.sourceLocated === false ? '（文本匹配推断，非精确行号）' : ''
+    lines.push(`- 源码位置${qualifier}: ${t.sourceFile}${t.sourceLine ? ':' + t.sourceLine : ''}`)
   }
   if (Array.isArray(t.stack) && t.stack.length > 1) {
     lines.push(`- 该点元素层叠（由内到外）: ${t.stack.join(' < ')}`)
@@ -1199,9 +1229,16 @@ function buildInspectInstruction(target: any): string {
   if (target.selector) lines.push(`- 选择器: ${target.selector}`)
   if (target.text) lines.push(`- 该元素文本: "${target.text}"`)
   if (target.sourceFile) {
-    lines.push(`- 源码位置: ${target.sourceFile}${target.sourceLine ? ':' + target.sourceLine : ''}`)
+    const qualifier = target.sourceLocated === false ? '（文本匹配推断，非精确行号）' : ''
+    lines.push(`- 源码位置${qualifier}: ${target.sourceFile}${target.sourceLine ? ':' + target.sourceLine : ''}`)
   }
   if (target.outerHTMLSnippet) lines.push(`- 元素 HTML: ${target.outerHTMLSnippet}`)
+  // 纯 HTML / 无框架栈没有源码位置元数据：显式告诉模型
+  // 位置通道不可用，让它以文本与选择器为主要依据，
+  // 不要凭空猜行号。
+  if (!target.sourceFile && target.locateMode !== 'text') {
+    lines.push('- 源码位置: 不可用（当前预览无框架元数据，请以元素文本与选择器为主要依据）')
+  }
   return lines.join('\n')
 }
 
@@ -1234,6 +1271,8 @@ function toPlainMarkupTarget(markup: MarkupAnnotation) {
           componentName: String(t.componentName ?? ''),
           sourceFile: String(t.sourceFile ?? ''),
           sourceLine: typeof t.sourceLine === 'number' ? t.sourceLine : null,
+          sourceLocated: t.sourceLocated === true,
+          locateMode: ['compiler', 'fiber', 'text', 'none'].includes(t.locateMode) ? t.locateMode : 'none',
           stack: Array.isArray(t.stack) ? t.stack.map((s: unknown) => String(s)) : []
         }
       : undefined
@@ -1300,7 +1339,8 @@ function resetChat() {
   }
 }
 
-// 同步把当前激活的原型代码写入 runtime-host/src/views/prototypes/{id}.vue
+// 同步把当前激活的原型代码写入 runtime-host/src/views/prototypes/active.{vue,tsx,html}
+// （扩展名由当前原型的 techStack 决定，主进程按栈落盘）
 async function syncActivePrototypeToFile() {
   const p = currentPrototype.value
   if (!p) return
@@ -1308,7 +1348,8 @@ async function syncActivePrototypeToFile() {
   if (window.hostApi?.savePrototypeFile) {
     await window.hostApi.savePrototypeFile({
       prototypeId: p.id,
-      code: p.vueCode
+      code: p.vueCode,
+      techStack: p.techStack
     })
   }
 }
@@ -1473,6 +1514,13 @@ async function handleSend() {
   // 只有图片、没有文字时补一句话，否则 prompt 是空串
   if (!instruction && images.length) instruction = '请分析这张图片。'
 
+  // 当前栈写进指令头：模型据此选文件形态（SFC / 函数组件 / HTML 文档），
+  // 首行 // tech-stack: xxx 声明也由它生成，主进程按声明仲裁落盘扩展名。
+  const stackHeader = p.techStack && p.techStack !== 'vue3-element'
+    ? `【当前技术栈】: ${p.techStack}（请保持该栈，首行写 // tech-stack: ${p.techStack} 声明）\n`
+    : ''
+  instruction = stackHeader + instruction
+
   // history 必须在 push **之前**算：push 完再从 chatMessages 里取，
   // 这条消息会同时进 history，而 prototype-agent 又追加一次 prompt —
   // 同一段需求被发两遍给模型。
@@ -1559,8 +1607,28 @@ async function handleSend() {
     })
     // The agent edits through apply_prototype_edit; keep the editor in sync.
     // 顺手落一版历史（applyCodeChange）：一轮 run 可能改好几次，每次一个版本号。
-    const offCode = window.agent.onCodeUpdated((data: { code: string }) => {
+    // techStack 是主进程对生成代码的仲裁结果（首行声明优先、内容特征次之），
+    // 换栈时同步回 store —— 之后的落盘才按新扩展名写。
+    const offCode = window.agent.onCodeUpdated((data: {
+      code: string
+      techStack?: string
+      experimental?: boolean
+      stackChanged?: boolean
+    }) => {
       applyCodeChange(p.id, data.code, summarizeInstruction(instruction), runId)
+      if (data.techStack && data.techStack !== p.techStack) {
+        prototypeStore.updateTechStack(p.id, data.techStack as any)
+      }
+      if (data.stackChanged) {
+        // 栈切换后主进程已整页刷新 BrowserView；这里只补一句提示，
+        // 让用户知道为什么预览闪了一下。实验栈额外说明定位降级。
+        const label = data.techStack === 'react-ts' ? 'React'
+          : data.techStack === 'native-html' ? '原生 HTML'
+          : 'Vue 3'
+        ElMessage.info(
+          `已切换到${label}技术栈（${data.experimental ? '实验栈，圈选定位降级为文本推断' : '源码定位精确'}）`
+        )
+      }
     })
 
     let res: any
@@ -1596,6 +1664,13 @@ async function handleSend() {
     if (res.code && res.code !== p.vueCode) {
       // 只在 onCodeUpdated 那一轮没落上时兜底；内容相同的话主进程会 no-op
       applyCodeChange(p.id, res.code, summarizeInstruction(instruction), runId)
+      // 主进程仲裁出的栈（可能从用户诉求里换了技术栈）同步回 store，
+      // 之后 syncActivePrototypeToFile 才按新扩展名落盘。
+      if (res.techStack && res.techStack !== p.techStack) {
+        prototypeStore.updateTechStack(p.id, res.techStack)
+      }
+    } else if (res.techStack && res.techStack !== p.techStack) {
+      prototypeStore.updateTechStack(p.id, res.techStack)
     }
     await syncActivePrototypeToFile()
 

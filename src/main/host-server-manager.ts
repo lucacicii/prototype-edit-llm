@@ -62,6 +62,10 @@ export class HostServerManager {
   }
 
   private spawnVite(hostDir: string): ChildProcess {
+    // Vite 配置只在启动时读 .prototype-stack —— 两种启动
+    // 路径（dev 的 npx / 打包态的 ELECTRON_RUN_AS_NODE）
+    // 都不需要按栈传参；栈切换靠 BrowserView 整页刷新，
+    // 不重启 dev server（见 agent-bridge 的 applyStack）。
     if (!isPackaged()) {
       // dev：照旧用用户 PATH 里的 npx，跑仓库里的 runtime-host。
       const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx'
@@ -88,7 +92,7 @@ export class HostServerManager {
    * 打包态：把随包的预览宿主铺一份到可写的 userData 下再跑。
    *
    * 不能在 Resources/runtime-host 里就地跑：.app 包内等同只读，而 Vite 要在那儿
-   * 写自己的依赖缓存，我们每改一次原型还要重写 active.vue —— 往包体里写还会
+   * 写自己的依赖缓存，我们每改一次原型还要重写活动原型文件 —— 往包体里写还会
    * 破坏签名。首启复制约 165M（SSD 上一两秒），之后靠版本戳判断是否要重铺：
    * app 一升级就重铺，免得旧的 Vite 配置残留下来。
    *
@@ -112,6 +116,11 @@ export class HostServerManager {
       await fs.rm(target, { recursive: true, force: true })
       await fs.mkdir(dirname(target), { recursive: true })
       await fs.cp(bundled, target, { recursive: true, verbatimSymlinks: true })
+      // 多栈宿主：铺完确保栈标记存在（缺省 vue3-element，
+      // 与存量快照一致）。LLM 运行中换栈时主进程会重写这里。
+      const marker = join(target, '.prototype-stack')
+      const markerCurrent = await fs.readFile(marker, 'utf-8').catch(() => null)
+      if (!markerCurrent) await fs.writeFile(marker, 'vue3-element', 'utf-8')
       await fs.writeFile(stampFile, app.getVersion(), 'utf-8')
       console.log('[preview] 预览宿主就绪')
     } catch (err: any) {

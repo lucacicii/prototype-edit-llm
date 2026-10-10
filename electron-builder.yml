@@ -38,6 +38,12 @@ extraResources:
   - from: build/sidecars/thunder-revision.txt
     to: thunder-revision.txt
   # 预览宿主本体。
+  # 注意：runtime-host 现在是**多栈**宿主 —— LLM 按用户提示词
+  # 自选 Vue 3 / React / 原生 HTML（.prototype-stack 标记驱动），
+  # 所以 react / react-dom / @vitejs/plugin-react 与 Vue 的依赖
+  # 一样必须整树带上（pnpm 软链是相对的，copyDir 重建后自洽）。
+  # 新增的宿主文件（react-host.vue / html-host.vue / src/prototypes/）
+  # 都在 '**/*' 的覆盖范围内，不用单独列。
   - from: runtime-host
     to: runtime-host
     filter:
@@ -56,6 +62,9 @@ extraResources:
     filter:
       - '**/*'
       - '!.vite' # dev 期的依赖预构建缓存，换台机器只会碍事（Vite 会自己重建）
+  # 体积说明：多栈化后 node_modules 约 +5M
+  # （react 372K + react-dom 4.4M + @vitejs/plugin-react 84K
+  # 与各自的传递依赖），相对整包（约 165M 宿主 + asar）可忽略。
 
 mac:
   target:

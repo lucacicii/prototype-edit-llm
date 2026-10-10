@@ -51,15 +51,26 @@ export function providerSecretsPath(): string {
 /**
  * The preview host (a Vite project). Packaged builds read the copy provisioned
  * into the workspace, never the read-only Resources directory: Vite writes its
- * dep cache there and we rewrite `active.vue` on every edit.
+ * dep cache there and we rewrite the active prototype file on every edit.
  */
 export function runtimeHostDir(): string {
   return resolve(workspaceDir(), 'runtime-host')
 }
 
-/** The single prototype file the preview host serves. */
-export function activePrototypeFile(): string {
-  return join(runtimeHostDir(), 'src', 'views', 'prototypes', 'active.vue')
+/** The single prototype file the preview host serves, per tech stack. */
+export function activePrototypeFile(
+  stack: 'vue3-element' | 'react-ts' | 'native-html' = 'vue3-element'
+): string {
+  const ext = stack === 'react-ts' ? 'tsx' : stack === 'native-html' ? 'html' : 'vue'
+  return join(runtimeHostDir(), 'src', 'views', 'prototypes', `active.${ext}`)
+}
+
+/**
+ * runtime-host 的栈标记：Vite 启动时读它决定插件装配，路由读它决定
+ * 加载哪个 active.*。主进程每次仲裁出栈就重写这里。
+ */
+export function prototypeStackMarker(): string {
+  return join(runtimeHostDir(), '.prototype-stack')
 }
 
 /** Where `extraResources` staged the preview host inside the bundle, if it ships one. */

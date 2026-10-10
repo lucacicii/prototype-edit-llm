@@ -2,17 +2,21 @@
  * 原型版本仓：把每次代码改动写成一份纯文件快照，随时可以回滚。
  *
  * 为什么不用 git：这个仓库自己就是 git 仓库，而
- * `runtime-host/src/views/prototypes/active.vue` 是被跟踪且刻意保持不提交的；
+ * runtime-host 里被 LLM 改写的原型文件刻意保持不提交；
  * 把原型快照 commit 进来只会把工具仓库的 history 弄脏。快照落在工作区的
  * `.prototype-history/`（已 gitignore），想用 git 看历史时单独对它 init 即可。
  *
  * 目录形状：
  *   <workspace>/.prototype-history/<原型id>/index.json
- *                                           v1.vue  v2.vue  …
+ *                                           v1.vue  v2.tsx  v3.html  …
+ *
+ * 扩展名跟随原型的技术栈（LLM 自选，主进程仲裁）——历史快照
+ * 不强制统一扩展名，读回时按 meta.file 原样读。旧快照
+ * （只有 .vue）不需要迁移：索引里记的就是带扩展名的文件名。
  *
  * 两条不变量：
  *   1. 编号只增不减，绝不复用 —— 编号来源同时看索引和目录里实际存在的文件，
- *      于是索引丢了也能自愈，且永远不会覆盖已有的 vN.vue。
+ *      于是索引丢了也能自愈，且永远不会覆盖已有的 vN.*。
  *   2. 内容没变就不落盘 —— 渲染层在几个落点都会调 record（HMR/重启后可能重录、
  *      run 结束的 res.code 与 onCodeUpdated 常常内容相同），去重放在这里最可靠。
  */
@@ -151,7 +155,7 @@ export function setupHistoryIpc(options: { workspaceDir: string }): void {
     try {
       const names = await fs.readdir(dir)
       return names
-        .map((n) => /^v(\d+)\.vue$/.exec(n))
+        .map((n) => /^v(\d+)\.(?:vue|tsx|html)$/.exec(n))
         .filter(Boolean)
         .map((m) => Number(m![1]))
         .sort((a, b) => a - b)
@@ -171,6 +175,17 @@ export function setupHistoryIpc(options: { workspaceDir: string }): void {
     return (text || DEFAULT_LABEL[kind]).slice(0, MAX_LABEL)
   }
 
+  /** 由代码内容推版本文件扩展名（与主进程的栈仲裁同口径）。 */
+  function extForCode(code: string): 'vue' | 'tsx' | 'html' {
+    if (/<!DOCTYPE\s+html/i.test(code) && /<html[\s>]/.test(code)) return 'html'
+    if (/(^|\n)\s*<template[\s>]/.test(code) && code.includes('<script')) return 'vue'
+    if (/\bimport\s+React\b|\bexport\s+default\s+function\b|\breturn\s*\(\s*</.test(code)) {
+      return 'tsx'
+    }
+    // 认不出就按 Vue —— 存量快照与默认栈都是它
+    return 'vue'
+  }
+
   /** 写一份版本文件并登记；返回登记后的 meta。 */
   async function writeVersion(
     dir: string,
@@ -183,7 +198,7 @@ export function setupHistoryIpc(options: { workspaceDir: string }): void {
   ): Promise<VersionMeta> {
     await fs.mkdir(dir, { recursive: true })
     const version = nextVersion(await scanVersionFiles(dir), index)
-    const file = `v${version}.vue`
+    const file = `v${version}.${extForCode(code)}`
     await fs.writeFile(path.join(dir, file), code, 'utf-8')
     const meta: VersionMeta = {
       version,
@@ -291,11 +306,16 @@ export function setupHistoryIpc(options: { workspaceDir: string }): void {
         // 文件在、索引里没有（索引丢过）→ 补登记，别让它成为孤儿
         for (const n of onDisk) {
           if (known.has(n)) continue
-          const file = path.join(dir, `v${n}.vue`)
-          const stat = await fs.stat(file).catch(() => null)
+          // 孤儿文件的扩展名按磁盘上的实际文件取（不按内容猜）：
+          // 内容可能跨栈演化过，但这个文件当初就是按它写的。
+          const orphanName = (await fs.readdir(dir)).find(
+            (name) => new RegExp(`^v${n}\\.(?:vue|tsx|html)$`).test(name)
+          )
+          const file = orphanName ?? `v${n}.vue`
+          const stat = await fs.stat(path.join(dir, file)).catch(() => null)
           index.versions.push({
             version: n,
-            file: `v${n}.vue`,
+            file,
             createdAt: stat?.mtimeMs ?? Date.now(),
             label: '（索引缺失）',
             kind: 'auto',

@@ -37,6 +37,10 @@ export interface PointedTarget {
   componentName?: string
   sourceFile?: string
   sourceLine?: number | null
+  /** sourceFile/sourceLine 是否编译期/框架级精确位置（true），还是文本推断（false）。 */
+  sourceLocated?: boolean
+  /** 位置来源通道，见 docs/workstation-definitions.md。 */
+  locateMode?: 'compiler' | 'fiber' | 'text' | 'none'
   /** 该点的元素层叠（由内到外），圈改才有。 */
   stack?: string[]
   /** 圈改时该框的批注文字（用户画框时写的）；圈选时为空。 */
@@ -58,6 +62,11 @@ export interface PrototypeAgentDeps {
    * 顺序。两者都没有时返回空数组。
    */
   getPointedTargets: () => PointedTarget[]
+  /**
+   * 当前原型的栈（仲裁结果）。决定 apply_prototype_edit 的结构校验规则
+   * 与提示词里允许的技术栈说明；缺省 vue3-element。
+   */
+  getTechStack?: () => string
   /** Forward every loop frame to the renderer for live display. */
   onFrame: (frame: RuntimeFrame) => void
   /** How long to let HMR settle before asking the browser for diagnostics. */
@@ -94,7 +103,7 @@ export interface RunOutcome {
 const TOOLS: RuntimeToolSpec[] = [
   {
     name: 'read_prototype',
-    description: '读取当前原型的完整 .vue 源码。修改前必须先读。',
+    description: '读取当前原型的完整源码（扩展名随技术栈：.vue / .tsx / .html）。修改前必须先读。',
     parameters: { type: 'object', properties: {} },
     effect: 'read'
   },
@@ -108,18 +117,21 @@ const TOOLS: RuntimeToolSpec[] = [
     name: 'get_inspect_target',
     description:
       '获取用户在预览页面上指向的元素：圈选时是他点中的那个，圈改（画方框）时是框内认出来的那个' +
-      '（可能一次框了好几处，各带序号与批注）。返回标签名、类名、选择器、所在组件、源码位置、文本与元素层叠。',
+      '（可能一次框了好几处，各带序号与批注）。返回标签名、类名、选择器、所在组件、源码位置、文本与元素层叠。' +
+      '源码位置带 sourceLocated 标记：true 是框架注入的精确行号，false 是文本匹配推断（标注「非精确行号」），行号只作参考。',
     parameters: { type: 'object', properties: {} },
     effect: 'read'
   },
   {
     name: 'apply_prototype_edit',
     description:
-      '用新的完整 .vue 源码替换当前原型。必须传入完整文件内容，组件结构保持完整。',
+      '用新的完整源码替换当前原型。必须传入完整文件内容，组件结构保持完整。' +
+      '文件形态随技术栈：Vue SFC（<template>/<script setup>/<style>）、' +
+      'React 函数组件（export default + JSX）、或原生 HTML 文档。',
     parameters: {
       type: 'object',
       properties: {
-        code: { type: 'string', description: '完整的 .vue 文件内容' }
+        code: { type: 'string', description: '完整的源文件内容' }
       },
       required: ['code']
     },
@@ -131,6 +143,9 @@ export class PrototypeAgent {
   private readonly deps: PrototypeAgentDeps
   private readonly active = new Map<string, { resolve: (o: RunOutcome) => void; reject: (e: Error) => void }>()
   private readonly gateRounds = new Map<string, number>()
+
+  /** 当前栈的本地镜像：deps 只在 run 边界给出，工具执行期读这里。 */
+  private currentStack = 'vue3-element'
 
   constructor(deps: PrototypeAgentDeps) {
     this.deps = deps
@@ -145,6 +160,9 @@ export class PrototypeAgent {
   public async run(request: RunRequest): Promise<RunOutcome> {
     const { client } = this.deps
     if (!client.isRunning) client.start()
+
+    // run 边界刷新栈镜像：工具执行期（可能跨轮次）读 currentStack
+    this.currentStack = this.deps.getTechStack?.() ?? 'vue3-element'
 
     // 图片只挂在本轮新追加的那条 user 消息上：重放的 history 是纯文本，
     // 历史轮次的图片字节早已不在（渲染层没把它们存进 store）。
@@ -263,7 +281,13 @@ export class PrototypeAgent {
           if (target.className) lines.push(`- 类名: ${target.className}`)
           if (target.selector) lines.push(`- 选择器: ${target.selector}`)
           if (target.sourceFile) {
-            lines.push(`- 源码位置: ${target.sourceFile}${target.sourceLine ? ':' + target.sourceLine : ''}`)
+            // 推断位置（文本匹配）要显式告诉模型，别让它当精确行号用
+            const qualifier = target.sourceLocated === false ? '（文本匹配推断，非精确行号）' : ''
+            lines.push(`- 源码位置${qualifier}: ${target.sourceFile}${target.sourceLine ? ':' + target.sourceLine : ''}`)
+          } else {
+            // 纯 HTML / 无框架栈没有源码位置元数据：显式说明，
+            // 模型不要凭空猜行号，以文本与选择器为准。
+            lines.push('- 源码位置: 不可用（当前预览无框架元数据，请以元素文本与选择器为主要依据）')
           }
           if (target.text) lines.push(`- 元素文本: "${target.text}"`)
           if (target.stack && target.stack.length > 1) {
@@ -285,9 +309,8 @@ export class PrototypeAgent {
       }
       case 'apply_prototype_edit': {
         const code = typeof args.code === 'string' ? args.code : ''
-        if (!code.includes('<template')) {
-          throw new Error('apply_prototype_edit 需要完整的 .vue 文件内容（包含 <template>）')
-        }
+        const problem = this.structureCheck(this.currentStack, code)
+        if (problem) throw new Error(`apply_prototype_edit 提交不完整：${problem}`)
         await this.deps.applyEdit(code)
         return '已写入原型文件，Vite 已热更新。'
       }
@@ -300,6 +323,28 @@ export class PrototypeAgent {
    * The completion gate: let the page settle, then ask the browser whether the
    * edit actually held up. A run that left errors in the console is not done.
    */
+  /**
+   * 按栈的「结构完整性」规则表校验 apply_prototype_edit 的提交。
+   * 不再硬编码 `<template>`：那是 Vue SFC 的形状，React/原生 HTML
+   * 的合法文件没有它（见 docs/workstation-definitions.md）。
+   */
+  private structureCheck(stack: string, code: string): string | null {
+    switch (stack) {
+      case 'react-ts':
+        if (!/\bexport\s+default\b/.test(code)) return 'React 文件需要 export default 导出组件'
+        if (!/\breturn\s*\(|\breturn\s*<[A-Za-z]/.test(code)) return 'React 组件需要 return JSX'
+        return null
+      case 'native-html':
+        if (!/<!DOCTYPE\s+html/i.test(code) && !/<html[\s>]/.test(code)) {
+          return '原生 HTML 文件需要 <!DOCTYPE html> 或 <html> 根元素'
+        }
+        return null
+      default: // vue3-element 及存量未标记的代码：保持老规则
+        if (!code.includes('<template')) return 'Vue SFC 需要完整的 <template> 块'
+        return null
+    }
+  }
+
   private async handleGate(runId: string, _finalText: string): Promise<void> {
     const round = (this.gateRounds.get(runId) ?? 0) + 1
     this.gateRounds.set(runId, round)

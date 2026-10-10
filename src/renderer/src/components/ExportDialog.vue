@@ -30,7 +30,8 @@
           placeholder="例如: src/views/prototype/index.vue"
         />
         <div class="form-tip">
-          支持自动创建多级未存在的目录，默认后缀为 <code>.vue</code>
+          支持自动创建多级未存在的目录，默认后缀随当前技术栈
+          （<code>.vue</code> / <code>.tsx</code> / <code>.html</code>）
         </div>
       </el-form-item>
 
@@ -82,6 +83,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 const props = defineProps<{
   visible: boolean
   code: string
+  /** 当前原型的技术栈：决定默认导出后缀与提示文案。 */
+  techStack?: 'vue3-element' | 'react-ts' | 'native-html'
 }>()
 
 const emit = defineEmits<{
@@ -97,10 +100,23 @@ const visible = computed({
 
 const defaultPasswordTemplateDir = '/Users/lucas/wb/refactoring/wb-tools/packages/web-ums-password-template'
 const targetDir = ref(localStorage.getItem('wb_prototype_export_dir') || defaultPasswordTemplateDir)
-const relativeFilePath = ref('src/views/prototype-demo/index.vue')
+// 默认后缀跟栈走：.vue / .tsx / .html（与落盘、版本快照同口径）
+const defaultRelPath = computed(() => {
+  const ext = props.techStack === 'react-ts' ? 'tsx' : props.techStack === 'native-html' ? 'html' : 'vue'
+  return `src/views/prototype-demo/index.${ext}`
+})
+const relativeFilePath = ref(defaultRelPath.value)
 const routerExportMode = ref<'static' | 'none'>('static')
 const fileExists = ref(false)
 const exporting = ref(false)
+
+// 栈切换时同步默认路径（用户已改过路径则不动）
+watch(defaultRelPath, (p) => {
+  const curExt = relativeFilePath.value.split('.').pop()
+  if (['vue', 'tsx', 'html'].includes(curExt ?? '') && p.endsWith(`.${curExt}`) === false) {
+    relativeFilePath.value = p
+  }
+})
 
 const computedFullPath = computed(() => {
   if (!targetDir.value) return ''

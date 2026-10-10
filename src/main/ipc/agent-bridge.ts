@@ -11,10 +11,11 @@ import { BrowserWindow, ipcMain } from 'electron'
 import { promises as fs } from 'fs'
 import * as path from 'path'
 import { BrowserViewManager } from '../browser-view-manager'
-import { activePrototypeFile, providerStorePath } from '../app-paths'
+import { activePrototypeFile, prototypeStackMarker, providerStorePath } from '../app-paths'
 import { agentReadiness } from '../runtime-env'
 import { resolveRuntimeBinary, RuntimeClient } from '../agent/runtime-client'
 import { PointedTarget, PrototypeAgent } from '../agent/prototype-agent'
+import { detectTechStack, stackInfo, TechStack } from '../agent/tech-stack'
 import {
   AgentConfigFile,
   loadLibrary,
@@ -149,8 +150,34 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
 
   // Per-run inputs the tools read. A run is single-flight in this app, so one
   // slot is enough, and it is cleared when the run settles.
+  // activeStack 是当前激活原型的栈（仲裁结果），决定 applyEdit 落盘的
+  // 扩展名与广播给渲染层的栈标记。
   let active: AgentRunParams | null = null
   let activeCode = ''
+  let activeStack: TechStack = 'vue3-element'
+
+  /**
+   * 落栈标记 + 必要时整页刷新预览。
+   *
+   * dev server 不重启、Vite 配置只在启动时读，所以栈切换
+   * （尤其 Vue↔React，插件装配不同）必须让浏览器重新拉模块图 ——
+   * reload 是唯一可靠路径。标记同栈时是幂等写，不触发刷新。
+   *
+   * 注意：标记对 dev server 的 transform 缓存**不生效**（Vite
+   * 的模块图按扩展名缓存，active.vue 与 active.tsx 是两个模块，
+   * 路由在浏览器侧重新求值即可，无需清缓存）。
+   */
+  const applyStack = async (stack: TechStack, forceReload = false) => {
+    const marker = prototypeStackMarker()
+    const current = await fs.readFile(marker, 'utf-8').catch(() => null)
+    if (current !== stack) {
+      await fs.mkdir(path.dirname(marker), { recursive: true })
+      await fs.writeFile(marker, stack, 'utf-8')
+    }
+    if (forceReload || (current !== null && current !== stack)) {
+      BrowserViewManager.getInstance().reload()
+    }
+  }
 
   const agent = new PrototypeAgent({
     client,
@@ -158,15 +185,31 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
     getCode: () => activeCode,
     applyEdit: async (code) => {
       activeCode = code
+      // LLM 首行声明优先、内容特征次之（见 tech-stack.ts）。
+      // 认不出时保持原栈 —— 存量原型多是 Vue，不能因为一次
+      // 仲裁失败就把落盘扩展名换掉。
+      const verdict = detectTechStack(code)
+      const prevStack = activeStack
+      if (verdict.stack) {
+        activeStack = verdict.stack
+      }
+      // 栈换了要同步标记文件并整页刷新（Vite 插件装配只在启动时读）；
+      // applyStack 内部对同栈写入是幂等的，不触发刷新。
+      await applyStack(activeStack)
       if (active) {
         // The preview host serves one active prototype file; switching
         // prototypes overwrites it, so the route stays a single component.
-        const file = activePrototypeFile()
+        const file = activePrototypeFile(activeStack)
         await fs.mkdir(path.dirname(file), { recursive: true })
         await fs.writeFile(file, code, 'utf-8')
       }
       for (const win of BrowserWindow.getAllWindows()) {
-        win.webContents.send('agent:code-updated', { code })
+        win.webContents.send('agent:code-updated', {
+          code,
+          techStack: activeStack,
+          experimental: stackInfo(activeStack).experimental,
+          stackChanged: activeStack !== prevStack
+        })
       }
     },
     getDiagnostics: () => BrowserViewManager.getInstance().getDiagnostics(),
@@ -183,6 +226,7 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
       }
       return list.filter((t) => t.tagName)
     },
+    getTechStack: () => activeStack,
     onFrame: (frame) => {
       for (const win of BrowserWindow.getAllWindows()) {
         win.webContents.send('agent:stream-event', frame)

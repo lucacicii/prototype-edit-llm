@@ -41,6 +41,12 @@ export interface PrototypeItem {
   id: string
   name: string
   description: string
+  /**
+   * 当前原型的技术栈（LLM 首轮生成时按用户提示词自选，
+   * 主进程仲裁后广播回来）。缺省 / 旧快照一律按 vue3-element，
+   * 与存量 .vue 落盘兼容。
+   */
+  techStack?: 'vue3-element' | 'react-ts' | 'native-html'
   vueCode: string
   chatMessages: {
     role: 'user' | 'assistant'
@@ -72,8 +78,10 @@ export interface PrototypeItem {
 
 /**
  * 空白起始页。原型完全按用户提示词生成，这里不预置任何组件库规范。
+ * 种子是 Vue SFC —— 存量快照与历史行为都是它，保持默认栈一致。
  */
-const DEFAULT_SKELETON_CODE = `<template>
+const DEFAULT_SKELETON_CODE = `// tech-stack: vue3-element
+<template>
   <div class="p-6">
     <h1 class="text-base font-medium text-slate-700">空白原型</h1>
     <p class="mt-2 text-sm text-slate-500">
@@ -156,6 +164,7 @@ export const usePrototypeStore = defineStore('prototypes', () => {
       id,
       name,
       description,
+      techStack: 'vue3-element',
       vueCode: DEFAULT_SKELETON_CODE,
       chatMessages: [
         {
@@ -180,6 +189,7 @@ export const usePrototypeStore = defineStore('prototypes', () => {
       id,
       name: `${source.name} (副本)`,
       description: source.description,
+      techStack: source.techStack,
       vueCode: source.vueCode,
       chatMessages: [
         {
@@ -214,6 +224,15 @@ export const usePrototypeStore = defineStore('prototypes', () => {
     }
   }
 
+  /** agent 仲裁出的技术栈变化（LLM 按用户诉求换了栈）时回填。 */
+  function updateTechStack(id: string, techStack: 'vue3-element' | 'react-ts' | 'native-html') {
+    const p = prototypes.value.find((item) => item.id === id)
+    if (p && p.techStack !== techStack) {
+      p.techStack = techStack
+      p.updatedAt = Date.now()
+    }
+  }
+
   return {
     prototypes,
     activeId,
@@ -223,7 +242,8 @@ export const usePrototypeStore = defineStore('prototypes', () => {
     createPrototype,
     clonePrototype,
     deletePrototype,
-    updateCode
+    updateCode,
+    updateTechStack
   }
 })
 

@@ -244,6 +244,11 @@ export const BROWSER_PROBE_SCRIPT = `
     let sourceFile = '';
     let sourceLine = null;
     let propsSnippet = '';
+    // 位置来源通道：compiler=Vue 编译期注入，fiber=React Fiber+sourcemap，
+    // text=无框架元数据时的文本推断，none=连文本都匹配不上。
+    // 任何一条编译期/框架级通道命中即精确，文本兜底一律标 text，
+    // 让消费方（UI 徽标、给模型的指令）能区分精确行号与推断行号。
+    let locateMode = 'none';
 
     // 1. 元素自身的编译期位置。这是最精确的答案：用户指的是**这个标签**，
     //    所以它优先于「往上找到的第一个组件」。
@@ -254,6 +259,7 @@ export const BROWSER_PROBE_SCRIPT = `
     if (ownLocUsable) {
       sourceFile = ownLoc.file;
       if (ownLoc.line != null) sourceLine = ownLoc.line;
+      locateMode = 'compiler';
     }
 
     // 1b. Element Plus 表格的列（表头 / 单元格）。列组件不渲染 DOM，组件链上只有
@@ -264,6 +270,7 @@ export const BROWSER_PROBE_SCRIPT = `
         sourceFile = colLoc.file;
         if (colLoc.line != null) sourceLine = colLoc.line;
         componentName = 'ElTableColumn';
+        locateMode = 'compiler';
       }
     }
 
@@ -328,7 +335,7 @@ export const BROWSER_PROBE_SCRIPT = `
         }
       }
 
-      if (!sourceFile && anyFile) { sourceFile = anyFile; componentName = anyName; }
+      if (!sourceFile && anyFile) { sourceFile = anyFile; componentName = anyName; locateMode = 'compiler'; }
       if (!componentName) componentName = firstName;
     }
 
@@ -365,6 +372,21 @@ export const BROWSER_PROBE_SCRIPT = `
         }
         if (!sourceFile && anyFile) { sourceFile = anyFile; sourceLine = anyLine; componentName = anyName; }
         if (!componentName) componentName = firstName;
+        // Fiber 链拿到位置即 fiber 通道（行号另由 sourcemap 校正）
+        if (sourceFile) locateMode = 'fiber';
+      }
+    }
+
+    // 3b. JSX 宿主元素上的 __source（@vitejs/plugin-react / babel
+    //     automatic 运行时注入：fileName + lineNumber + columnNumber）。
+    //    Fiber 链上没找到用户文件时用它兜底 —— 开发模式下每个
+    //     JSX 元素都带着，比 Fiber _debugSource 更直接。
+    if (!sourceFile && el.__source && el.__source.fileName) {
+      const f = el.__source.fileName;
+      if (isUserFile(f)) {
+        sourceFile = f;
+        sourceLine = el.__source.lineNumber ?? null;
+        locateMode = 'fiber';
       }
     }
 
@@ -386,7 +408,7 @@ export const BROWSER_PROBE_SCRIPT = `
         }
         vueInst = vueInst.$parent;
       }
-      if (!sourceFile && anyFile) { sourceFile = anyFile; componentName = anyName; }
+      if (!sourceFile && anyFile) { sourceFile = anyFile; componentName = anyName; locateMode = 'compiler'; }
       if (!componentName) componentName = firstName;
     }
 
@@ -394,6 +416,7 @@ export const BROWSER_PROBE_SCRIPT = `
     if (!sourceFile && ownLoc) {
       sourceFile = ownLoc.file;
       if (ownLoc.line != null) sourceLine = ownLoc.line;
+      locateMode = 'compiler';
     }
 
     // Fallback: derive component name from tag or classes
@@ -410,12 +433,20 @@ export const BROWSER_PROBE_SCRIPT = `
       }
     }
 
+    // 无框架元数据但有文本的，留给消费方做文本推断：这里只把
+    // 通道标成 text（sourceFile 由调用方按文本匹配填），
+    // 纯 DOM 元素（外部 URL）保持 none。
+    if (!sourceFile) {
+      locateMode = (el.innerText || el.textContent || '').trim() ? 'text' : 'none';
+    }
+
     return {
       framework,
       componentName: componentName || tagName,
       sourceFile,
       sourceLine,
-      propsSnippet
+      propsSnippet,
+      locateMode
     };
   }
 
@@ -493,7 +524,9 @@ export const BROWSER_PROBE_SCRIPT = `
       let badgeHtml = '<span style=\"font-weight:bold;\">&lt;' + (meta.componentName || tag) + '&gt;</span>';
       if (meta.sourceFile) {
         const fileName = meta.sourceFile.split('/').pop();
-        badgeHtml += ' <span style=\"opacity:0.8;font-size:10px;\">(' + fileName + (shownLine ? ':' + shownLine : '') + ')</span>';
+        // 推断来的位置标 ~ 前缀，精确位置才给干净行号
+        const locLabel = meta.locateMode === 'text' ? '~' : '';
+        badgeHtml += ' <span style=\"opacity:0.8;font-size:10px;\">(' + fileName + (shownLine ? ':' + locLabel + shownLine : '') + ')</span>';
       } else if (txt) {
         badgeHtml += ' <span style=\"opacity:0.9;\">\"' + txt + '\"</span>';
       }
@@ -541,6 +574,10 @@ export const BROWSER_PROBE_SCRIPT = `
         componentName: meta.componentName,
         sourceFile: meta.sourceFile,
         sourceLine: meta.sourceLine,
+        // 位置是否可信：compiler/fiber 是框架注入的精确行号；
+        // text 只是按文本推断，消费方（徽标、模型指令）要区别对待
+        sourceLocated: meta.locateMode === 'compiler' || meta.locateMode === 'fiber',
+        locateMode: meta.locateMode,
         outerHTMLSnippet: (el.outerHTML || '').slice(0, 300)
       };
 
@@ -955,6 +992,8 @@ export const BROWSER_PROBE_SCRIPT = `
       componentName: meta.componentName || '',
       sourceFile: meta.sourceFile || '',
       sourceLine: meta.sourceLine,
+      sourceLocated: meta.locateMode === 'compiler' || meta.locateMode === 'fiber',
+      locateMode: meta.locateMode,
       outerHTMLSnippet: (picked.outerHTML || '').slice(0, 300),
       // 由内到外的层叠：用户框的常常是一个"块"，让模型看见它套在谁里面
       stack: stack.slice(0, 6).map(shortElementDesc)

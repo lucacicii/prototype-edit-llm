@@ -16,10 +16,14 @@ const thunderApi = {
 }
 
 const hostApi = {
-  // Runtime Host 交互
+  // Runtime Host 交互。techStack 决定落盘扩展名（.vue/.tsx/.html），
+  // 缺省 vue3-element 与存量快照兼容。
   getHostUrl: () => ipcRenderer.invoke('host:get-url'),
-  savePrototypeFile: (params: { prototypeId: string; code: string }) =>
-    ipcRenderer.invoke('host:save-prototype-file', params)
+  savePrototypeFile: (params: {
+    prototypeId: string
+    code: string
+    techStack?: 'vue3-element' | 'react-ts' | 'native-html'
+  }) => ipcRenderer.invoke('host:save-prototype-file', params)
 }
 
 // 名字带 Api 后缀是必要的：window.history 是 DOM 全局，不能占用那个名字。
@@ -68,8 +72,18 @@ const agentApi = {
     ipcRenderer.on('agent:stream-event', handler)
     return () => ipcRenderer.removeListener('agent:stream-event', handler)
   },
-  onCodeUpdated: (callback: (data: { code: string }) => void) => {
-    const handler = (_: any, data: { code: string }) => callback(data)
+  onCodeUpdated: (callback: (data: {
+    code: string
+    techStack?: string
+    experimental?: boolean
+    stackChanged?: boolean
+  }) => void) => {
+    const handler = (_: any, data: {
+      code: string
+      techStack?: string
+      experimental?: boolean
+      stackChanged?: boolean
+    }) => callback(data)
     ipcRenderer.on('agent:code-updated', handler)
     return () => ipcRenderer.removeListener('agent:code-updated', handler)
   }

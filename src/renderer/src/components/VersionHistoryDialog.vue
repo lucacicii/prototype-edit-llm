@@ -22,6 +22,7 @@
     </div>
     <p class="mt-1.5 text-[11px] text-slate-500">
       模型每次改动都会自动留一版；这里保存的是眼下这一份代码，起个名字方便回头找。
+      版本文件的扩展名跟随生成时的技术栈（列表里每行有标注）。
     </p>
 
     <div v-if="loading" class="py-8 text-center text-xs text-slate-500">读取中…</div>
@@ -59,6 +60,9 @@
           <button class="text-sky-600 hover:underline" @click="toggleView(v.version)">
             {{ openVersion === v.version ? '收起' : '查看' }}
           </button>
+          <!-- 版本文件的扩展名跟随生成时的技术栈，标出来免得
+               用户以为历史全是 .vue -->
+          <span v-if="fileExtOf(v.file)" class="font-mono text-slate-400">.{{ fileExtOf(v.file) }}</span>
           <button class="text-slate-500 hover:underline" @click="handleRename(v)">重命名</button>
           <button
             class="hover:underline"
@@ -105,6 +109,8 @@ interface VersionItem {
   pinned: boolean
   bytes: number
   runId?: string
+  /** 版本文件的文件名（含扩展名，跟随生成时的技术栈）。 */
+  file?: string
 }
 
 const props = defineProps<{
@@ -124,6 +130,13 @@ const visible = computed({
   get: () => props.visible,
   set: (val) => emit('update:visible', val)
 })
+
+/** 版本文件扩展名（vN 之后的 .vue/.tsx/.html）。 */
+function fileExtOf(file?: string): string {
+  if (!file) return ''
+  const m = /\.([a-z]+)$/i.exec(file)
+  return m ? m[1].toLowerCase() : ''
+}
 
 const versions = ref<VersionItem[]>([])
 const currentVersion = ref<number | null>(null)
