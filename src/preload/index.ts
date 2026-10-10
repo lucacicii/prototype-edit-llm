@@ -52,6 +52,7 @@ const agentApi = {
   getConfig: () => ipcRenderer.invoke('agent:get-config'),
   setConfig: (config: any) => ipcRenderer.invoke('agent:set-config', config),
   tools: () => ipcRenderer.invoke('agent:tools'),
+  importThunderHome: () => ipcRenderer.invoke('agent:import-thunder-home'),
   run: (params: any) => ipcRenderer.invoke('agent:run', params),
   cancel: (runId: string) => ipcRenderer.invoke('agent:cancel', runId),
   onStreamEvent: (callback: (frame: any) => void) => {

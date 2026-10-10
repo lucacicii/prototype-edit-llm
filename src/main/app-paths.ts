@@ -49,6 +49,22 @@ export function binDir(): string {
   return join(workspaceDir(), 'bin')
 }
 
+/**
+ * thunder's user data root, handed over as `THUNDER_CONFIG_DIR`.
+ *
+ * thunder normally keeps everything it owns in `~/.thunder` — `models.json`,
+ * `auth.json`, `models_metadata.json`, the pi-ai bridge install, conversations,
+ * scratchpad, plugins. A distributable app must not read or write the end
+ * user's home directory, so in a packaged build the whole root moves under
+ * userData (resolution lives in thunder: `thunder-agent-loop/src/core/paths.rs`).
+ *
+ * Only meaningful when packaged. In dev the variable stays unset and thunder
+ * uses the developer's own `~/.thunder`, which is what they expect.
+ */
+export function thunderDataDir(): string {
+  return join(workspaceDir(), 'thunder')
+}
+
 /** `Resources/` in a packaged build, else null. */
 export function resourcesDir(): string | null {
   const resourcesPath = (process as any).resourcesPath as string | undefined
