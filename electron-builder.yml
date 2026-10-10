@@ -1,13 +1,12 @@
 # 打包版：一个拷到别的 Mac 上双击就能用的 .app / .dmg。
 #
-# 这个应用有三条链子拴在「本机源码 checkout」上，靠下面的 files / extraResources
-# 把它们一起带上（构建前先跑 scripts/prepare-sidecars.mjs 把前两条收拢到
+# 这个应用有两条链子拴在「本机源码 checkout」上，靠下面的 files / extraResources
+# 把它们一起带上（构建前先跑 scripts/prepare-sidecars.mjs 把第一条收拢到
 # build/sidecars/）：
 #   1. thunder-runtime（Rust，agent 内核）      → Resources/bin/
-#   2. pi-ai bridge（Rust 用 Node 起的 bridge.mjs）→ Resources/thunder-bridge/
-#   3. runtime-host（预览用的真 Vite dev server） → Resources/runtime-host/
-# 而 node 本身不用带：Electron 44 自带 Node 24，运行时生成的 node 垫片指向它
-# （见 src/main/runtime-env.ts）。
+#   2. runtime-host（预览用的真 Vite dev server） → Resources/runtime-host/
+# 既不带 node，也不带 pi-ai bridge：模型调用已经回到 thunder 进程内（thunder 的
+# RpiAiClient 直接发 HTTP），那条链上没有任何子进程要起。
 
 appId: com.electron.prototype-editor # 与 src/main/index.ts 的 setAppUserModelId 一致
 productName: Prototype Studio # 决定 .app 名与 userData 目录名
@@ -30,8 +29,6 @@ files:
 extraResources:
   - from: build/sidecars/bin
     to: bin
-  - from: build/sidecars/thunder-bridge
-    to: thunder-bridge
   # 溯源戳：这批侧车来自哪一版 thunder（由 scripts/prepare-sidecars.mjs 生成）。
   # 就绪表里显示它，出问题时才知道内嵌的子包是哪一版。
   - from: build/sidecars/thunder-revision.txt

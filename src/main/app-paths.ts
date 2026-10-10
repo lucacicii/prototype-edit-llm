@@ -44,16 +44,11 @@ export function bundledRuntimeHostDir(): string | null {
   return isPackaged() && resourcesPath ? join(resourcesPath, 'runtime-host') : null
 }
 
-/** Directory for binaries we generate at runtime (currently just the `node` shim). */
-export function binDir(): string {
-  return join(workspaceDir(), 'bin')
-}
-
 /**
  * thunder's user data root, handed over as `THUNDER_CONFIG_DIR`.
  *
  * thunder normally keeps everything it owns in `~/.thunder` — `models.json`,
- * `auth.json`, `models_metadata.json`, the pi-ai bridge install, conversations,
+ * `auth.json`, `models_metadata.json`, conversations,
  * scratchpad, plugins. A distributable app must not read or write the end
  * user's home directory, so in a packaged build the whole root moves under
  * userData (resolution lives in thunder: `thunder-agent-loop/src/core/paths.rs`).

@@ -194,9 +194,9 @@ export function isManualModel(model?: AgentModelConfig): model is RuntimeModel {
 }
 
 /**
- * Turn the stored choice into a pi-bridge model descriptor. References are
- * looked up in the live `~/.thunder` catalog so api/baseUrl/key always match
- * whatever thunder itself would use.
+ * Turn the stored choice into the model descriptor the runtime expects.
+ * References are looked up in the live `~/.thunder` catalog so api/baseUrl/key
+ * always match whatever thunder itself would use.
  */
 export function resolveModel(
   config: AgentConfigFile,
