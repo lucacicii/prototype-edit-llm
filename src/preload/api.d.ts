@@ -159,7 +159,7 @@ export interface IAgentAPI {
     path?: string
     envLocked?: boolean
     runtimePath?: string
-    /** 就绪表：runtime / Node / thunder 数据根 / pi-ai bridge，打包版缺哪环一眼可见。 */
+    /** 就绪表：runtime / thunder 数据根，打包版缺哪环一眼可见。 */
     readiness?: Array<{ label: string; ok: boolean; detail: string }>
     /** Models read from ~/.thunder (no secrets, `hasApiKey` only). */
     models?: Array<{

@@ -90,8 +90,8 @@ app.whenReady().then(async () => {
     optimizer.watchWindowShortcuts(window)
   })
 
-  // 先备好打包运行时（node 垫片 + pi-ai bridge 指向），再起任何子进程：
-  // HostServerManager 与 thunder 都靠 PATH / 环境变量找东西。dev 下是空操作。
+  // 先备好打包运行时（主要是把 thunder 的数据根挪出用户 home），再起任何子进程：
+  // HostServerManager 与 thunder 都靠环境变量找东西。dev 下是空操作。
   await applyPackagedRuntimeEnv()
 
   // 启动 runtime-host 本地纯净 Vite 服务 (方案 C)

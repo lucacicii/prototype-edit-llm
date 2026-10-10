@@ -14,7 +14,7 @@ import * as path from 'path'
 import * as readline from 'readline'
 import { isPackaged } from '../app-paths'
 
-/** pi-ai model descriptor; the runtime forwards it to the pi bridge verbatim. */
+/** pi-ai model descriptor; the runtime converts it into its own streaming model. */
 export interface RuntimeModel {
   provider: string
   id: string

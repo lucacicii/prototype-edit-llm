@@ -14,7 +14,7 @@ import { existsSync, readFileSync } from 'fs'
 import { homedir } from 'os'
 import * as path from 'path'
 
-/** pi `Api` identifier strings (see thunder-pi-bridge's `API_*` constants). */
+/** pi `Api` identifier strings; thunder spells them the same way in `providers::model`. */
 const API_OPENAI_COMPLETIONS = 'openai-completions'
 const API_OPENAI_RESPONSES = 'openai-responses'
 const API_ANTHROPIC_MESSAGES = 'anthropic-messages'

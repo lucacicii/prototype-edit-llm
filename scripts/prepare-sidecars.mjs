@@ -3,10 +3,14 @@
  * 把打包版必须随包的「外部产物」收拢到 build/sidecars/，供 electron-builder
  * 作为 extraResources 发到 Resources/ 下。
  *
- * 三样东西，一行都不在本仓库里构建：
+ * 两样东西，一行都不在本仓库里构建：
  *   thunder-runtime   agent 内核（Rust，stdio NDJSON）      → Resources/bin/
  *   thunder-daemon    自愈链用的 daemon                      → Resources/bin/
- *   pi-ai bridge      Rust 侧用 Node 起的 bridge.mjs         → Resources/thunder-bridge/
+ *
+ * 以前还有第三样：pi-ai bridge 的 bridge.mjs —— Rust 侧用系统装的 Node 起一个
+ * 子进程跑模型调用。thunder 改成进程内直连 HTTP 之后（thunder-agent-providers
+ * 的 RpiAiClient），这个侧车和随之而来的 Node 依赖一起没了：不再需要暂存
+ * bridge.mjs，也不需要在用户机器上找到 node。
  *
  * 查找顺序刻意与运行时一致（$THUNDER_*_BIN → target/release → target/debug），
  * 所以「打包会带上哪个」和「dev 会跑哪个」是同一个答案；打出来的表里也标明
@@ -82,24 +86,6 @@ function stageBinary({ name, envVar, what }) {
   return stage(hit.path, join(sidecarRoot, 'bin', fileName), { executable: true })
 }
 
-function stageBridge() {
-  // runner_source_dir() 只认「目录里有 bridge.mjs」（process.rs:158-174），而
-  // 起 bridge 前 Rust 会把 bridge.mjs + package.json 一起复制到
-  // ~/.thunder/bridge（process.rs:106-138）—— 所以这两份就是全部。
-  const srcDir = join(thunderRepo, 'thunder-pi-bridge', 'runner')
-  const files = ['bridge.mjs', 'package.json']
-  const missing = files.filter((f) => !existsSync(join(srcDir, f)))
-  if (missing.length) {
-    problems.push(
-      `缺 pi-ai bridge 源文件：${missing.join('、')}\n` +
-        `      期望在：${srcDir}\n` +
-        `      补法：cd ${thunderRepo}/thunder-pi-bridge/runner && npm install && npm run build（生成 bridge.mjs）`
-    )
-    return Promise.resolve()
-  }
-  return Promise.all(files.map((f) => stage(join(srcDir, f), join(sidecarRoot, 'thunder-bridge', f))))
-}
-
 /**
  * 记下这些侧车来自哪一版 thunder，随包发到 Resources/thunder-revision.txt。
  *
@@ -155,7 +141,6 @@ async function main() {
   await fsp.rm(sidecarRoot, { recursive: true, force: true })
 
   for (const binary of BINARIES) await stageBinary(binary)
-  await stageBridge()
   await stageRevision()
 
   const hard = problems
