@@ -1,6 +1,8 @@
 import { ipcMain } from 'electron'
 import { ThunderClient } from './thunder-client'
 import { workspaceDir } from '../app-paths'
+import { resolveAgentModel } from '../agent/model-config'
+import { selectionId } from '../agent/provider-store'
 
 export function setupThunderIpc(): ThunderClient {
   // No explicit binaryPath: passing one bypassed ThunderClient.resolveBinaryPath(),
@@ -23,11 +25,26 @@ export function setupThunderIpc(): ThunderClient {
     const sessionId = params.sessionId
     const model = params.model
 
+    // The daemon is handed the model the same way the runtime is: a full
+    // descriptor out of this app's own library. It used to resolve a selection
+    // id against its data root, which only worked because first launch seeded
+    // that root from ~/.thunder — that seeding is gone, so a run that did not
+    // carry a descriptor would have no model at all (the self-heal path).
+    const resolved = await resolveAgentModel(workspaceDir())
+    if (!resolved.model) {
+      return {
+        success: false,
+        error: `尚未配置模型。${resolved.reason ?? ''}`.trim()
+      }
+    }
+
     return client.runTask({
       taskId,
       prompt,
       sessionId,
-      model,
+      // A label, not a lookup key: the descriptor below is what the daemon runs.
+      model: model ?? selectionId(resolved.model),
+      modelDescriptor: resolved.model as unknown as Record<string, any>,
       headless: true,
       onEvent: (agentEvt) => {
         // Stream token or tool events to renderer

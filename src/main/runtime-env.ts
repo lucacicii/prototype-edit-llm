@@ -21,14 +21,13 @@ import { homedir } from 'os'
 import { join } from 'path'
 import { isPackaged, resourcesDir, thunderDataDir } from './app-paths'
 import { resolveRuntimeBinary } from './agent/runtime-client'
+import { describeSidecarSearch } from './agent/thunder-binaries'
 
 export interface RuntimeProvisionReport {
   packaged: boolean
   /** thunder's user data root, handed over as `THUNDER_CONFIG_DIR`, or null in dev. */
   dataRoot: string | null
   dataRootOk: boolean
-  /** Files seeded from the real `~/.thunder` on first run. */
-  seeded: string[]
   /** Non-fatal problems worth surfacing in the model settings dialog. */
   problems: string[]
 }
@@ -37,7 +36,6 @@ let report: RuntimeProvisionReport = {
   packaged: false,
   dataRoot: null,
   dataRootOk: false,
-  seeded: [],
   problems: []
 }
 
@@ -83,10 +81,13 @@ export async function agentReadiness(): Promise<ReadinessItem[]> {
 
   const runtime = resolveRuntimeBinary()
   const revision = readSidecarRevision()
+  const present = existsSync(runtime)
   items.push({
     label: 'thunder-runtime（agent 内核）',
-    ok: existsSync(runtime),
-    detail: runtime + (revision ? ` ｜ 内嵌 thunder ${revision}` : '')
+    ok: present,
+    // 缺失时给出找过的地方：只说「找不到」等于没说。
+    detail: (present ? runtime : describeSidecarSearch('thunder-runtime')) +
+      (revision ? ` ｜ 内嵌 thunder ${revision}` : '')
   })
 
   // thunder 的用户数据根：一旦设了它，thunder 写的一切都落在它下面，而不是
@@ -97,42 +98,11 @@ export async function agentReadiness(): Promise<ReadinessItem[]> {
     // 只有「打包态没建成根」才算失败；dev 不设这个变量是正常状态。
     ok: dataRoot ? report.dataRootOk : true,
     detail: dataRoot
-      ? `${dataRoot}${report.dataRootOk ? '' : '（创建失败）'} ｜ 与 ~/.thunder 隔离` +
-        (report.seeded.length ? ` ｜ 首启预置 ${report.seeded.join('、')}` : '')
+      ? `${dataRoot}${report.dataRootOk ? '' : '（创建失败）'} ｜ 与 ~/.thunder 隔离`
       : `${join(homedir(), '.thunder')} ｜ 未隔离（dev，或未设 THUNDER_CONFIG_DIR）`
   })
 
   return items
-}
-
-/** The thunder files that carry a *choice* (which providers, which keys) rather than state. */
-const SEEDED_THUNDER_FILES = ['models.json', 'auth.json'] as const
-
-/**
- * First-run seed: copy the provider registry and credentials out of the real
- * `~/.thunder`, so a fresh install can call a model without retyping anything.
- *
- * Idempotent — an existing target is never overwritten and the source is only
- * read. Everything else thunder keeps (skills, plugins, memory, mcp.json) is
- * deliberately *not* copied: first launch stays predictable, and the settings
- * dialog's 「从 ~/.thunder 导入」button covers the deliberate case.
- */
-async function seedThunderDataDir(dataRoot: string, problems: string[]): Promise<string[]> {
-  const seeded: string[] = []
-  const sourceRoot = join(homedir(), '.thunder')
-  for (const name of SEEDED_THUNDER_FILES) {
-    const target = join(dataRoot, name)
-    if (existsSync(target)) continue
-    const source = join(sourceRoot, name)
-    if (!existsSync(source)) continue
-    try {
-      await fs.copyFile(source, target)
-      seeded.push(name)
-    } catch (err: any) {
-      problems.push(`无法从 ${source} 预置 ${name}：${err?.message ?? err}`)
-    }
-  }
-  return seeded
 }
 
 /** Nothing to do in dev; a packaged build only needs its data root moved. */
@@ -152,12 +122,10 @@ export async function applyPackagedRuntimeEnv(): Promise<void> {
   // runtime-client passes no env at all, thunder-client copies process.env.
   const dataRoot = thunderDataDir()
   let dataRootOk = false
-  let seeded: string[] = []
   try {
     await fs.mkdir(dataRoot, { recursive: true })
     process.env.THUNDER_CONFIG_DIR = dataRoot
     dataRootOk = true
-    seeded = await seedThunderDataDir(dataRoot, problems)
   } catch (err: any) {
     problems.push(`无法建立 thunder 数据根（${dataRoot}）：${err?.message ?? err}`)
   }
@@ -166,15 +134,11 @@ export async function applyPackagedRuntimeEnv(): Promise<void> {
     packaged: true,
     dataRoot,
     dataRootOk,
-    seeded,
     problems
   }
   if (problems.length) {
     console.warn('[runtime-env] 打包运行时环境不完整：\n  - ' + problems.join('\n  - '))
   } else {
-    console.log(
-      `[runtime-env] thunder 数据根 → ${dataRoot}` +
-        (seeded.length ? `（首启预置 ${seeded.join('、')}）` : '')
-    )
+    console.log(`[runtime-env] thunder 数据根 → ${dataRoot}`)
   }
 }

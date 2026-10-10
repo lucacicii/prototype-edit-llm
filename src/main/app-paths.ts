@@ -19,9 +19,33 @@ export function isPackaged(): boolean {
   return typeof app !== 'undefined' && !!app && app.isPackaged
 }
 
-/** Root of everything writable: `.prototype-agent.json`, `.prototype-history/`, `.thunder/`, `runtime-host/`. */
+/**
+ * Root of everything writable: `.prototype-agent.json`, `.prototype-history/`,
+ * `providers.json`, `provider-secrets.json`, `thunder/`, `runtime-host/`.
+ */
 export function workspaceDir(): string {
   return isPackaged() ? app.getPath('userData') : process.cwd()
+}
+
+/**
+ * The model library: which gateways this app talks to and which models it
+ * knows. No secrets — those live in `providerSecretsPath()`.
+ *
+ * It sits under `workspaceDir()` and not in the workspace of a prototype: a
+ * gateway and its credential are a property of *this install*, not of the
+ * project being edited, so every prototype shares one library.
+ */
+export function providerStorePath(): string {
+  return join(workspaceDir(), 'providers.json')
+}
+
+/**
+ * API keys, sealed with Electron's `safeStorage`. Separate file from the
+ * library so the two have different lifetimes: the library is safe to read,
+ * copy and diff; this one is not, and is written 0600.
+ */
+export function providerSecretsPath(): string {
+  return join(workspaceDir(), 'provider-secrets.json')
 }
 
 /**
@@ -47,14 +71,19 @@ export function bundledRuntimeHostDir(): string | null {
 /**
  * thunder's user data root, handed over as `THUNDER_CONFIG_DIR`.
  *
- * thunder normally keeps everything it owns in `~/.thunder` — `models.json`,
- * `auth.json`, `models_metadata.json`, conversations,
- * scratchpad, plugins. A distributable app must not read or write the end
- * user's home directory, so in a packaged build the whole root moves under
+ * thunder normally keeps everything it owns in `~/.thunder` — conversations,
+ * scratchpad, skills, plugins. A distributable app must not read or write the
+ * end user's home directory, so in a packaged build the whole root moves under
  * userData (resolution lives in thunder: `thunder-agent-loop/src/core/paths.rs`).
  *
+ * Note what is *not* read here any more: `models.json` / `auth.json`. The
+ * provider layer belongs to this app now (see `provider-store.ts`), and the
+ * spawned binaries are handed a fully resolved model descriptor per run, so
+ * thunder never has to look up a model on its own. Nothing is seeded into this
+ * root from the user's `~/.thunder`.
+ *
  * Only meaningful when packaged. In dev the variable stays unset and thunder
- * uses the developer's own `~/.thunder`, which is what they expect.
+ * uses the developer's own `~/.thunder` for the state it still owns.
  */
 export function thunderDataDir(): string {
   return join(workspaceDir(), 'thunder')

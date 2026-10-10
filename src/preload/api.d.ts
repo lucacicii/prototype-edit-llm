@@ -147,8 +147,11 @@ export interface IAgentAPI {
   }>
   getConfig: () => Promise<{
     configured: boolean
+    /** 没有模型时的原因，原样展示给用户。 */
+    problem?: string | null
     config: {
-      model?: Record<string, any>
+      /** 指向本机模型库的引用（provider + id），不含端点与密钥。 */
+      model?: { provider: string; id: string; name?: string }
       systemPrompt?: string
       maxTurns?: number
       temperature?: number
@@ -161,7 +164,7 @@ export interface IAgentAPI {
     runtimePath?: string
     /** 就绪表：runtime / thunder 数据根，打包版缺哪环一眼可见。 */
     readiness?: Array<{ label: string; ok: boolean; detail: string }>
-    /** Models read from ~/.thunder (no secrets, `hasApiKey` only). */
+    /** 本机模型库（无密钥，只有 hasApiKey）。 */
     models?: Array<{
       selectionId: string
       provider: string
@@ -176,26 +179,64 @@ export interface IAgentAPI {
       thinkingLevels: string[]
       defaultThinkingLevel: string
       available: boolean
-      /** 支持的输入模态；含 'image' 才吃图（models.json 的 input）。 */
+      /** 不可用的具体原因；available 为 false 时才有。 */
+      unavailableReason?: string
+      /** 支持的输入模态；含 'image' 才吃图。 */
       input?: string[]
     }>
-    utilityModel?: string
-    modelSources?: string[]
+    /** 模型库文件位置（providers.json）。 */
+    libraryPath?: string
+    keyStore?: { encrypted: boolean }
+    /** 内核真正支持的 api 方言；弹窗的 api 下拉就用它。 */
+    apiOptions?: string[]
+    /** 思考档位的合法取值（弱 → 强）。 */
+    thinkingVocabulary?: string[]
+    /** 新建模型时的默认数值。 */
+    defaults?: { contextWindow: number; maxTokens: number; thinkingLevels: string[] }
+    /** 本次调用从旧的内联配置里迁进模型库的模型。 */
+    migrated?: string[]
     defaultModel?: { provider: string; id: string; name?: string } | null
     modelLabel?: string | null
-    modelOrigin?: 'thunder' | 'inline' | null
+    modelOrigin?: 'library' | 'env' | null
     tools?: Array<{ name: string; description: string; effect: string }>
   }>
   setConfig: (config: any) => Promise<{ ok: boolean; error?: string; path?: string }>
   tools: () => Promise<Array<{ name: string; description: string; effect?: string }>>
-  /** 把真实 `~/.thunder` 的配置拷进隔离根；dev 下（根就是 ~/.thunder）是 no-op。 */
-  importThunderHome: () => Promise<{
+  /**
+   * 新增/更新模型库中的一项。
+   *
+   * `apiKey` 留空 = 保留已存的那把；要清空请显式传 `clearApiKey`。
+   * 对话框从来看不到已存的密钥，所以也不可能把它回传上来。
+   */
+  saveModel: (model: {
+    provider: string
+    id: string
+    name?: string
+    api: string
+    baseUrl: string
+    headers?: Record<string, string>
+    reasoning?: boolean
+    input?: string[]
+    contextWindow?: number
+    maxTokens?: number
+    thinkingLevels?: string[]
+    defaultThinkingLevel?: string
+    thinkingLevelMap?: Record<string, string | null>
+    cost?: Record<string, unknown>
+    promptCache?: Record<string, unknown>
+    apiKey?: string
+    clearApiKey?: boolean
+  }) => Promise<{
     ok: boolean
     error?: string
-    copied?: string[]
-    missing?: string[]
-    root?: string
-    source?: string
+    model?: Record<string, any>
+    keyStore?: { encrypted: boolean }
+  }>
+  deleteModel: (params: { provider: string; id: string }) => Promise<{
+    ok: boolean
+    error?: string
+    /** 删掉的正是当前选中的模型，引用也一并清了。 */
+    clearedSelection?: boolean
   }>
   run: (params: {
     /** 渲染层生成并传入，让「停止」按钮能按 run 取消（main 端不传则自己生成）。 */

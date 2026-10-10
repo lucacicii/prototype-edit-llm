@@ -1,18 +1,18 @@
 /**
- * Model configuration for the prototype agent.
+ * The per-prototype agent config, and the one place a run's model is assembled.
  *
- * The runtime takes the model from the caller, so this app owns the choice. It
- * is read from, in order: `PROTOTYPE_AGENT_MODEL` (an inline JSON object),
- * `.prototype-agent.json` in the workspace, then `~/.prototype-agent.json`.
- * The settings dialog writes the workspace file; no other app's config is
- * consulted.
+ * `.prototype-agent.json` used to carry two different things at once: the agent
+ * tuning (prompt, turns, temperature) and a whole model — and in "manual" mode
+ * that meant an endpoint *and a live API key* sitting in the project
+ * directory. It carries one thing now: the tuning, plus a `{provider, id}`
+ * reference into this app's own model library (`provider-store.ts`). Endpoints
+ * and keys belong to the install, not to the prototype being edited, so they
+ * are not in here at all.
  *
- * The stored model comes in two shapes:
- * - a *reference* (`{provider, id}`) into the thunder catalog in `~/.thunder`,
- *   which is resolved — api, base URL and key included — at run time; and
- * - a *manual* model carrying `api`/`baseUrl`/`apiKey` itself, for gateways
- *   thunder does not know about.
- * References are preferred because they keep secrets out of the workspace.
+ * `resolveAgentModel()` is the single seam every caller goes through —
+ * `agent:get-config` and `agent:run` both need "the effective model, or why
+ * there isn't one", and having them assemble it separately is how the two
+ * answers drift apart.
  */
 
 import { promises as fs, existsSync, readFileSync } from 'fs'
@@ -20,16 +20,30 @@ import { homedir } from 'os'
 import * as path from 'path'
 import { isPackaged } from '../app-paths'
 import { RuntimeModel } from './runtime-client'
-import { findThunderModel, ThunderModelCatalog } from './thunder-models'
+import {
+  availabilityOf,
+  findModel,
+  libraryModelFromLegacy,
+  LibraryModel,
+  loadLibrary,
+  ModelLibrary,
+  removeModel,
+  saveLibrary,
+  selectionId,
+  toRuntimeModel,
+  upsertModel,
+  validateModel
+} from './provider-store'
+import { getApiKey, setApiKey } from './secrets'
 
-/** A pointer into the `~/.thunder` catalog: everything else is looked up. */
+/** A pointer into the model library: everything else is looked up. */
 export interface ModelReference {
   provider: string
   id: string
   name?: string
 }
 
-export type AgentModelConfig = RuntimeModel | ModelReference
+export type AgentModelConfig = ModelReference
 
 export interface AgentConfigFile {
   model?: AgentModelConfig
@@ -40,7 +54,7 @@ export interface AgentConfigFile {
   requestTimeoutMs?: number
 }
 
-/** Which layer the effective model came from. */
+/** Which layer the effective config came from. */
 export type ConfigSource = 'env' | 'workspace' | 'home' | 'none'
 
 export interface LoadedConfig {
@@ -73,43 +87,22 @@ function trimmed(value?: string | null): string | undefined {
 }
 
 /**
- * Drop the blanks a form leaves behind, so a saved model never carries `""`
- * values that would shadow a real default downstream.
+ * Keep only the reference half of a stored model.
+ *
+ * A legacy file may still carry `api` / `baseUrl` / `apiKey` from the old
+ * manual mode. Those are ignored *here* — `adoptLegacyModel()` is what turns
+ * them into a library entry, so the two concerns stay separable and this
+ * function stays pure.
  */
-export function normalizeModel(
-  model?: AgentModelConfig | null
-): AgentModelConfig | undefined {
+export function normalizeModel(model?: AgentModelConfig | null): AgentModelConfig | undefined {
   if (!model) return undefined
-
   const provider = trimmed(model.provider)
   const id = trimmed(model.id)
   if (!provider || !id) return undefined
-
   const reference: ModelReference = { provider, id }
   const name = trimmed(model.name)
   if (name) reference.name = name
-
-  const full = model as RuntimeModel
-  const api = trimmed(full.api)
-  const baseUrl = trimmed(full.baseUrl)
-  // No endpoint of its own: this is a reference into the thunder catalog.
-  if (!api || !baseUrl) return reference
-
-  return {
-    ...reference,
-    name: name ?? id,
-    api,
-    baseUrl: baseUrl.replace(/\/+$/, ''),
-    apiKey: trimmed(full.apiKey),
-    headers: full.headers && Object.keys(full.headers).length ? full.headers : undefined,
-    reasoning: full.reasoning || undefined,
-    input: full.input && full.input.length ? full.input : undefined,
-    contextWindow: full.contextWindow || undefined,
-    maxTokens: full.maxTokens || undefined,
-    thinkingLevelMap: full.thinkingLevelMap,
-    cost: full.cost,
-    promptCache: full.promptCache
-  }
+  return reference
 }
 
 export function normalizeConfig(config?: AgentConfigFile | null): AgentConfigFile {
@@ -151,20 +144,6 @@ export function loadModelConfig(workspaceDir?: string): LoadedConfig {
   const fileConfig = fromWorkspace ?? fromHome ?? {}
   const source: ConfigSource = fromWorkspace ? 'workspace' : fromHome ? 'home' : 'none'
 
-  const fromEnv = trimmed(process.env.PROTOTYPE_AGENT_MODEL)
-  if (fromEnv) {
-    try {
-      const model = JSON.parse(fromEnv) as RuntimeModel
-      return {
-        config: { ...fileConfig, model: normalizeModel(model) ?? fileConfig.model },
-        source: 'env',
-        workspacePath
-      }
-    } catch (err) {
-      console.warn('[agent] PROTOTYPE_AGENT_MODEL is not valid JSON:', err)
-    }
-  }
-
   return { config: fileConfig, source, workspacePath }
 }
 
@@ -181,63 +160,185 @@ export async function saveModelConfig(
   return file
 }
 
-export interface ResolvedModel {
-  model: RuntimeModel
-  /** Where the endpoint details came from. */
-  origin: 'thunder' | 'inline'
-}
+/** Where the effective model came from. */
+export type ModelOrigin = 'library' | 'env'
 
-/** A manual model is usable on its own; a reference needs the catalog. */
-export function isManualModel(model?: AgentModelConfig): model is RuntimeModel {
-  const candidate = model as RuntimeModel | undefined
-  return Boolean(candidate?.provider && candidate?.id && candidate?.api && candidate?.baseUrl)
+export interface ResolvedAgentModel {
+  config: AgentConfigFile
+  source: ConfigSource
+  /** The workspace file the dialog reads and writes. */
+  workspacePath: string
+  library: ModelLibrary
+  /** Absent when nothing is configured or the reference no longer resolves. */
+  model?: RuntimeModel
+  /** Set whenever `model` is present. */
+  origin?: ModelOrigin
+  /** Set when `model` is absent — shown to the user as-is. */
+  reason?: string
+  /** Models adopted out of a legacy inline config on this call. */
+  migrated?: string[]
 }
 
 /**
- * Turn the stored choice into the model descriptor the runtime expects.
- * References are looked up in the live `~/.thunder` catalog so api/baseUrl/key
- * always match whatever thunder itself would use.
+ * The API key for a provider: this install's stored key, else
+ * `PROTOTYPE_AGENT_API_KEY`.
+ *
+ * The env fallback is a convenience for scripted and CI runs, deliberately not
+ * a resolution *chain*: there is no per-provider env table, no `auth.json`, no
+ * `$VAR` expansion inside config values. Those were thunder's rules, and the
+ * mirror of them is what this refactor deleted.
  */
-export function resolveModel(
-  config: AgentConfigFile,
-  catalog?: ThunderModelCatalog
-): ResolvedModel | undefined {
-  const model = config.model
-  if (!model) return undefined
+function apiKeyFor(provider: string): string | undefined {
+  return getApiKey(provider) ?? trimmed(process.env.PROTOTYPE_AGENT_API_KEY)
+}
 
-  if (isManualModel(model)) {
-    // Normalize so a hand-edited file gets the same tidying as a saved one.
-    const normalized = normalizeModel(model)
-    return normalized && isManualModel(normalized)
-      ? { model: normalized, origin: 'inline' }
-      : undefined
+/**
+ * One-time adoption of a legacy inline model.
+ *
+ * Older builds wrote the whole model into `.prototype-agent.json`, key
+ * included. Rather than fail those files (or leave a key sitting in a project
+ * directory), move the endpoint into the library, the key into the encrypted
+ * store, and leave a reference behind. Runs once: afterwards the file has no
+ * inline fields to find.
+ */
+async function adoptLegacyModel(
+  workspaceDir: string,
+  raw: unknown
+): Promise<string | undefined> {
+  const legacy = libraryModelFromLegacy(raw)
+  if (!legacy) return undefined
+
+  let library = loadLibrary()
+  const existing = findModel(library, legacy.provider, legacy.id)
+  if (!existing) {
+    const validated = validateModel(legacy, library)
+    if (!validated.ok || !validated.model) {
+      // A conflicting provider id means we cannot represent this endpoint.
+      // Leave the file alone and say so — silently dropping a credential would
+      // be worse than an unsatisfied reference the user can see.
+      console.warn(`[agent] 未迁移旧的内联模型：${validated.error}`)
+      return undefined
+    }
+    library = upsertModel(library, validated.model)
+    await saveLibrary(library)
   }
 
-  const entry = catalog ? findThunderModel(catalog, model.provider, model.id) : undefined
-  if (!entry) return undefined
+  const legacyKey = trimmed((raw as { apiKey?: string })?.apiKey)
+  if (legacyKey && !getApiKey(legacy.provider)) await setApiKey(legacy.provider, legacyKey)
 
-  return {
-    origin: 'thunder',
-    model: {
-      provider: entry.provider,
-      id: entry.id,
-      name: entry.name,
-      api: entry.api,
-      baseUrl: entry.baseUrl,
-      apiKey: entry.apiKey,
-      headers: entry.headers,
-      reasoning: entry.reasoning || undefined,
-      input: entry.input,
-      contextWindow: entry.contextWindow,
-      maxTokens: entry.maxTokens,
-      thinkingLevelMap: entry.thinkingLevelMap,
-      cost: entry.cost,
-      promptCache: entry.promptCache
+  await saveModelConfig(workspaceDir, {
+    ...loadModelConfig(workspaceDir).config,
+    model: { provider: legacy.provider, id: legacy.id, name: legacy.name }
+  })
+  return selectionId(legacy)
+}
+
+/**
+ * The model this app will send, or the reason it cannot.
+ *
+ * `PROTOTYPE_AGENT_MODEL` (a full descriptor, as JSON) still wins outright:
+ * it is how a scripted or test run pins a model without touching any file.
+ */
+export async function resolveAgentModel(workspaceDir: string): Promise<ResolvedAgentModel> {
+  const loaded = loadModelConfig(workspaceDir)
+  const migrated: string[] = []
+
+  // Adopt any legacy inline model first, so a file written by an older build
+  // resolves instead of reporting "no model configured".
+  const rawModel = loaded.config.model as unknown
+  let config = loaded.config
+  if (rawModel && typeof rawModel === 'object') {
+    const adopted = await adoptLegacyModel(workspaceDir, rawModel)
+    if (adopted) {
+      migrated.push(adopted)
+      config = loadModelConfig(workspaceDir).config
     }
   }
+
+  const library = loadLibrary()
+
+  const fromEnv = trimmed(process.env.PROTOTYPE_AGENT_MODEL)
+  if (fromEnv) {
+    try {
+      const model = JSON.parse(fromEnv) as RuntimeModel
+      if (model?.provider && model?.id && model?.api && model?.baseUrl) {
+        return {
+          config,
+          source: loaded.source,
+          workspacePath: loaded.workspacePath,
+          library,
+          model,
+          origin: 'env',
+          migrated: migrated.length ? migrated : undefined
+        }
+      }
+    } catch (err) {
+      console.warn('[agent] PROTOTYPE_AGENT_MODEL is not valid JSON:', err)
+    }
+  }
+
+  const reference = normalizeModel(config.model)
+  if (!reference) {
+    return {
+      config,
+      source: loaded.source,
+      workspacePath: loaded.workspacePath,
+      library,
+      reason: library.models.length
+        ? '尚未选择模型。请在「⚙️ 模型设置」里从模型库中挑一个。'
+        : '模型库是空的。请在「⚙️ 模型设置」里添加一个模型（provider / id / api / baseUrl / 密钥）。',
+      migrated: migrated.length ? migrated : undefined
+    }
+  }
+
+  const entry = findModel(library, reference.provider, reference.id)
+  if (!entry) {
+    // Two very different histories land here: the model was deleted, or this
+    // file was written when the catalog lived in ~/.thunder and the app has not
+    // been told about it since. Say both, because the fix is the same and the
+    // second case is what every existing install sees on first launch.
+    return {
+      config,
+      source: loaded.source,
+      workspacePath: loaded.workspacePath,
+      library,
+      reason:
+        `模型库中没有 ${selectionId(reference)}。它可能已被删除，` +
+        `也可能来自旧版配置（那时模型清单在 ~/.thunder，本版已不再读取）。` +
+        `请在「⚙️ 模型设置」里用「新建模型」把它的 provider / id / api / baseUrl / 密钥填一遍。`,
+      migrated: migrated.length ? migrated : undefined
+    }
+  }
+
+  const apiKey = apiKeyFor(entry.provider)
+  const availability = availabilityOf(entry, Boolean(apiKey))
+  if (!availability.available) {
+    return {
+      config,
+      source: loaded.source,
+      workspacePath: loaded.workspacePath,
+      library,
+      reason: `模型 ${selectionId(entry)} 不可用：${availability.reason}`,
+      migrated: migrated.length ? migrated : undefined
+    }
+  }
+
+  return {
+    config,
+    source: loaded.source,
+    workspacePath: loaded.workspacePath,
+    library,
+    model: toRuntimeModel(entry, apiKey),
+    origin: 'library',
+    migrated: migrated.length ? migrated : undefined
+  }
 }
 
-/** Whether the app has enough to start a run. */
-export function isConfigured(config: AgentConfigFile, catalog?: ThunderModelCatalog): boolean {
-  return Boolean(resolveModel(config, catalog))
+/** Whether the app has enough to start a run (used by the ping/status path). */
+export async function isConfigured(workspaceDir: string): Promise<boolean> {
+  return Boolean((await resolveAgentModel(workspaceDir)).model)
 }
+
+/** Re-exported so the IPC layer has one import for library mutations. */
+export { loadLibrary, removeModel, saveLibrary, upsertModel, validateModel }
+export type { LibraryModel, ModelLibrary }

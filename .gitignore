@@ -2,6 +2,14 @@ node_modules
 out
 dist
 build/sidecars
+# 预编译的 thunder 侧车缓存（scripts/fetch-thunder-binaries.mjs 下载，按 sha256 校验）
+build/thunder-bin
+
+# 本机模型库。dev 下 app-paths.workspaceDir() 就是仓库根，所以这两份会落在
+# 这里：providers.json 是端点清单，provider-secrets.json 是**密钥**（safeStorage
+# 加密，但仍然是密钥）。两个都不能进版本库。
+providers.json
+provider-secrets.json
 *.local
 .prototype-agent.json
 .prototype-history
