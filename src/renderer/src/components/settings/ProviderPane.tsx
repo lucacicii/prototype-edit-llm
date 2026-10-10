@@ -16,20 +16,10 @@ import {
   draftFrom,
   type ModelDraft
 } from '../../stores/useModelLibraryStore'
+import { fetchRemoteModelsHelper, type RemoteModelItem } from '../../utils/fetchModels'
 
 interface ProviderPaneProps {
   onOpenAddProvider: () => void
-}
-
-interface RemoteModelItem {
-  id: string
-  name?: string
-  contextWindow?: number
-  maxTokens?: number
-  reasoning?: boolean
-  supportsImages?: boolean
-  thinkingLevels?: string[]
-  defaultThinkingLevel?: string
 }
 
 export const ProviderPane: React.FC<ProviderPaneProps> = ({ onOpenAddProvider }) => {
@@ -118,7 +108,7 @@ export const ProviderPane: React.FC<ProviderPaneProps> = ({ onOpenAddProvider })
     if (!activeGroup) return
     setFetchingRemoteModels(true)
     try {
-      const res = await window.agent?.fetchRemoteModels({
+      const res = await fetchRemoteModelsHelper({
         provider: activeGroup.provider,
         api: providerApi || activeGroup.api,
         baseUrl: providerBaseUrl || activeGroup.baseUrl,
@@ -354,16 +344,15 @@ export const ProviderPane: React.FC<ProviderPaneProps> = ({ onOpenAddProvider })
                     <span>挂载模型列表 ({activeGroup.models.length})</span>
                   </span>
                   <div className="flex items-center gap-2">
-                    <Button
-                      size="small"
-                      ghost
-                      type="primary"
-                      loading={fetchingRemoteModels}
-                      icon={<CloudDownload size={12} />}
+                    <button
+                      type="button"
+                      disabled={fetchingRemoteModels}
                       onClick={fetchModelsFromProvider}
+                      className="h-7 px-2.5 rounded bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 border border-sky-500/30 text-xs font-medium flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50"
                     >
-                      拉取远端模型列表
-                    </Button>
+                      <CloudDownload size={13} className={fetchingRemoteModels ? 'animate-bounce' : ''} />
+                      <span>{fetchingRemoteModels ? '拉取中...' : '拉取远端模型列表'}</span>
+                    </button>
                     <Button size="small" icon={<Plus size={12} />} onClick={handleOpenAddModel}>
                       添加模型
                     </Button>
@@ -437,16 +426,15 @@ export const ProviderPane: React.FC<ProviderPaneProps> = ({ onOpenAddProvider })
                   <Sparkles size={13} className="text-amber-400" />
                   <span>自动获取模型列表与配置</span>
                 </span>
-                <Button
-                  size="small"
-                  type="primary"
-                  ghost
-                  loading={fetchingRemoteModels}
-                  icon={<CloudDownload size={12} />}
+                <button
+                  type="button"
+                  disabled={fetchingRemoteModels}
                   onClick={fetchModelsFromProvider}
+                  className="h-6 px-2 rounded bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 border border-sky-500/30 text-[11px] font-medium flex items-center gap-1 transition cursor-pointer disabled:opacity-50"
                 >
-                  拉取模型
-                </Button>
+                  <CloudDownload size={12} className={fetchingRemoteModels ? 'animate-bounce' : ''} />
+                  <span>{fetchingRemoteModels ? '拉取中...' : '拉取模型'}</span>
+                </button>
               </div>
 
               {remoteModels.length > 0 && !modelDraft.source && (

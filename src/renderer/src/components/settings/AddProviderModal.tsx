@@ -1,25 +1,15 @@
 import React, { useState } from 'react'
-import { Modal, Input, Select, Checkbox, Button, message } from 'antd'
+import { Modal, Input, Select, Checkbox, message } from 'antd'
 import { CloudDownload, Sparkles } from 'lucide-react'
 import {
   useAgentModelConfigStore
 } from '../../stores/useAgentModelConfigStore'
 import { presetsFor, type ProviderPreset } from './provider-presets'
+import { fetchRemoteModelsHelper, type RemoteModelItem } from '../../utils/fetchModels'
 
 interface AddProviderModalProps {
   open: boolean
   onClose: () => void
-}
-
-interface RemoteModelItem {
-  id: string
-  name?: string
-  contextWindow?: number
-  maxTokens?: number
-  reasoning?: boolean
-  supportsImages?: boolean
-  thinkingLevels?: string[]
-  defaultThinkingLevel?: string
 }
 
 export const AddProviderModal: React.FC<AddProviderModalProps> = ({ open, onClose }) => {
@@ -61,7 +51,7 @@ export const AddProviderModal: React.FC<AddProviderModalProps> = ({ open, onClos
 
     setFetchingModels(true)
     try {
-      const res = await window.agent?.fetchRemoteModels({
+      const res = await fetchRemoteModelsHelper({
         provider: provider.trim(),
         api,
         baseUrl: baseUrl.trim(),
@@ -227,16 +217,15 @@ export const AddProviderModal: React.FC<AddProviderModalProps> = ({ open, onClos
               <Sparkles size={13} className="text-amber-400" />
               <span>智能获取模型列表</span>
             </span>
-            <Button
-              size="small"
-              type="primary"
-              ghost
-              loading={fetchingModels}
-              icon={<CloudDownload size={13} />}
+            <button
+              type="button"
+              disabled={fetchingModels}
               onClick={handleFetchModels}
+              className="h-7 px-2.5 rounded bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 border border-sky-500/30 text-xs font-medium flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50"
             >
-              拉取模型列表
-            </Button>
+              <CloudDownload size={13} className={fetchingModels ? 'animate-bounce' : ''} />
+              <span>{fetchingModels ? '拉取中...' : '拉取模型列表'}</span>
+            </button>
           </div>
 
           {remoteModels.length > 0 && (

@@ -21,7 +21,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
         onCancel={onClose}
         footer={null}
         width={900}
-        destroyOnClose
+        destroyOnHidden
         centered
         className="settings-modal"
         closeIcon={<X size={16} />}
