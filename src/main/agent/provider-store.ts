@@ -258,6 +258,38 @@ export function validateModel(input: unknown, library: ModelLibrary): Validation
   return { ok: true, model: entry }
 }
 
+/**
+ * Point every model of a provider at a different endpoint, in one write.
+ *
+ * Deliberately not expressible as N × (`validateModel` + `upsertModel`), which is
+ * the obvious way to write it and is wrong: that rule compares a candidate
+ * against the models *still on disk*, so the first write of an endpoint change
+ * always collides with the siblings that have not been updated yet — with its own
+ * group. The endpoint is a property of the provider, so the update is too: one
+ * validation, one write, no half-applied group.
+ *
+ * Returns undefined when the provider owns no models (it does not exist).
+ */
+export function updateProviderEndpoint(
+  library: ModelLibrary,
+  provider: string,
+  patch: { api: string; baseUrl: string }
+): { library: ModelLibrary; updated: LibraryModel[] } | undefined {
+  const owned = library.models.filter((m) => m.provider === provider)
+  if (!owned.length) return undefined
+
+  const updated: LibraryModel[] = []
+  const models = library.models.map((m) => {
+    if (m.provider !== provider) return m
+    // 过一遍 normalizeEntry：baseUrl 去尾斜杠等归一化只写了一遍，别在这儿漏掉。
+    const next = normalizeEntry({ ...m, api: patch.api, baseUrl: patch.baseUrl })
+    if (!next) return m
+    updated.push(next)
+    return next
+  })
+  return { library: { version: library.version, models }, updated }
+}
+
 export function findModel(
   library: ModelLibrary,
   provider: string,
@@ -284,6 +316,18 @@ export function removeModel(
   return {
     version: FILE_VERSION,
     models: library.models.filter((m) => !(m.provider === provider && m.id === id))
+  }
+}
+
+/**
+ * Drop every model of a provider — which is what deleting "a provider" means
+ * here, since a provider is nothing but the models that share its id. The
+ * credential is not touched: it lives in `secrets.ts`, keyed by the same id.
+ */
+export function removeProvider(library: ModelLibrary, provider: string): ModelLibrary {
+  return {
+    version: FILE_VERSION,
+    models: library.models.filter((m) => m.provider !== provider)
   }
 }
 

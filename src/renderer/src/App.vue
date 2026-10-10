@@ -499,12 +499,12 @@
     </main>
 
     <!-- 导出弹窗 -->
-    <!-- 这两个弹窗声明的是 visible prop（与 VersionHistoryDialog 同款），
+    <!-- 弹窗声明的是 visible prop（与 VersionHistoryDialog 同款），
          所以父组件必须用 :visible + @update:visible。写成 v-model 的话传下去的是
          modelValue，props.visible 恒为 undefined：弹窗只因为未声明的 attr 落到了
          根元素 el-dialog 上才显示得出来，而 setter emit 的 update:visible 没人听 ——
-         症状就是「关不掉，并且打开时不加载」（ModelSettingsDialog 的 readiness /
-         runtimePath 都靠 watch(visible) 触发 load()）。 -->
+         症状就是「关不掉，并且打开时不加载」（ExportDialog 的加载靠 watch(visible)）。
+         设置页已经不是弹窗了，但同样声明 visible prop，理由不变。 -->
     <ExportDialog
       :visible="isExportDialogOpen"
       @update:visible="isExportDialogOpen = $event"
@@ -524,8 +524,8 @@
       @closed="handleDialogClosed"
     />
 
-    <!-- 模型 / Agent 设置弹窗 -->
-    <ModelSettingsDialog
+    <!-- 设置页（整窗覆盖：左菜单 + 右内容） -->
+    <SettingsPage
       :visible="isSettingsOpen"
       @update:visible="isSettingsOpen = $event"
       @saved="handleSettingsSaved"
@@ -553,7 +553,7 @@ import EmbeddedBrowserViewer from './components/EmbeddedBrowserViewer.vue'
 import MonacoEditor from './components/MonacoEditor.vue'
 import ExportDialog from './components/ExportDialog.vue'
 import VersionHistoryDialog from './components/VersionHistoryDialog.vue'
-import ModelSettingsDialog from './components/ModelSettingsDialog.vue'
+import SettingsPage from './components/settings/SettingsPage.vue'
 import { usePrototypeStore, PrototypeItem, RunStats } from './stores/prototypeStore'
 import { locateCodeSnippet } from './utils/inspector'
 import { useAgentModelConfig } from './composables/useAgentModelConfig'
