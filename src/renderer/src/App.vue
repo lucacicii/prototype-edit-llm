@@ -349,7 +349,7 @@
                 class="max-w-[152px] rounded border border-slate-700 bg-slate-900 px-1 py-0.5 text-[11px] text-slate-200 disabled:opacity-50"
                 :value="modelConfig.selectionId.value"
                 :disabled="isGenerating || modelConfig.envLocked.value"
-                :title="modelConfig.envLocked.value ? 'PROTOTYPE_AGENT_MODEL 环境变量正在覆盖模型，改动不会生效' : '全局模型（写入 .prototype-agent.json）'"
+                :title="modelConfig.envLocked.value ? 'PROTOTYPE_AGENT_MODEL 环境变量正在覆盖模型，改动不会生效' : '模型（来自本机模型库；选择写入 .prototype-agent.json）'"
                 @change="handleComposerModelChange(($event.target as HTMLSelectElement).value)"
               >
                 <option value="" disabled>选择模型</option>
@@ -978,8 +978,10 @@ onMounted(async () => {
   await refreshAgentStatus()
   if (agentConfigured.value) return
 
-  // Nothing picked yet: adopt whatever thunder's ~/.thunder config already
-  // uses, so the agent works out of the box.
+  // Nothing picked yet: pick the first usable model out of this app's own
+  // library, so a machine that already has one configured works out of the
+  // box. The library is empty until the user adds a model — there is nothing
+  // to import from ~/.thunder any more.
   const cfg = await window.agent?.getConfig?.()
   if (cfg?.defaultModel) {
     const saved = await window.agent.setConfig({ ...(cfg.config ?? {}), model: cfg.defaultModel })

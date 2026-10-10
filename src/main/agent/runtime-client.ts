@@ -9,10 +9,9 @@
 
 import { ChildProcess, spawn } from 'child_process'
 import { EventEmitter } from 'events'
-import * as fs from 'fs'
 import * as path from 'path'
 import * as readline from 'readline'
-import { isPackaged } from '../app-paths'
+import { resolveThunderBinary, sidecarCacheDir } from './thunder-binaries'
 
 /** pi-ai model descriptor; the runtime converts it into its own streaming model. */
 export interface RuntimeModel {
@@ -289,32 +288,17 @@ export class RuntimeClient extends EventEmitter {
 
 /**
  * Where the runtime binary lives. Release builds ship it beside the app's other
- * sidecars; a dev checkout builds it in the thunder workspace.
+ * sidecars; a dev run takes it from the env var or the pinned artefact cache.
+ *
+ * The path is always a *string* — `RuntimeClient.start()` spawns it and
+ * surfaces a missing binary through the child's `error` event, which is what
+ * the readiness table reports. So when nothing resolves we hand back the cache
+ * path we would have used; `agentReadiness()` checks existence and shows the
+ * `describeSidecarSearch()` list alongside it.
  */
 export function resolveRuntimeBinary(): string {
-  const name = process.platform === 'win32' ? 'thunder-runtime.exe' : 'thunder-runtime'
-  if (process.env.THUNDER_RUNTIME_BIN && fs.existsSync(process.env.THUNDER_RUNTIME_BIN)) {
-    return process.env.THUNDER_RUNTIME_BIN
-  }
-
-  const resourcesPath = (process as any).resourcesPath as string | undefined
-  if (isPackaged() && resourcesPath) {
-    const packagedPath = path.join(resourcesPath, 'bin', name)
-    if (fs.existsSync(packagedPath)) {
-      return packagedPath
-    }
-  }
-
-  const thunderRepo = process.env.THUNDER_REPO || '/Users/lucas/wz/GitHub/thunder'
-  const candidates = [
-    path.join(thunderRepo, 'target', 'debug', name),
-    path.join(thunderRepo, 'target', 'release', name),
-    path.resolve(process.cwd(), '../thunder/target/debug', name),
-    path.resolve(process.cwd(), '../thunder/target/release', name),
-    ...(resourcesPath ? [path.join(resourcesPath, 'bin', name)] : [])
-  ]
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) return candidate
-  }
-  return path.join(thunderRepo, 'target', 'debug', name)
+  return (
+    resolveThunderBinary('thunder-runtime') ??
+    path.join(sidecarCacheDir(), process.platform === 'win32' ? 'thunder-runtime.exe' : 'thunder-runtime')
+  )
 }

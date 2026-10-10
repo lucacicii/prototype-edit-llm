@@ -16,7 +16,7 @@
         检测运行时
       </el-button>
     </div>
-    <!-- 三项就绪表：内核 / Node / bridge。打包版出问题时就靠它一眼看出缺哪一环，
+    <!-- 两项就绪表：内核 / 数据根。打包版出问题时就靠它一眼看出缺哪一环，
          而不是又变成「模型调用莫名失败」。 -->
     <div class="readiness" v-if="readiness.length">
       <div v-for="item in readiness" :key="item.label" class="readiness-row">
@@ -38,173 +38,164 @@
       style="margin-bottom: 12px;"
     />
 
-    <!-- 模型来源切换 -->
-    <div class="source-head">
-      <el-radio-group v-model="mode" size="small">
-        <el-radio-button label="thunder">
-          从 .thunder 选择（{{ models.length }}）
-        </el-radio-button>
-        <el-radio-button label="manual">手动填写</el-radio-button>
-      </el-radio-group>
-      <el-button
-        v-if="mode === 'thunder'"
-        size="small"
-        text
-        type="primary"
-        :loading="loading"
-        @click="load"
-      >
-        刷新列表
-      </el-button>
-      <el-button
-        v-if="mode === 'thunder'"
-        size="small"
-        text
-        type="primary"
-        :loading="importing"
-        @click="handleImport"
-      >
-        从 ~/.thunder 导入
-      </el-button>
-    </div>
-    <div class="status-path" v-if="mode === 'thunder'">
-      {{ models.length ? `读取自 ${modelSources.join(' , ')}` : '未在 .thunder 中找到任何模型配置' }}
-    </div>
+    <!-- 没有 keyring 的平台：密钥只能明文落盘，这是降级，要说出来 -->
+    <el-alert
+      v-if="!keyStoreEncrypted"
+      type="warning"
+      :closable="false"
+      show-icon
+      title="本机没有可用的系统钥匙串，API Key 将以明文存放在 0600 权限的文件里。"
+      style="margin-bottom: 12px;"
+    />
 
-    <!-- 模式一：从 .thunder 目录选择 -->
-    <template v-if="mode === 'thunder'">
+    <!-- 模型库：本机自己的 provider/模型清单，与 ~/.thunder 无关 -->
+    <div class="source-head">
+      <span class="source-title">模型库（{{ models.length }}）</span>
+      <span>
+        <el-button size="small" text type="primary" :loading="loading" @click="load">
+          刷新
+        </el-button>
+        <el-button size="small" text type="primary" @click="startNew">
+          新建模型
+        </el-button>
+      </span>
+    </div>
+    <div class="status-path" v-if="libraryPath">模型库保存在 {{ libraryPath }}</div>
+
+    <el-alert
+      v-if="problem"
+      type="info"
+      :closable="false"
+      show-icon
+      :title="problem"
+      style="margin-bottom: 12px;"
+    />
+
+    <el-form label-position="top" :model="form" class="settings-form">
+      <el-form-item v-if="models.length" label="选择已有模型（或直接新建一个）">
+        <el-select
+          v-model="selectionId"
+          filterable
+          clearable
+          placeholder="搜索并选择模型"
+          style="width: 100%"
+          @change="handleSelectModel"
+        >
+          <el-option-group v-for="group in groupedModels" :key="group.provider" :label="group.provider">
+            <el-option
+              v-for="item in group.items"
+              :key="item.selectionId"
+              :value="item.selectionId"
+              :label="item.label"
+            />
+          </el-option-group>
+        </el-select>
+      </el-form-item>
+
+      <!-- 选中项不可用（缺密钥 / 方言不支持）时把原因摆在表单上方，
+           而不是让用户按了发送才发现 -->
       <el-alert
-        v-if="!models.length"
-        type="info"
+        v-if="selectedEntry && !selectedEntry.available"
+        type="warning"
         :closable="false"
         show-icon
-        title="没有读到模型。可点上方「从 ~/.thunder 导入」把本机配置拷进来，或切到「手动填写」。"
+        :title="`当前选中项不可用：${selectedEntry.unavailableReason ?? '原因未知'}`"
         style="margin-bottom: 12px;"
       />
 
-      <el-form label-position="top" class="settings-form">
-        <el-form-item label="模型（来自 ~/.thunder）" required>
+      <div class="grid-2">
+        <el-form-item label="服务商标识 provider" required>
+          <el-input v-model="form.provider" placeholder="例如 openai / anthropic / deepseek" />
+        </el-form-item>
+        <el-form-item label="模型 ID id" required>
+          <el-input v-model="form.id" placeholder="例如 gpt-4o / claude-sonnet-4" />
+        </el-form-item>
+      </div>
+
+      <div class="grid-2">
+        <el-form-item label="API 协议 api" required>
+          <el-select v-model="form.api" style="width: 100%">
+            <el-option v-for="api in apiOptions" :key="api" :label="api" :value="api" />
+          </el-select>
+          <div class="hint">只列出本机内核实现的方言；其余会以明确报错拒绝。</div>
+        </el-form-item>
+        <el-form-item label="显示名称 name">
+          <el-input v-model="form.name" placeholder="留空则使用模型 ID" />
+        </el-form-item>
+      </div>
+
+      <el-form-item label="Base URL baseUrl" required>
+        <el-input v-model="form.baseUrl" placeholder="例如 https://api.openai.com/v1" />
+      </el-form-item>
+
+      <el-form-item label="API Key apiKey">
+        <el-input
+          v-model="form.apiKey"
+          type="password"
+          show-password
+          :placeholder="keyPlaceholder"
+        />
+        <div class="hint">
+          密钥加密保存在本机（不进工作区、不进 .prototype-agent.json）。
+          <template v-if="selectedEntry?.hasApiKey">
+            留空 = 保持已存的那把。
+            <el-checkbox v-model="form.clearApiKey" size="small" style="margin-left: 6px">
+              清除已存密钥
+            </el-checkbox>
+          </template>
+        </div>
+      </el-form-item>
+
+      <div class="grid-2">
+        <el-form-item label="允许的思考档位">
           <el-select
-            v-model="selectionId"
-            filterable
-            clearable
-            placeholder="搜索并选择模型"
+            v-model="form.thinkingLevels"
+            multiple
             style="width: 100%"
-            @change="handleSelectModel"
+            placeholder="不选则只有 off"
           >
-            <el-option-group v-for="group in groupedModels" :key="group.provider" :label="group.provider">
-              <el-option
-                v-for="item in group.items"
-                :key="item.selectionId"
-                :value="item.selectionId"
-                :disabled="!item.available"
-                :label="item.label"
-              />
-            </el-option-group>
+            <el-option v-for="lv in thinkingVocabulary" :key="lv" :label="lv" :value="lv" />
           </el-select>
         </el-form-item>
-
-        <div class="summary" v-if="selectedModel">
-          <div class="summary-row">
-            <span class="k">api</span><span class="v">{{ selectedModel.api }}</span>
-            <span class="k">baseUrl</span><span class="v">{{ selectedModel.baseUrl || '未配置' }}</span>
-          </div>
-          <div class="summary-row">
-            <span class="k">密钥</span>
-            <span class="v" :class="selectedModel.hasApiKey ? 'ok' : 'warn'">
-              {{ selectedModel.hasApiKey ? '来自 .thunder' : '缺失（models.json / auth.json 均未提供）' }}
-            </span>
-            <span class="k">上下文</span><span class="v">{{ selectedModel.contextWindow.toLocaleString() }}</span>
-          </div>
-          <div class="summary-row">
-            <span class="k">推理</span><span class="v">{{ selectedModel.reasoning ? '支持' : '不支持' }}</span>
-            <span class="k">最大输出</span><span class="v">{{ selectedModel.maxTokens.toLocaleString() }}</span>
-          </div>
-        </div>
-
-        <el-form-item label="思考档位 thinkingLevel" v-if="selectedModel">
-          <el-select v-model="form.thinkingLevel" clearable placeholder="使用模型默认" style="width: 220px">
-            <el-option v-for="lv in thinkingOptions" :key="lv" :label="lv" :value="lv" />
+        <el-form-item label="默认档位">
+          <el-select v-model="form.defaultThinkingLevel" clearable placeholder="使用 off" style="width: 100%">
+            <el-option v-for="lv in form.thinkingLevels" :key="lv" :label="lv" :value="lv" />
           </el-select>
-          <span class="hint" v-if="selectedModel.defaultThinkingLevel">
-            默认 {{ selectedModel.defaultThinkingLevel }}
-          </span>
         </el-form-item>
-      </el-form>
-    </template>
+      </div>
 
-    <!-- 模式二：手动填写完整模型（thunder 不认识的网关） -->
-    <template v-else>
-      <el-form label-position="top" :model="form" class="settings-form">
-        <div class="grid-2">
-          <el-form-item label="服务商标识 provider" required>
-            <el-input v-model="form.provider" placeholder="例如 openai / anthropic / deepseek" />
-          </el-form-item>
-          <el-form-item label="模型 ID id" required>
-            <el-input v-model="form.id" placeholder="例如 gpt-4o / claude-sonnet-4" />
-          </el-form-item>
-        </div>
+      <el-collapse class="advanced">
+        <el-collapse-item title="高级：模型能力与 Agent 参数" name="advanced">
+          <div class="grid-3">
+            <el-form-item label="支持推理 reasoning">
+              <el-switch v-model="form.reasoning" />
+            </el-form-item>
+            <el-form-item label="支持图片输入">
+              <el-switch v-model="form.supportsImages" />
+            </el-form-item>
+            <el-form-item label="上下文窗口">
+              <el-input-number v-model="form.contextWindow" :min="0" :step="1000" controls-position="right" />
+            </el-form-item>
+          </div>
 
-        <div class="grid-2">
-          <el-form-item label="API 协议 api" required>
-            <el-select v-model="form.api" style="width: 100%">
-              <el-option
-                v-for="item in API_OPTIONS"
-                :key="item.value"
-                :label="item.label"
-                :value="item.value"
+          <div class="grid-3">
+            <el-form-item label="最大输出 tokens">
+              <el-input-number v-model="form.maxTokens" :min="0" :step="1024" controls-position="right" />
+            </el-form-item>
+            <el-form-item label="最大轮次 maxTurns">
+              <el-input-number v-model="form.maxTurns" :min="1" :step="1" controls-position="right" />
+            </el-form-item>
+            <el-form-item label="温度 temperature">
+              <el-input-number
+                v-model="form.temperature"
+                :min="0"
+                :max="2"
+                :step="0.1"
+                controls-position="right"
               />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="显示名称 name">
-            <el-input v-model="form.name" placeholder="留空则使用模型 ID" />
-          </el-form-item>
-        </div>
+            </el-form-item>
+          </div>
 
-        <el-form-item label="Base URL baseUrl" required>
-          <el-input v-model="form.baseUrl" placeholder="例如 https://api.openai.com/v1" />
-        </el-form-item>
-
-        <el-form-item label="API Key apiKey">
-          <el-input
-            v-model="form.apiKey"
-            type="password"
-            show-password
-            placeholder="留空表示由网关/环境变量提供"
-          />
-          <div class="hint">手动模式会把密钥写进工作区 .prototype-agent.json（已 gitignore）。</div>
-        </el-form-item>
-      </el-form>
-    </template>
-
-    <!-- 两种模式共用的 Agent 参数 -->
-    <el-collapse class="advanced">
-      <el-collapse-item title="高级：模型能力与 Agent 参数" name="advanced">
-        <div class="grid-3">
-          <el-form-item label="支持推理 reasoning">
-            <el-switch v-model="form.reasoning" />
-          </el-form-item>
-          <el-form-item label="上下文窗口">
-            <el-input-number v-model="form.contextWindow" :min="0" :step="1000" controls-position="right" />
-          </el-form-item>
-          <el-form-item label="最大输出 tokens">
-            <el-input-number v-model="form.maxTokens" :min="0" :step="1024" controls-position="right" />
-          </el-form-item>
-        </div>
-
-        <div class="grid-3">
-          <el-form-item label="最大轮次 maxTurns">
-            <el-input-number v-model="form.maxTurns" :min="1" :step="1" controls-position="right" />
-          </el-form-item>
-          <el-form-item label="温度 temperature">
-            <el-input-number
-              v-model="form.temperature"
-              :min="0"
-              :max="2"
-              :step="0.1"
-              controls-position="right"
-            />
-          </el-form-item>
           <el-form-item label="请求超时 requestTimeoutMs">
             <el-input-number
               v-model="form.requestTimeoutMs"
@@ -213,18 +204,18 @@
               controls-position="right"
             />
           </el-form-item>
-        </div>
 
-        <el-form-item label="系统提示词 systemPrompt">
-          <el-input
-            v-model="form.systemPrompt"
-            type="textarea"
-            :rows="4"
-            placeholder="留空则使用内置的原型编辑提示词"
-          />
-        </el-form-item>
-      </el-collapse-item>
-    </el-collapse>
+          <el-form-item label="系统提示词 systemPrompt">
+            <el-input
+              v-model="form.systemPrompt"
+              type="textarea"
+              :rows="4"
+              placeholder="留空则使用内置的原型编辑提示词"
+            />
+          </el-form-item>
+        </el-collapse-item>
+      </el-collapse>
+    </el-form>
 
     <!-- Agent 可调用的业务工具 -->
     <div class="tools">
@@ -240,6 +231,15 @@
     <template #footer>
       <div class="dialog-footer">
         <span class="save-path" v-if="configPath">保存至 {{ configPath }}</span>
+        <el-button
+          v-if="selectedEntry"
+          type="danger"
+          text
+          :loading="deleting"
+          @click="handleDelete"
+        >
+          从模型库删除
+        </el-button>
         <el-button @click="visible = false">取消</el-button>
         <el-button type="primary" :loading="saving" :disabled="!canSave" @click="handleSave">
           保存配置
@@ -251,12 +251,8 @@
 
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
-import {
-  useAgentModelConfig,
-  DEFAULT_THINKING_LEVELS,
-  type ThunderModelView
-} from '../composables/useAgentModelConfig'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { useAgentModelConfig, type AgentModelView } from '../composables/useAgentModelConfig'
 
 const props = defineProps<{ visible: boolean }>()
 const emit = defineEmits<{
@@ -270,23 +266,20 @@ const visible = computed({
   set: (value) => emit('update:visible', value)
 })
 
-const API_OPTIONS = [
-  { label: 'openai-completions', value: 'openai-completions' },
-  { label: 'openai-responses', value: 'openai-responses' },
-  { label: 'anthropic-messages', value: 'anthropic-messages' },
-  { label: 'google-generative-ai', value: 'google-generative-ai' }
-]
-
 const form = reactive({
   provider: '',
   id: '',
   name: '',
-  api: 'openai-completions',
+  api: '',
   baseUrl: '',
   apiKey: '',
+  clearApiKey: false,
   reasoning: false,
+  supportsImages: false,
   contextWindow: undefined as number | undefined,
   maxTokens: undefined as number | undefined,
+  thinkingLevels: [] as string[],
+  defaultThinkingLevel: '',
   systemPrompt: '',
   maxTurns: undefined as number | undefined,
   temperature: undefined as number | undefined,
@@ -296,12 +289,14 @@ const form = reactive({
 
 const modelConfig = useAgentModelConfig()
 
-const mode = ref<'thunder' | 'manual'>('thunder')
-// 模型目录走共享 composable：输入区的下拉读的是同一份，弹窗里刷新过它也就跟着新。
-// selectionId / selectedModel / thinkingOptions 仍按弹窗自己的待保存状态推导 ——
-// 选中模型后直接改共享状态的话，用户点「取消」也会把输入区改掉。
+// 词汇表（api 方言 / 思考档位 / 默认值）只有主进程那一份，这里只渲染。
+const apiOptions = computed(() => modelConfig.vocabularies.value.apiOptions)
+const thinkingVocabulary = computed(() => modelConfig.vocabularies.value.thinkingVocabulary)
+
+// 模型库走共享 composable：输入区的下拉读的是同一份，弹窗里刷新过它也就跟着新。
+// selectionId 仍按弹窗自己的待保存状态推导 —— 选中模型后直接改共享状态的话，
+// 用户点「取消」也会把输入区改掉。
 const models = modelConfig.models
-const modelSources = modelConfig.modelSources
 const groupedModels = modelConfig.groupedModels
 const selectionId = ref('')
 const tools = ref<{ name: string; description: string; effect: string }[]>([])
@@ -313,31 +308,32 @@ interface ReadinessItem {
 }
 const readiness = ref<ReadinessItem[]>([])
 const configPath = ref('')
+const libraryPath = computed(() => modelConfig.libraryPath.value)
+const problem = computed(() => modelConfig.problem.value)
+const keyStoreEncrypted = computed(() => modelConfig.keyStoreEncrypted.value)
 const envLocked = ref(false)
 const loading = ref(false)
 const checking = ref(false)
 const saving = ref(false)
-const importing = ref(false)
+const deleting = ref(false)
 const runtimeOk = ref<boolean | null>(null)
 const runtimeVersion = ref('')
 const runtimeError = ref('')
 
-const selectedModel = computed(() =>
+/** 表单里当前载入/保存的那条库记录（新建时为空）。 */
+const selectedEntry = computed<AgentModelView | undefined>(() =>
   models.value.find((m) => m.selectionId === selectionId.value)
 )
 
-const thinkingOptions = computed(() =>
-  mode.value === 'thunder'
-    ? selectedModel.value?.thinkingLevels?.length
-      ? selectedModel.value.thinkingLevels
-      : DEFAULT_THINKING_LEVELS
-    : DEFAULT_THINKING_LEVELS
+const keyPlaceholder = computed(() =>
+  selectedEntry.value?.hasApiKey
+    ? '已保存（留空则不变）'
+    : '粘贴 API Key；留空表示由环境变量 PROTOTYPE_AGENT_API_KEY 提供'
 )
 
-const canSave = computed(() => {
-  if (mode.value === 'thunder') return Boolean(selectedModel.value)
-  return Boolean(form.provider.trim() && form.id.trim() && form.api && form.baseUrl.trim())
-})
+const canSave = computed(() =>
+  Boolean(form.provider.trim() && form.id.trim() && form.api && form.baseUrl.trim())
+)
 
 const statusClass = computed(() => {
   if (runtimeOk.value === null) return 'dot-idle'
@@ -370,7 +366,7 @@ async function load() {
 
   loading.value = true
   try {
-    // 目录走共享 composable（输入区的下拉读同一份），这里只取表单要用的字段
+    // 模型库走共享 composable（输入区的下拉读同一份），这里只取表单要用的字段
     await modelConfig.refresh()
 
     const res = await window.agent.getConfig()
@@ -380,37 +376,13 @@ async function load() {
     envLocked.value = Boolean(res.envLocked)
     tools.value = res.tools ?? []
 
-    const model = res.config?.model as
-      | { provider?: string; id?: string; name?: string; api?: string; baseUrl?: string; apiKey?: string }
-      | undefined
+    // 表单载入当前生效的那个模型；没有就用库里的第一个可用项，再没有就留空
+    // 让人新建。
+    const stored = res.config?.model as { provider?: string; id?: string } | undefined
+    const entry =
+      byRef(stored) ?? byRef(res.defaultModel) ?? undefined
 
-    form.provider = model?.provider ?? ''
-    form.id = model?.id ?? ''
-    form.name = model?.name ?? ''
-    form.api = model?.api || 'openai-completions'
-    form.baseUrl = model?.baseUrl ?? ''
-    form.apiKey = model?.apiKey ?? ''
-    form.reasoning = Boolean((model as any)?.reasoning)
-    form.contextWindow = (model as any)?.contextWindow
-    form.maxTokens = (model as any)?.maxTokens
-    form.systemPrompt = res.config?.systemPrompt ?? ''
-    form.maxTurns = res.config?.maxTurns
-    form.temperature = res.config?.temperature
-    form.thinkingLevel = res.config?.thinkingLevel ?? ''
-    form.requestTimeoutMs = res.config?.requestTimeoutMs
-
-    // A stored model carrying its own endpoint is a manual one; anything else
-    // is a reference we resolve against the catalog.
-    const isManual = Boolean(model?.api && model?.baseUrl)
-    if (isManual || models.value.length === 0) {
-      mode.value = 'manual'
-    } else {
-      mode.value = 'thunder'
-      const match = models.value.find((m) => m.provider === model?.provider && m.id === model?.id)
-      selectionId.value = match?.selectionId ?? findSelection(res.defaultModel)
-      // Keep the stored thinkingLevel instead of the model's default.
-      applyModelDefaults(selectedModel.value, false)
-    }
+    fillForm(entry, res)
 
     void handleCheck()
   } finally {
@@ -418,59 +390,85 @@ async function load() {
   }
 }
 
-/**
- * 「从 ~/.thunder 导入」：把本机真实用户目录里的 thunder 配置拷进当前数据根。
- * 显式动作，允许覆盖；打包版跑完重新 load()，就绪表与模型列表一起刷新。
- */
-async function handleImport() {
-  if (!window.agent?.importThunderHome) return
-  importing.value = true
-  try {
-    const res = await window.agent.importThunderHome()
-    if (!res?.ok) {
-      ElMessage.error(`导入失败：${res?.error ?? '未知错误'}`)
-      return
-    }
-    const copied = res.copied ?? []
-    if (copied.length) {
-      ElMessage.success(`已导入 ${copied.join('、')}`)
-    } else {
-      ElMessage.info(
-        res.missing?.length
-          ? `~/.thunder 里没有 ${res.missing.join('、')}`
-          : '当前数据根就是 ~/.thunder，无需导入'
-      )
-    }
-    await load()
-  } finally {
-    importing.value = false
-  }
+/** 把库记录 + 配置里的 tuning 一起填进表单。 */
+function fillForm(entry: AgentModelView | undefined, res: Awaited<ReturnType<typeof window.agent.getConfig>>) {
+  const defaults = modelConfig.vocabularies.value.defaults
+
+  selectionId.value = entry?.selectionId ?? ''
+  form.provider = entry?.provider ?? ''
+  form.id = entry?.id ?? ''
+  form.name = entry?.name ?? ''
+  form.api = entry?.api ?? apiOptions.value[0] ?? ''
+  form.baseUrl = entry?.baseUrl ?? ''
+  form.reasoning = Boolean(entry?.reasoning)
+  form.supportsImages = Boolean(entry?.input?.includes('image'))
+  form.thinkingLevels = entry?.thinkingLevels?.length
+    ? [...entry.thinkingLevels]
+    : [...defaults.thinkingLevels]
+  form.defaultThinkingLevel = entry?.defaultThinkingLevel ?? ''
+  form.contextWindow = entry?.contextWindow ?? defaults.contextWindow ?? undefined
+  form.maxTokens = entry?.maxTokens ?? defaults.maxTokens ?? undefined
+
+  // 密钥永远不显示：留空 = 保留已存的那把。
+  form.apiKey = ''
+  form.clearApiKey = false
+
+  form.systemPrompt = res.config?.systemPrompt ?? ''
+  form.maxTurns = res.config?.maxTurns
+  form.temperature = res.config?.temperature
+  form.thinkingLevel = res.config?.thinkingLevel ?? ''
+  form.requestTimeoutMs = res.config?.requestTimeoutMs
 }
 
-function findSelection(ref?: { provider: string; id: string } | null): string {
-  if (!ref) return ''
-  return models.value.find((m) => m.provider === ref.provider && m.id === ref.id)?.selectionId ?? ''
+/** 按 provider+id 找库里的那条（id 里可能有 `/`，所以不拆 selectionId）。 */
+function byRef(ref?: { provider?: string; id?: string } | null): AgentModelView | undefined {
+  if (!ref?.provider || !ref?.id) return undefined
+  return models.value.find((m) => m.provider === ref.provider && m.id === ref.id)
 }
 
-/** Copy a catalog entry into the form, so manual mode can start from it. */
-function applyModelDefaults(entry?: ThunderModelView, setThinking = true) {
+/** 把已存的一条库记录载入表单（改它，或拿它做模板）。 */
+function handleSelectModel(value: string) {
+  if (!value) return
+  const entry = models.value.find((m) => m.selectionId === value)
   if (!entry) return
+  // 只换模型相关的字段；tuning（提示词 / 轮次 / 温度）留在用户手上
   form.provider = entry.provider
   form.id = entry.id
   form.name = entry.name
   form.api = entry.api
   form.baseUrl = entry.baseUrl
   form.reasoning = entry.reasoning
+  form.supportsImages = Boolean(entry.input?.includes('image'))
+  form.thinkingLevels = entry.thinkingLevels?.length
+    ? [...entry.thinkingLevels]
+    : form.thinkingLevels
+  form.defaultThinkingLevel = entry.defaultThinkingLevel ?? ''
   form.contextWindow = entry.contextWindow
   form.maxTokens = entry.maxTokens
-  if (setThinking && entry.defaultThinkingLevel) {
-    form.thinkingLevel = entry.defaultThinkingLevel
+  form.apiKey = ''
+  form.clearApiKey = false
+  if (!entry.thinkingLevels?.includes(form.thinkingLevel)) {
+    form.thinkingLevel = entry.defaultThinkingLevel || ''
   }
 }
 
-function handleSelectModel(value: string) {
-  if (!value) return
-  applyModelDefaults(selectedModel.value)
+/** 清空模型字段，保留 tuning：新建一条库记录。 */
+function startNew() {
+  const defaults = modelConfig.vocabularies.value.defaults
+  selectionId.value = ''
+  form.provider = ''
+  form.id = ''
+  form.name = ''
+  form.api = apiOptions.value[0] ?? ''
+  form.baseUrl = ''
+  form.apiKey = ''
+  form.clearApiKey = false
+  form.reasoning = false
+  form.supportsImages = false
+  form.thinkingLevels = [...defaults.thinkingLevels]
+  form.defaultThinkingLevel = ''
+  form.contextWindow = defaults.contextWindow || undefined
+  form.maxTokens = defaults.maxTokens || undefined
 }
 
 async function handleCheck() {
@@ -492,47 +490,51 @@ async function handleCheck() {
 }
 
 async function handleSave() {
-  if (!window.agent?.setConfig) {
+  if (!window.agent?.setConfig || !window.agent?.saveModel) {
     ElMessage.error('agent 桥接不可用，无法保存')
     return
   }
   if (!canSave.value) {
-    ElMessage.warning(mode.value === 'thunder' ? '请先选择一个模型' : '请填写 provider / id / api / baseUrl')
+    ElMessage.warning('请填写 provider / id / api / baseUrl')
     return
   }
 
   saving.value = true
   try {
-    const tuning = {
+    // 1) 先把模型写进模型库（端点进 providers.json，密钥进加密存储）
+    const saved = await window.agent.saveModel({
+      provider: form.provider.trim(),
+      id: form.id.trim(),
+      name: form.name.trim() || form.id.trim(),
+      api: form.api,
+      baseUrl: form.baseUrl.trim(),
+      reasoning: form.reasoning || undefined,
+      input: form.supportsImages ? ['text', 'image'] : undefined,
+      contextWindow: form.contextWindow || undefined,
+      maxTokens: form.maxTokens || undefined,
+      thinkingLevels: form.thinkingLevels.length ? form.thinkingLevels : undefined,
+      defaultThinkingLevel: form.defaultThinkingLevel || undefined,
+      apiKey: form.apiKey.trim() || undefined,
+      clearApiKey: form.clearApiKey || undefined
+    })
+    if (!saved?.ok) {
+      ElMessage.error(`保存模型失败：${saved?.error ?? '未知错误'}`)
+      return
+    }
+
+    // 2) 再把「选它」和 tuning 写进工作区配置（只留 {provider, id} 引用）
+    const res = await window.agent.setConfig({
       systemPrompt: form.systemPrompt.trim() || undefined,
       maxTurns: form.maxTurns || undefined,
       temperature: form.temperature,
       thinkingLevel: form.thinkingLevel || undefined,
-      requestTimeoutMs: form.requestTimeoutMs || undefined
-    }
-
-    // A catalog pick is stored as a reference: no endpoint, and no secret, in
-    // the workspace file.
-    const model =
-      mode.value === 'thunder' && selectedModel.value
-        ? {
-            provider: selectedModel.value.provider,
-            id: selectedModel.value.id,
-            name: selectedModel.value.name
-          }
-        : {
-            provider: form.provider.trim(),
-            id: form.id.trim(),
-            name: form.name.trim() || form.id.trim(),
-            api: form.api,
-            baseUrl: form.baseUrl.trim(),
-            apiKey: form.apiKey.trim() || undefined,
-            reasoning: form.reasoning || undefined,
-            contextWindow: form.contextWindow || undefined,
-            maxTokens: form.maxTokens || undefined
-          }
-
-    const res = await window.agent.setConfig({ model, ...tuning })
+      requestTimeoutMs: form.requestTimeoutMs || undefined,
+      model: {
+        provider: form.provider.trim(),
+        id: form.id.trim(),
+        name: form.name.trim() || form.id.trim()
+      }
+    })
     if (!res?.ok) {
       ElMessage.error(`保存失败：${res?.error ?? '未知错误'}`)
       return
@@ -546,6 +548,38 @@ async function handleSave() {
     visible.value = false
   } finally {
     saving.value = false
+  }
+}
+
+async function handleDelete() {
+  const entry = selectedEntry.value
+  if (!entry || !window.agent?.deleteModel) return
+
+  try {
+    await ElMessageBox.confirm(
+      `从模型库删除 ${entry.selectionId}？` +
+        (!entry.available ? '' : '它的密钥也会一起删除。'),
+      '删除模型',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+    )
+  } catch {
+    return // 用户取消
+  }
+
+  deleting.value = true
+  try {
+    const res = await window.agent.deleteModel({ provider: entry.provider, id: entry.id })
+    if (!res?.ok) {
+      ElMessage.error(`删除失败：${res?.error ?? '未知错误'}`)
+      return
+    }
+    await modelConfig.refresh()
+    // 删掉的那条正是表单里载入的 → 表单退回新建态（无论是当前选中项还是别的）
+    startNew()
+    if (res.clearedSelection) ElMessage.info('被删除的正是当前选中的模型，选择已清空')
+    ElMessage.success('已从模型库删除')
+  } finally {
+    deleting.value = false
   }
 }
 </script>
@@ -638,38 +672,14 @@ async function handleSave() {
   justify-content: space-between;
 }
 
-.summary {
-  background: #f6f8fa;
-  border-radius: 6px;
-  padding: 8px 12px;
-  margin-bottom: 14px;
-}
-
-.summary-row {
-  display: flex;
-  gap: 8px;
-  font-size: 12px;
-  line-height: 1.9;
-}
-
-.summary .k {
-  color: #909399;
-  min-width: 48px;
-}
-
-.summary .v {
+.source-title {
+  font-size: 13px;
+  font-weight: 600;
   color: #303133;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  margin-right: 16px;
-  word-break: break-all;
 }
 
-.summary .ok {
-  color: #67c23a;
-}
-
-.summary .warn {
-  color: #e6a23c;
+.settings-form {
+  margin-top: 4px;
 }
 
 .grid-2 {
@@ -692,6 +702,7 @@ async function handleSave() {
   font-size: 11px;
   color: #909399;
   margin-top: 4px;
+  line-height: 1.7;
 }
 
 .tools {

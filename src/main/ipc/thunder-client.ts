@@ -7,7 +7,7 @@
  */
 
 import { ChildProcess, spawn } from 'child_process';
-import { isPackaged } from '../app-paths';
+import { resolveThunderBinary, sidecarCacheDir } from '../agent/thunder-binaries';
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -35,6 +35,16 @@ export interface RunTaskOptions {
   prompt: string;
   sessionId?: string;
   model?: string;
+  /**
+   * Full model descriptor from this app's own model library.
+   *
+   * With it, the daemon builds its stream client from the descriptor and never
+   * reads `models.json` / `auth.json` for the run. Without it the daemon falls
+   * back to resolving `model` (a selection id) out of its own data root — which
+   * this app no longer populates, so a host that owns its provider
+   * configuration must send this.
+   */
+  modelDescriptor?: Record<string, any>;
   useMock?: boolean;
   workspaceDir?: string;
   /** Disable ask_user_question for clients that cannot answer it. */
@@ -187,6 +197,9 @@ export class ThunderClient extends EventEmitter {
         prompt: opts.prompt,
         session_id: opts.sessionId,
         model: opts.model,
+        // 只有真的带上了才发这个字段：老的 daemon 会忽略它，但一个显式的
+        // null 会让「宿主没配模型」和「宿主配了但解析不出来」看起来一样。
+        ...(opts.modelDescriptor ? { model_descriptor: opts.modelDescriptor } : {}),
         use_mock: opts.useMock ?? this.options.useMock ?? false,
         workspace_dir: opts.workspaceDir ?? this.options.workspaceDir,
         headless: opts.headless ?? false,
@@ -267,36 +280,13 @@ export class ThunderClient extends EventEmitter {
     }
   }
 
+  /**
+   * Same resolution as the runtime sidecar (see `agent/thunder-binaries.ts`):
+   * env var → packaged Resources/bin → the pinned artefact cache. No thunder
+   * checkout is read, at any path.
+   */
   private resolveBinaryPath(): string {
-    const isWin = process.platform === 'win32';
-    const binName = isWin ? 'thunder-daemon.exe' : 'thunder-daemon';
-
-    if (process.env.THUNDER_DAEMON_BIN && fs.existsSync(process.env.THUNDER_DAEMON_BIN)) {
-      return process.env.THUNDER_DAEMON_BIN;
-    }
-
-    const resourcesPath = (process as any).resourcesPath as string | undefined;
-
-    if (isPackaged() && resourcesPath) {
-      const packagedPath = path.join(resourcesPath, 'bin', binName);
-      if (fs.existsSync(packagedPath)) {
-        return packagedPath;
-      }
-    }
-
-    const thunderRepo = process.env.THUNDER_REPO || '/Users/lucas/wz/GitHub/thunder';
-    const candidates = [
-      path.join(thunderRepo, 'target/debug', binName),
-      path.join(thunderRepo, 'target/release', binName),
-      ...(resourcesPath ? [path.join(resourcesPath, 'bin', binName)] : [])
-    ];
-
-    for (const candidate of candidates) {
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    }
-
-    return path.join(thunderRepo, 'target/debug', binName);
+    const binName = process.platform === 'win32' ? 'thunder-daemon.exe' : 'thunder-daemon';
+    return resolveThunderBinary('thunder-daemon') ?? path.join(sidecarCacheDir(), binName);
   }
 }

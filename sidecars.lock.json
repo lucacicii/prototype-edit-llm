@@ -1,0 +1,46 @@
+{
+  "$comment": [
+    "Pin for the two thunder sidecars this app ships (thunder-runtime, thunder-daemon).",
+    "They are built in the thunder repository; this file is how this repository knows",
+    "which build it has, without reading a thunder checkout.",
+    "",
+    "artifacts is keyed by <platform>-<arch> and then by file name, each entry",
+    "carrying the sha256 of the exact file. scripts/prepare-sidecars.mjs refuses a",
+    "cached binary whose hash does not match, and scripts/fetch-thunder-binaries.mjs",
+    "refuses a download that does. Run that script with --bless to (re)fill this file.",
+    "",
+    "An empty artifacts map means no cache has been blessed yet: the build then",
+    "requires $THUNDER_RUNTIME_BIN / $THUNDER_DAEMON_BIN to be set explicitly."
+  ],
+  "thunder": {
+    "version": "0.3.0",
+    "commit": "3faae1b",
+    "source": "https://github.com/lucacicii/thunder/releases/download/v0.3.0",
+    "artifacts": {
+      "darwin-arm64": {
+        "thunder-runtime": {
+          "sha256": "4439a3d6ce671df51f9da767f26ea4e6e7ca21cab55274df51b02fa521d17663"
+        },
+        "thunder-daemon": {
+          "sha256": "868138e00830992ef16fade6d77613eb0c1a69f82c3be6de60266f4d5ca170e2"
+        }
+      },
+      "darwin-x64": {
+        "thunder-runtime": {
+          "sha256": "34eb1d3dcc8bf6ab4309d30f86387be9e0569bbcc8fd44fb5eb82acbc683eace"
+        },
+        "thunder-daemon": {
+          "sha256": "1d6c30a047813f2a2699dba696a1a68fd7e38e9c2ad7cedf641809b4fe9597cd"
+        }
+      },
+      "linux-x64": {
+        "thunder-runtime": {
+          "sha256": "aaf3a42c89b0ea0fbcbb8eacf00a0a92dd28f4ffb3f4cb81ef8f244fa00a40ab"
+        },
+        "thunder-daemon": {
+          "sha256": "4fea34d5ff45943fbe810fb322f81b073363b4687cad5edf1560872a98d66073"
+        }
+      }
+    }
+  }
+}

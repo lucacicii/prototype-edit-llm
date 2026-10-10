@@ -52,7 +52,10 @@ const agentApi = {
   getConfig: () => ipcRenderer.invoke('agent:get-config'),
   setConfig: (config: any) => ipcRenderer.invoke('agent:set-config', config),
   tools: () => ipcRenderer.invoke('agent:tools'),
-  importThunderHome: () => ipcRenderer.invoke('agent:import-thunder-home'),
+  // 模型库的增删。密钥单独走 saveModel 的 apiKey 字段，读回来的视图里永远没有它。
+  saveModel: (model: any) => ipcRenderer.invoke('agent:save-model', model),
+  deleteModel: (params: { provider: string; id: string }) =>
+    ipcRenderer.invoke('agent:delete-model', params),
   run: (params: any) => ipcRenderer.invoke('agent:run', params),
   cancel: (runId: string) => ipcRenderer.invoke('agent:cancel', runId),
   onStreamEvent: (callback: (frame: any) => void) => {
