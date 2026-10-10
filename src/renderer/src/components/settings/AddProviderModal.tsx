@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
-import { Modal, Input, Select, Checkbox, message } from 'antd'
+import { Modal, Input, Select, Checkbox, Button, message } from 'antd'
+import { CloudDownload, Sparkles } from 'lucide-react'
 import {
   useAgentModelConfigStore
 } from '../../stores/useAgentModelConfigStore'
@@ -8,6 +9,17 @@ import { presetsFor, type ProviderPreset } from './provider-presets'
 interface AddProviderModalProps {
   open: boolean
   onClose: () => void
+}
+
+interface RemoteModelItem {
+  id: string
+  name?: string
+  contextWindow?: number
+  maxTokens?: number
+  reasoning?: boolean
+  supportsImages?: boolean
+  thinkingLevels?: string[]
+  defaultThinkingLevel?: string
 }
 
 export const AddProviderModal: React.FC<AddProviderModalProps> = ({ open, onClose }) => {
@@ -24,6 +36,11 @@ export const AddProviderModal: React.FC<AddProviderModalProps> = ({ open, onClos
   const [selectAsCurrent, setSelectAsCurrent] = useState<boolean>(true)
   const [saving, setSaving] = useState(false)
 
+  // Remote models fetch state
+  const [remoteModels, setRemoteModels] = useState<RemoteModelItem[]>([])
+  const [fetchingModels, setFetchingModels] = useState(false)
+  const [selectedRemoteModel, setSelectedRemoteModel] = useState<RemoteModelItem | null>(null)
+
   const handleApplyPreset = (item: ProviderPreset) => {
     setPresetKey(item.key)
     setProvider(item.providerId)
@@ -32,6 +49,48 @@ export const AddProviderModal: React.FC<AddProviderModalProps> = ({ open, onClos
     if (item.modelHint) {
       setModelId(item.modelHint.split(' ')[0])
     }
+    setRemoteModels([])
+    setSelectedRemoteModel(null)
+  }
+
+  const handleFetchModels = async () => {
+    if (!baseUrl.trim()) {
+      message.warning('请先填写 Base URL')
+      return
+    }
+
+    setFetchingModels(true)
+    try {
+      const res = await window.agent?.fetchRemoteModels({
+        provider: provider.trim(),
+        api,
+        baseUrl: baseUrl.trim(),
+        apiKey: apiKey.trim() || undefined
+      })
+
+      if (res?.ok && Array.isArray(res.models) && res.models.length > 0) {
+        setRemoteModels(res.models)
+        message.success(`成功从服务商获取到 ${res.models.length} 个模型！`)
+
+        // If current modelId is empty or not in list, auto pick the first or matching one
+        const match = res.models.find((m) => m.id === modelId) || res.models[0]
+        if (match) {
+          handleSelectRemoteModel(match)
+        }
+      } else {
+        message.warning(res?.error || '未获取到可用模型，请检查 Base URL 与 API Key 是否正确')
+      }
+    } catch (err: any) {
+      message.error(`获取失败：${err.message || '网络异常'}`)
+    } finally {
+      setFetchingModels(false)
+    }
+  }
+
+  const handleSelectRemoteModel = (model: RemoteModelItem) => {
+    setSelectedRemoteModel(model)
+    setModelId(model.id)
+    setModelName(model.name || '')
   }
 
   const handleSave = async () => {
@@ -54,10 +113,12 @@ export const AddProviderModal: React.FC<AddProviderModalProps> = ({ open, onClos
         api,
         baseUrl: baseUrl.trim(),
         apiKey: apiKey.trim() || undefined,
-        reasoning: false,
-        supportsImages: false,
-        thinkingLevels: ['off'],
-        defaultThinkingLevel: 'off'
+        reasoning: selectedRemoteModel?.reasoning ?? false,
+        supportsImages: selectedRemoteModel?.supportsImages ?? false,
+        contextWindow: selectedRemoteModel?.contextWindow,
+        maxTokens: selectedRemoteModel?.maxTokens,
+        thinkingLevels: selectedRemoteModel?.thinkingLevels || ['off'],
+        defaultThinkingLevel: selectedRemoteModel?.defaultThinkingLevel || 'off'
       }
 
       const res = await window.agent.saveModel(payload)
@@ -66,7 +127,7 @@ export const AddProviderModal: React.FC<AddProviderModalProps> = ({ open, onClos
         return
       }
 
-      message.success(`已成功添加服务商 ${provider}`)
+      message.success(`已成功添加服务商 ${provider} 与模型 ${modelId}`)
       await useAgentModelConfigStore.getState().refresh()
 
       if (selectAsCurrent && !envLocked) {
@@ -86,7 +147,7 @@ export const AddProviderModal: React.FC<AddProviderModalProps> = ({ open, onClos
     <Modal
       open={open}
       title="添加模型服务商"
-      width={500}
+      width={520}
       onCancel={onClose}
       onOk={handleSave}
       confirmLoading={saving}
@@ -159,6 +220,56 @@ export const AddProviderModal: React.FC<AddProviderModalProps> = ({ open, onClos
           />
         </div>
 
+        {/* 自动获取模型列表栏目 */}
+        <div className="p-2.5 rounded-lg bg-slate-900/80 border border-slate-800 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="font-semibold text-slate-200 flex items-center gap-1.5">
+              <Sparkles size={13} className="text-amber-400" />
+              <span>智能获取模型列表</span>
+            </span>
+            <Button
+              size="small"
+              type="primary"
+              ghost
+              loading={fetchingModels}
+              icon={<CloudDownload size={13} />}
+              onClick={handleFetchModels}
+            >
+              拉取模型列表
+            </Button>
+          </div>
+
+          {remoteModels.length > 0 && (
+            <div>
+              <label className="block text-[11px] text-slate-400 mb-1">从获取到的列表中选择模型：</label>
+              <Select
+                showSearch
+                style={{ width: '100%' }}
+                placeholder="搜索并选择模型..."
+                value={modelId}
+                onChange={(val) => {
+                  const m = remoteModels.find((item) => item.id === val)
+                  if (m) handleSelectRemoteModel(m)
+                  else setModelId(val)
+                }}
+                options={remoteModels.map((m) => ({
+                  label: (
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-xs">{m.id}</span>
+                      <span className="text-[10px] text-slate-400">
+                        {m.contextWindow ? `${Math.round(m.contextWindow / 1000)}k` : ''}
+                        {m.reasoning ? ' · 思考' : ''}
+                        {m.supportsImages ? ' · 视觉' : ''}
+                      </span>
+                    </div>
+                  ),
+                  value: m.id
+                }))}
+              />
+            </div>
+          )}
+        </div>
+
         <div className="pt-2 border-t border-slate-800 grid grid-cols-2 gap-3">
           <div>
             <label className="block text-slate-300 font-medium mb-1">
@@ -179,6 +290,15 @@ export const AddProviderModal: React.FC<AddProviderModalProps> = ({ open, onClos
             />
           </div>
         </div>
+
+        {selectedRemoteModel && (
+          <div className="p-2 rounded bg-sky-950/40 border border-sky-800/40 text-[11px] text-sky-300 font-mono flex items-center justify-between">
+            <span>窗口: {selectedRemoteModel.contextWindow || '128000'} tok</span>
+            <span>输出: {selectedRemoteModel.maxTokens || '4096'} tok</span>
+            <span>{selectedRemoteModel.reasoning ? '✓ 支持思考' : '无思考'}</span>
+            <span>{selectedRemoteModel.supportsImages ? '✓ 支持图片' : '无图片'}</span>
+          </div>
+        )}
 
         <div>
           <Checkbox

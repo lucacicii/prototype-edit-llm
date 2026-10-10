@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { Modal } from 'antd'
-import { Server, Settings2, ArrowLeft } from 'lucide-react'
+import { Server, Settings2, ArrowLeft, X } from 'lucide-react'
 import { ProviderPane } from './ProviderPane'
 import { AgentPane } from './AgentPane'
 import { AddProviderModal } from './AddProviderModal'
@@ -24,6 +24,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
         destroyOnClose
         centered
         className="settings-modal"
+        closeIcon={<X size={16} />}
         styles={{
           container: {
             padding: 0,

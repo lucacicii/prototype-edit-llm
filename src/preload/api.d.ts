@@ -288,6 +288,25 @@ export interface IAgentAPI {
     updated?: number
     keyStore?: { encrypted: boolean }
   }>
+  fetchRemoteModels: (params: {
+    provider?: string
+    api?: string
+    baseUrl: string
+    apiKey?: string
+  }) => Promise<{
+    ok: boolean
+    error?: string
+    models?: Array<{
+      id: string
+      name?: string
+      contextWindow?: number
+      maxTokens?: number
+      reasoning?: boolean
+      supportsImages?: boolean
+      thinkingLevels?: string[]
+      defaultThinkingLevel?: string
+    }>
+  }>
   run: (params: {
     /** 渲染层生成并传入，让「停止」按钮能按 run 取消（main 端不传则自己生成）。 */
     runId?: string

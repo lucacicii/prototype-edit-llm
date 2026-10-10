@@ -79,7 +79,7 @@ export const AgentPane: React.FC = () => {
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-y-auto p-5 space-y-6">
-      <header className="flex items-center justify-between pb-3 border-b border-slate-800">
+      <header className="flex items-center justify-between pb-3 pr-14 border-b border-slate-800">
         <div>
           <h2 className="text-sm font-bold text-slate-100">通用与 Agent 运行时</h2>
           <p className="text-xs text-slate-400">检测本机 Thunder-Runtime 内核状态与调优 Agent 运行参数</p>

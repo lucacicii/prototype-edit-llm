@@ -65,6 +65,8 @@ const agentApi = {
     ipcRenderer.invoke('agent:delete-provider', params),
   // 改端点也是服务商级的：写一次整组，不能逐条 saveModel（会被自己的同组撞死）。
   saveProvider: (input: any) => ipcRenderer.invoke('agent:save-provider', input),
+  fetchRemoteModels: (params: { provider?: string; api?: string; baseUrl: string; apiKey?: string }) =>
+    ipcRenderer.invoke('agent:fetch-remote-models', params),
   run: (params: any) => ipcRenderer.invoke('agent:run', params),
   cancel: (runId: string) => ipcRenderer.invoke('agent:cancel', runId),
   onStreamEvent: (callback: (frame: any) => void) => {
