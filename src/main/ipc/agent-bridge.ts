@@ -8,7 +8,8 @@
  */
 
 import { BrowserWindow, ipcMain } from 'electron'
-import { promises as fs } from 'fs'
+import { promises as fs, existsSync } from 'fs'
+import { homedir } from 'os'
 import * as path from 'path'
 import { BrowserViewManager } from '../browser-view-manager'
 import { activePrototypeFile } from '../app-paths'
@@ -54,6 +55,9 @@ export interface AgentRunParams {
   attachments?: { name: string; mimeType: string; data: string }[]
 }
 
+/** Files 「从 ~/.thunder 导入」 copies into the isolated root (overwriting). */
+const IMPORTABLE_THUNDER_FILES = ['models.json', 'auth.json', 'models_metadata.json'] as const
+
 /** The catalog minus secrets: the renderer only learns whether a key exists. */
 function redactCatalog(catalog: ThunderModelCatalog) {
   return catalog.models.map(({ apiKey, ...model }) => ({
@@ -63,7 +67,7 @@ function redactCatalog(catalog: ThunderModelCatalog) {
 }
 
 export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient {
-  const client = new RuntimeClient()
+  const client = new RuntimeClient({ workspaceDir: options.workspaceDir })
   // Without a listener an EventEmitter 'error' would take the whole app down;
   // a broken/missing runtime should only fail the run, never the window.
   client.on('error', (err: Error) => {
@@ -187,6 +191,38 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
     } catch (err: any) {
       return { ok: false, error: err?.message ?? String(err) }
     }
+  })
+
+  /**
+   * 「从 ~/.thunder 导入」：把真实用户目录里的 thunder 配置拷进当前数据根。
+   *
+   * 与首启种子的区别是这是**显式用户动作**，所以允许覆盖已有文件。dev 下有效根
+   * 就是 `~/.thunder` 本身，短路成 no-op（没有“导入到自己”这回事）。
+   */
+  ipcMain.handle('agent:import-thunder-home', async () => {
+    const source = path.join(homedir(), '.thunder')
+    const root = process.env.THUNDER_CONFIG_DIR?.trim() || source
+    if (path.resolve(root) === path.resolve(source)) {
+      return { ok: true, copied: [] as string[], missing: [] as string[], root, source }
+    }
+
+    const copied: string[] = []
+    const missing: string[] = []
+    try {
+      await fs.mkdir(root, { recursive: true })
+      for (const name of IMPORTABLE_THUNDER_FILES) {
+        const from = path.join(source, name)
+        if (!existsSync(from)) {
+          missing.push(name)
+          continue
+        }
+        await fs.copyFile(from, path.join(root, name))
+        copied.push(name)
+      }
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? String(err), copied, missing, root, source }
+    }
+    return { ok: true, copied, missing, root, source }
   })
 
   ipcMain.handle('agent:tools', () => agent.toolSpecs)

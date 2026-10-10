@@ -18,6 +18,7 @@
 import { promises as fs, existsSync, readFileSync } from 'fs'
 import { homedir } from 'os'
 import * as path from 'path'
+import { isPackaged } from '../app-paths'
 import { RuntimeModel } from './runtime-client'
 import { findThunderModel, ThunderModelCatalog } from './thunder-models'
 
@@ -143,7 +144,10 @@ export function loadModelConfig(workspaceDir?: string): LoadedConfig {
     : path.join(homedir(), CONFIG_FILE)
 
   const fromWorkspace = workspaceDir ? readConfigFile(workspacePath) : null
-  const fromHome = readConfigFile(path.join(homedir(), CONFIG_FILE))
+  // The packaged app keeps its config under userData; reaching into the end
+  // user's home as well would add a second, invisible configuration source.
+  // Dev keeps the fallback — that is where a developer's own file lives.
+  const fromHome = isPackaged() ? null : readConfigFile(path.join(homedir(), CONFIG_FILE))
   const fileConfig = fromWorkspace ?? fromHome ?? {}
   const source: ConfigSource = fromWorkspace ? 'workspace' : fromHome ? 'home' : 'none'
 

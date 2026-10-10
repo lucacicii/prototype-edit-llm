@@ -16,6 +16,7 @@
  * 难查得多。
  */
 
+import { execFileSync } from 'child_process'
 import { promises as fsp, existsSync, statSync } from 'fs'
 import { dirname, join, relative, resolve } from 'path'
 import { fileURLToPath } from 'url'
@@ -99,11 +100,63 @@ function stageBridge() {
   return Promise.all(files.map((f) => stage(join(srcDir, f), join(sidecarRoot, 'thunder-bridge', f))))
 }
 
+/**
+ * 记下这些侧车来自哪一版 thunder，随包发到 Resources/thunder-revision.txt。
+ *
+ * 侧车是从另一个仓库拷来的二进制，asar 里查不到任何线索；而 thunder 的接口面
+ * （协议的帧形状、数据根语义）会随版本变，所以「宿主内嵌的子包是哪一版」必须是
+ * 个能查的事实 —— 现场排查时第一个要问的就是它。就绪表里也会显示。
+ */
+async function stageRevision() {
+  const rev = readGitRevision()
+  const version = await readCargoVersion()
+  if (!rev) {
+    warnings.push(
+      `读不到 thunder 的 git revision（${thunderRepo} 不是 git 仓库，或没有 git）——` +
+        ` 溯源戳里记 unknown，出问题时无法定位是哪一版。`
+    )
+  }
+  const content =
+    [
+      `thunder ${version ?? 'unknown'}`,
+      `commit ${rev ?? 'unknown'}`,
+      `from ${thunderRepo}`
+    ].join('\n') + '\n'
+  const to = join(sidecarRoot, 'thunder-revision.txt')
+  await fsp.mkdir(dirname(to), { recursive: true })
+  await fsp.writeFile(to, content, 'utf-8')
+  staged.push({
+    to: relative(repoRoot, to),
+    from: '<generated>',
+    size: Buffer.byteLength(content)
+  })
+}
+
+function readGitRevision() {
+  try {
+    return execFileSync('git', ['-C', thunderRepo, 'rev-parse', '--short', 'HEAD'], {
+      encoding: 'utf-8'
+    }).trim()
+  } catch {
+    return null
+  }
+}
+
+async function readCargoVersion() {
+  try {
+    const raw = await fsp.readFile(join(thunderRepo, 'Cargo.toml'), 'utf-8')
+    return raw.match(/^version\s*=\s*"([^"]+)"/m)?.[1] ?? null
+  } catch {
+    return null
+  }
+}
+
 async function main() {
   await fsp.rm(sidecarRoot, { recursive: true, force: true })
 
   for (const binary of BINARIES) await stageBinary(binary)
   await stageBridge()
+  await stageRevision()
 
   const hard = problems
   if (staged.length) {

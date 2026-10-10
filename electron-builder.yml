@@ -32,6 +32,10 @@ extraResources:
     to: bin
   - from: build/sidecars/thunder-bridge
     to: thunder-bridge
+  # 溯源戳：这批侧车来自哪一版 thunder（由 scripts/prepare-sidecars.mjs 生成）。
+  # 就绪表里显示它，出问题时才知道内嵌的子包是哪一版。
+  - from: build/sidecars/thunder-revision.txt
+    to: thunder-revision.txt
   # 预览宿主本体。
   - from: runtime-host
     to: runtime-host

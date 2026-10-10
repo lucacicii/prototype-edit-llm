@@ -103,6 +103,12 @@ export type RuntimeFrame =
 export interface RuntimeClientOptions {
   /** Path to the `thunder-runtime` binary; auto-detected when omitted. */
   binaryPath?: string
+  /**
+   * Working directory for the runtime process. thunder resolves its
+   * project-level lookups (`.agents/skills`, `skills`, `./.thunder`) relative to
+   * cwd, so letting it inherit means a Finder-launched packaged app probes `/`.
+   */
+  workspaceDir?: string
 }
 
 interface Pending {
@@ -127,7 +133,13 @@ export class RuntimeClient extends EventEmitter {
     if (this.process) return
 
     const binary = this.options.binaryPath || resolveRuntimeBinary()
-    this.process = spawn(binary, [], { stdio: ['pipe', 'pipe', 'inherit'] })
+    this.process = spawn(binary, [], {
+      stdio: ['pipe', 'pipe', 'inherit'],
+      // Pinned rather than inherited: thunder probes `.agents/skills`, `skills`
+      // and `./.thunder` relative to cwd, and an inherited cwd is whatever the
+      // OS launcher chose — `/` for a double-clicked .app.
+      cwd: this.options.workspaceDir
+    })
     this.reader = readline.createInterface({ input: this.process.stdout!, crlfDelay: Infinity })
     this.reader.on('line', (line) => this.onLine(line))
 

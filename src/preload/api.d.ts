@@ -159,6 +159,8 @@ export interface IAgentAPI {
     path?: string
     envLocked?: boolean
     runtimePath?: string
+    /** 就绪表：runtime / Node / thunder 数据根 / pi-ai bridge，打包版缺哪环一眼可见。 */
+    readiness?: Array<{ label: string; ok: boolean; detail: string }>
     /** Models read from ~/.thunder (no secrets, `hasApiKey` only). */
     models?: Array<{
       selectionId: string
@@ -186,6 +188,15 @@ export interface IAgentAPI {
   }>
   setConfig: (config: any) => Promise<{ ok: boolean; error?: string; path?: string }>
   tools: () => Promise<Array<{ name: string; description: string; effect?: string }>>
+  /** 把真实 `~/.thunder` 的配置拷进隔离根；dev 下（根就是 ~/.thunder）是 no-op。 */
+  importThunderHome: () => Promise<{
+    ok: boolean
+    error?: string
+    copied?: string[]
+    missing?: string[]
+    root?: string
+    source?: string
+  }>
   run: (params: {
     /** 渲染层生成并传入，让「停止」按钮能按 run 取消（main 端不传则自己生成）。 */
     runId?: string

@@ -56,6 +56,16 @@
       >
         刷新列表
       </el-button>
+      <el-button
+        v-if="mode === 'thunder'"
+        size="small"
+        text
+        type="primary"
+        :loading="importing"
+        @click="handleImport"
+      >
+        从 ~/.thunder 导入
+      </el-button>
     </div>
     <div class="status-path" v-if="mode === 'thunder'">
       {{ models.length ? `读取自 ${modelSources.join(' , ')}` : '未在 .thunder 中找到任何模型配置' }}
@@ -68,7 +78,7 @@
         type="info"
         :closable="false"
         show-icon
-        title="没有读到模型。请确认 ~/.thunder/models.json 存在，或切到「手动填写」。"
+        title="没有读到模型。可点上方「从 ~/.thunder 导入」把本机配置拷进来，或切到「手动填写」。"
         style="margin-bottom: 12px;"
       />
 
@@ -307,6 +317,7 @@ const envLocked = ref(false)
 const loading = ref(false)
 const checking = ref(false)
 const saving = ref(false)
+const importing = ref(false)
 const runtimeOk = ref<boolean | null>(null)
 const runtimeVersion = ref('')
 const runtimeError = ref('')
@@ -404,6 +415,35 @@ async function load() {
     void handleCheck()
   } finally {
     loading.value = false
+  }
+}
+
+/**
+ * 「从 ~/.thunder 导入」：把本机真实用户目录里的 thunder 配置拷进当前数据根。
+ * 显式动作，允许覆盖；打包版跑完重新 load()，就绪表与模型列表一起刷新。
+ */
+async function handleImport() {
+  if (!window.agent?.importThunderHome) return
+  importing.value = true
+  try {
+    const res = await window.agent.importThunderHome()
+    if (!res?.ok) {
+      ElMessage.error(`导入失败：${res?.error ?? '未知错误'}`)
+      return
+    }
+    const copied = res.copied ?? []
+    if (copied.length) {
+      ElMessage.success(`已导入 ${copied.join('、')}`)
+    } else {
+      ElMessage.info(
+        res.missing?.length
+          ? `~/.thunder 里没有 ${res.missing.join('、')}`
+          : '当前数据根就是 ~/.thunder，无需导入'
+      )
+    }
+    await load()
+  } finally {
+    importing.value = false
   }
 }
 

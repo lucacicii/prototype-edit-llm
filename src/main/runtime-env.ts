@@ -15,11 +15,11 @@
  * Dev is untouched — the user's own `node` is the right one there.
  */
 
-import { promises as fs, existsSync } from 'fs'
+import { promises as fs, existsSync, readFileSync } from 'fs'
 import { homedir } from 'os'
 import { delimiter, join } from 'path'
 import { spawn } from 'child_process'
-import { binDir, isPackaged, resourcesDir } from './app-paths'
+import { binDir, isPackaged, resourcesDir, thunderDataDir } from './app-paths'
 import { resolveRuntimeBinary } from './agent/runtime-client'
 
 export interface RuntimeProvisionReport {
@@ -30,6 +30,11 @@ export interface RuntimeProvisionReport {
   /** Directory handed to thunder as `THUNDER_BRIDGE_SRC` (the pi-ai bridge), or null. */
   bridgeSrc: string | null
   bridgeOk: boolean
+  /** thunder's user data root, handed over as `THUNDER_CONFIG_DIR`, or null in dev. */
+  dataRoot: string | null
+  dataRootOk: boolean
+  /** Files seeded from the real `~/.thunder` on first run. */
+  seeded: string[]
   /** Non-fatal problems worth surfacing in the model settings dialog. */
   problems: string[]
 }
@@ -40,6 +45,9 @@ let report: RuntimeProvisionReport = {
   nodeShimOk: false,
   bridgeSrc: null,
   bridgeOk: false,
+  dataRoot: null,
+  dataRootOk: false,
+  seeded: [],
   problems: []
 }
 
@@ -56,6 +64,25 @@ export interface ReadinessItem {
 
 /** thunder 的模型调用链上，按执行顺序排列的三环。 */
 export const MIN_NODE_MAJOR = 22
+
+/**
+ * 「内嵌的 thunder 是哪一版」——打包时由 scripts/prepare-sidecars.mjs 写进
+ * `Resources/thunder-revision.txt`。子包化之后这条必须是可查的事实：协议帧的
+ * 形状与数据根语义都随 thunder 版本变，现场排查第一个要问的就是它。
+ */
+function readSidecarRevision(): string | null {
+  const resources = resourcesDir()
+  if (!resources) return null
+  try {
+    const raw = readFileSync(join(resources, 'thunder-revision.txt'), 'utf-8')
+    const version = raw.match(/^thunder\s+(\S+)/m)?.[1]
+    const commit = raw.match(/^commit\s+(\S+)/m)?.[1]
+    if (!version || version === 'unknown') return null
+    return commit && commit !== 'unknown' ? `${version}（${commit}）` : version
+  } catch {
+    return null
+  }
+}
 
 function findNodeOnPath(): string | null {
   const names = process.platform === 'win32' ? ['node.exe'] : ['node', 'nodejs']
@@ -109,10 +136,11 @@ export async function agentReadiness(): Promise<ReadinessItem[]> {
   const items: ReadinessItem[] = []
 
   const runtime = resolveRuntimeBinary()
+  const revision = readSidecarRevision()
   items.push({
     label: 'thunder-runtime（agent 内核）',
     ok: existsSync(runtime),
-    detail: runtime
+    detail: runtime + (revision ? ` ｜ 内嵌 thunder ${revision}` : '')
   })
 
   // thunder 调模型时会用 Node 起一个跑 pi-ai 的子进程，而 bridge 自己要求 >= 22
@@ -133,7 +161,20 @@ export async function agentReadiness(): Promise<ReadinessItem[]> {
       : 'PATH 里找不到名为 node / nodejs 的可执行文件'
   })
 
-  // bridge 真正执行的位置是 thunder 铺出来的 ~/.thunder/bridge（process.rs:106-138），
+  // thunder 的用户数据根：一旦设了它，thunder 写的一切——包括下面那行检查的 bridge
+  // 安装目录——都落在它下面，而不是 ~/.thunder。dev 不设，用开发者自己的 ~/.thunder。
+  const dataRoot = process.env.THUNDER_CONFIG_DIR
+  items.push({
+    label: 'thunder 数据根',
+    // 只有「打包态没建成根」才算失败；dev 不设这个变量是正常状态。
+    ok: dataRoot ? report.dataRootOk : true,
+    detail: dataRoot
+      ? `${dataRoot}${report.dataRootOk ? '' : '（创建失败）'} ｜ 与 ~/.thunder 隔离` +
+        (report.seeded.length ? ` ｜ 首启预置 ${report.seeded.join('、')}` : '')
+      : `${join(homedir(), '.thunder')} ｜ 未隔离（dev，或未设 THUNDER_CONFIG_DIR）`
+  })
+
+  // bridge 真正执行的位置是 thunder 铺出来的 <根>/bridge（process.rs:106-138），
   // 源目录由 $THUNDER_BRIDGE_SRC 决定；没设时 Rust 落回烤进二进制的
   // CARGO_MANIFEST_DIR/runner —— 那个路径只在构建机存在，打包版必须靠随包的
   // Resources/thunder-bridge 顶掉它。
@@ -167,6 +208,37 @@ function shimSource(execPath: string): string {
     `ELECTRON_RUN_AS_NODE=1 exec "${quoteForSh(execPath)}" "$@"`,
     ''
   ].join('\n')
+}
+
+/** The thunder files that carry a *choice* (which providers, which keys) rather than state. */
+/** The thunder files that carry a *choice* (which providers, which keys) rather than state. */
+const SEEDED_THUNDER_FILES = ['models.json', 'auth.json'] as const
+
+/**
+ * First-run seed: copy the provider registry and credentials out of the real
+ * `~/.thunder`, so a fresh install can call a model without retyping anything.
+ *
+ * Idempotent — an existing target is never overwritten and the source is only
+ * read. Everything else thunder keeps (skills, plugins, memory, mcp.json) is
+ * deliberately *not* copied: first launch stays predictable, and the settings
+ * dialog's 「从 ~/.thunder 导入」button covers the deliberate case.
+ */
+async function seedThunderDataDir(dataRoot: string, problems: string[]): Promise<string[]> {
+  const seeded: string[] = []
+  const sourceRoot = join(homedir(), '.thunder')
+  for (const name of SEEDED_THUNDER_FILES) {
+    const target = join(dataRoot, name)
+    if (existsSync(target)) continue
+    const source = join(sourceRoot, name)
+    if (!existsSync(source)) continue
+    try {
+      await fs.copyFile(source, target)
+      seeded.push(name)
+    } catch (err: any) {
+      problems.push(`无法从 ${source} 预置 ${name}：${err?.message ?? err}`)
+    }
+  }
+  return seeded
 }
 
 /**
@@ -212,10 +284,41 @@ export async function applyPackagedRuntimeEnv(): Promise<void> {
     problems.push(`随包的 pi-ai bridge 缺失（期望 ${bridgeSrc ?? '<resources>'}/bridge.mjs）`)
   }
 
-  report = { packaged: true, nodeShim: shimPath, nodeShimOk, bridgeSrc, bridgeOk, problems }
+  // 3. thunder's user data root. Everything thunder owns for this user —
+  //    models.json, auth.json, models_metadata.json, the bridge install,
+  //    conversations, scratchpad, plugins — resolves under this one variable
+  //    (thunder-agent-loop/src/core/paths.rs), so a packaged app touches none of
+  //    the end user's ~/.thunder. Both spawned binaries inherit it from here:
+  //    runtime-client passes no env at all, thunder-client copies process.env.
+  const dataRoot = thunderDataDir()
+  let dataRootOk = false
+  let seeded: string[] = []
+  try {
+    await fs.mkdir(dataRoot, { recursive: true })
+    process.env.THUNDER_CONFIG_DIR = dataRoot
+    dataRootOk = true
+    seeded = await seedThunderDataDir(dataRoot, problems)
+  } catch (err: any) {
+    problems.push(`无法建立 thunder 数据根（${dataRoot}）：${err?.message ?? err}`)
+  }
+
+  report = {
+    packaged: true,
+    nodeShim: shimPath,
+    nodeShimOk,
+    bridgeSrc,
+    bridgeOk,
+    dataRoot,
+    dataRootOk,
+    seeded,
+    problems
+  }
   if (problems.length) {
     console.warn('[runtime-env] 打包运行时环境不完整：\n  - ' + problems.join('\n  - '))
   } else {
-    console.log(`[runtime-env] node 垫片 → ${shimPath}；bridge → ${bridgeSrc}`)
+    console.log(
+      `[runtime-env] node 垫片 → ${shimPath}；bridge → ${bridgeSrc}；thunder 数据根 → ${dataRoot}` +
+        (seeded.length ? `（首启预置 ${seeded.join('、')}）` : '')
+    )
   }
 }
