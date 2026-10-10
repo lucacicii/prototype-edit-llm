@@ -173,6 +173,12 @@ export interface IAgentAPI {
       api: string
       baseUrl: string
       hasApiKey: boolean
+      /**
+       * 密钥从哪来。`hasApiKey` 一个布尔说不清：全局的
+       * PROTOTYPE_AGENT_API_KEY 会让每个服务商都显示「已保存」，
+       * 所以「清除已存密钥」得靠这个字段判断该不该出现。
+       */
+      keySource?: 'stored' | 'env' | null
       reasoning: boolean
       contextWindow: number
       maxTokens: number
@@ -183,6 +189,11 @@ export interface IAgentAPI {
       unavailableReason?: string
       /** 支持的输入模态；含 'image' 才吃图。 */
       input?: string[]
+      /** 以下四项是原样透传的字段，编辑时要一并回传，否则会被 upsert 丢掉。 */
+      headers?: Record<string, string>
+      thinkingLevelMap?: Record<string, string | null>
+      cost?: Record<string, unknown>
+      promptCache?: Record<string, unknown>
     }>
     /** 模型库文件位置（providers.json）。 */
     libraryPath?: string
@@ -237,6 +248,45 @@ export interface IAgentAPI {
     error?: string
     /** 删掉的正是当前选中的模型，引用也一并清了。 */
     clearedSelection?: boolean
+  }>
+  /**
+   * 删除一个服务商：它名下的全部模型 + 它的密钥。
+   *
+   * 服务商就是共享一个 provider id 的那组模型，所以「删服务商」＝删整组。
+   * 库里没有这个 id 时返回 `ok:false`，不像 deleteModel 那样静默无操作 ——
+   * 调用方是从列表里点进来的，「它不在」是需要知道的信息。
+   */
+  deleteProvider: (params: { provider: string }) => Promise<{
+    ok: boolean
+    error?: string
+    provider?: string
+    /** 跟着删掉的模型条数。 */
+    removed?: number
+    /** 删掉的正是当前选中模型所属的服务商，引用也一并清了。 */
+    clearedSelection?: boolean
+    /** 顺带清掉的孤儿密钥（库中已无对应 provider id）。 */
+    droppedKeys?: string[]
+  }>
+  /**
+   * 改一个服务商的端点（api + baseUrl），**一次写完整组**。
+   *
+   * 不能逐条 `saveModel`：`validateModel` 拿候选去比**磁盘上还没改的**同组模型，
+   * 所以逐条写的第一次就会被自己的同组撞死，永远写不进去。端点属于服务商。
+   * 密钥可选：`apiKey` 留空＝保持，要清空显式传 `clearApiKey`。
+   */
+  saveProvider: (input: {
+    provider: string
+    api: string
+    baseUrl: string
+    apiKey?: string
+    clearApiKey?: boolean
+  }) => Promise<{
+    ok: boolean
+    error?: string
+    provider?: string
+    /** 跟着改写的模型条数。 */
+    updated?: number
+    keyStore?: { encrypted: boolean }
   }>
   run: (params: {
     /** 渲染层生成并传入，让「停止」按钮能按 run 取消（main 端不传则自己生成）。 */

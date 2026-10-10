@@ -28,9 +28,11 @@ import {
   loadLibrary,
   ModelLibrary,
   removeModel,
+  removeProvider,
   saveLibrary,
   selectionId,
   toRuntimeModel,
+  updateProviderEndpoint,
   upsertModel,
   validateModel
 } from './provider-store'
@@ -285,8 +287,8 @@ export async function resolveAgentModel(workspaceDir: string): Promise<ResolvedA
       workspacePath: loaded.workspacePath,
       library,
       reason: library.models.length
-        ? '尚未选择模型。请在「⚙️ 模型设置」里从模型库中挑一个。'
-        : '模型库是空的。请在「⚙️ 模型设置」里添加一个模型（provider / id / api / baseUrl / 密钥）。',
+        ? '尚未选择模型。请在「设置 → 模型服务」里从模型库中挑一个。'
+        : '模型库是空的。请在「设置 → 模型服务」里添加一个服务商（provider / id / api / baseUrl / 密钥）。',
       migrated: migrated.length ? migrated : undefined
     }
   }
@@ -305,7 +307,7 @@ export async function resolveAgentModel(workspaceDir: string): Promise<ResolvedA
       reason:
         `模型库中没有 ${selectionId(reference)}。它可能已被删除，` +
         `也可能来自旧版配置（那时模型清单在 ~/.thunder，本版已不再读取）。` +
-        `请在「⚙️ 模型设置」里用「新建模型」把它的 provider / id / api / baseUrl / 密钥填一遍。`,
+        `请在「设置 → 模型服务」里添加这个服务商，把 provider / id / api / baseUrl / 密钥填一遍。`,
       migrated: migrated.length ? migrated : undefined
     }
   }
@@ -340,5 +342,13 @@ export async function isConfigured(workspaceDir: string): Promise<boolean> {
 }
 
 /** Re-exported so the IPC layer has one import for library mutations. */
-export { loadLibrary, removeModel, saveLibrary, upsertModel, validateModel }
+export {
+  loadLibrary,
+  removeModel,
+  removeProvider,
+  saveLibrary,
+  updateProviderEndpoint,
+  upsertModel,
+  validateModel
+}
 export type { LibraryModel, ModelLibrary }

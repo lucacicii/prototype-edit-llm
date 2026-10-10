@@ -21,9 +21,11 @@ import {
   loadModelConfig,
   ModelLibrary,
   removeModel,
+  removeProvider,
   resolveAgentModel,
   saveLibrary,
   saveModelConfig,
+  updateProviderEndpoint,
   upsertModel,
   validateModel
 } from '../agent/model-config'
@@ -33,12 +35,19 @@ import {
   DEFAULT_MAX_TOKENS,
   DEFAULT_THINKING_LEVELS,
   LibraryModel,
+  providerIds,
   selectionId,
   SUPPORTED_APIS,
   THINKING_LEVEL_VOCABULARY,
   thinkingLevelsFor
 } from '../agent/provider-store'
-import { encryptionAvailable, getApiKey, providersWithKeys, setApiKey } from '../agent/secrets'
+import {
+  encryptionAvailable,
+  getApiKey,
+  providersWithKeys,
+  pruneKeys,
+  setApiKey
+} from '../agent/secrets'
 
 export interface AgentRunParams {
   runId?: string
@@ -68,14 +77,30 @@ export interface AgentRunParams {
 
 /**
  * The library as the renderer is allowed to see it: no secrets, and the
- * availability verdict computed here rather than in the UI, so the dialog and
- * the composer cannot disagree about whether a model is usable.
+ * availability verdict computed here rather than in the UI, so the settings
+ * page and the composer cannot disagree about whether a model is usable.
+ *
+ * `keySource` is here because `hasApiKey` on its own lies. A global
+ * `PROTOTYPE_AGENT_API_KEY` makes *every* provider look keyed, so a page reading
+ * only the boolean would show「已保存（留空则不变）」and offer a
+ * 「清除已存密钥」that clears nothing. Saying where the key comes from lets the
+ * UI tell the truth, and disable that control when nothing is stored.
+ *
+ * The four optional passthrough fields are carried for a duller reason: an edit
+ * sends back everything it was given, so anything missing here is dropped. The
+ * settings page rewrites *every* model of a provider when its endpoint changes,
+ * so an omission would not cost one entry — it would cost the whole group.
  */
 function redactLibrary(library: ModelLibrary) {
   const keyed = new Set(providersWithKeys())
   const envKey = Boolean(process.env.PROTOTYPE_AGENT_API_KEY?.trim())
   return library.models.map((model) => {
-    const hasApiKey = keyed.has(model.provider) || envKey
+    const keySource: 'stored' | 'env' | null = keyed.has(model.provider)
+      ? 'stored'
+      : envKey
+        ? 'env'
+        : null
+    const hasApiKey = keySource !== null
     const levels = thinkingLevelsFor(model)
     const availability = availabilityOf(model, hasApiKey)
     return {
@@ -86,11 +111,16 @@ function redactLibrary(library: ModelLibrary) {
       api: model.api,
       baseUrl: model.baseUrl,
       hasApiKey,
+      keySource,
+      headers: model.headers,
       reasoning: Boolean(model.reasoning),
       contextWindow: model.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
       maxTokens: model.maxTokens ?? DEFAULT_MAX_TOKENS,
       thinkingLevels: levels,
       defaultThinkingLevel: model.defaultThinkingLevel ?? levels[0],
+      thinkingLevelMap: model.thinkingLevelMap,
+      cost: model.cost,
+      promptCache: model.promptCache,
       available: availability.available,
       unavailableReason: availability.reason,
       input: model.input
@@ -314,6 +344,87 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
       return { ok: false, error: err?.message ?? String(err) }
     }
   })
+
+  /**
+   * Remove a whole provider: every model that carries its id, plus its
+   * credential.
+   *
+   * A provider is only the models sharing an id, so this is the delete
+   * `delete-model` cannot express. Unlike that one this *reports* a provider it
+   * could not find: the caller clicked a row in a list, so "it isn't there" is
+   * real information rather than a no-op to swallow.
+   */
+  ipcMain.handle('agent:delete-provider', async (_, params: { provider: string }) => {
+    try {
+      if (!params?.provider) return { ok: false, error: '需要 provider' }
+      const library = loadLibrary()
+      const removed = library.models.filter((m) => m.provider === params.provider).length
+      if (!removed) {
+        return { ok: false, error: `模型库中没有服务商「${params.provider}」` }
+      }
+
+      await saveLibrary(removeProvider(library, params.provider))
+      // One provider id names one gateway, so the key goes with it. pruneKeys
+      // rather than setApiKey(…, undefined) so a providers.json edited by hand
+      // — which can strand ids the library no longer mentions — is swept too.
+      const droppedKeys = await pruneKeys(new Set(providerIds(loadLibrary())))
+
+      const current = loadModelConfig(options.workspaceDir).config
+      let clearedSelection = false
+      if (current.model?.provider === params.provider) {
+        // normalizeConfig keeps the tuning and drops just the dangling reference.
+        await saveModelConfig(options.workspaceDir, { ...current, model: undefined })
+        clearedSelection = true
+      }
+
+      return { ok: true, provider: params.provider, removed, clearedSelection, droppedKeys }
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? String(err) }
+    }
+  })
+
+  /**
+   * Change a provider's endpoint across all of its models, in one write.
+   *
+   * See `updateProviderEndpoint` for why this is not N calls to `save-model`:
+   * `validateModel` checks a candidate against the models still on disk, so a
+   * per-model loop collides with its own group and can never land.
+   */
+  ipcMain.handle(
+    'agent:save-provider',
+    async (
+      _,
+      input: { provider: string; api: string; baseUrl: string; apiKey?: string; clearApiKey?: boolean }
+    ) => {
+      try {
+        const provider = typeof input?.provider === 'string' ? input.provider.trim() : ''
+        const api = typeof input?.api === 'string' ? input.api.trim() : ''
+        const baseUrl = typeof input?.baseUrl === 'string' ? input.baseUrl.trim() : ''
+        if (!provider || !api || !baseUrl) {
+          return { ok: false, error: '服务商标识 / API 协议 / Base URL 都是必填' }
+        }
+
+        const result = updateProviderEndpoint(loadLibrary(), provider, { api, baseUrl })
+        if (!result) return { ok: false, error: `模型库中没有服务商「${provider}」` }
+        await saveLibrary(result.library)
+
+        if (input.clearApiKey) {
+          await setApiKey(provider, undefined)
+        } else if (typeof input.apiKey === 'string' && input.apiKey.trim()) {
+          await setApiKey(provider, input.apiKey)
+        }
+
+        return {
+          ok: true,
+          provider,
+          updated: result.updated.length,
+          keyStore: keyStoreStatus()
+        }
+      } catch (err: any) {
+        return { ok: false, error: err?.message ?? String(err) }
+      }
+    }
+  )
 
   ipcMain.handle('agent:tools', () => agent.toolSpecs)
 

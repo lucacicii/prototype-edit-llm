@@ -25,6 +25,11 @@ export interface AgentModelView {
   api: string
   baseUrl: string
   hasApiKey: boolean
+  /**
+   * 密钥从哪来。光看 `hasApiKey` 会把环境变量提供的密钥说成「已保存」，
+   * 于是「清除已存密钥」点了也没反应 —— 界面要说实话就得看这个。
+   */
+  keySource?: 'stored' | 'env' | null
   reasoning: boolean
   contextWindow: number
   maxTokens: number
@@ -35,6 +40,15 @@ export interface AgentModelView {
   unavailableReason?: string
   /** 支持的输入模态；含 'image' 才吃图。 */
   input?: string[]
+  /**
+   * 原样透传的四个字段。它们不参与任何判定，只在这里过一手：编辑时要把读到的
+   * 全部内容回传给 saveModel，少一样就会被 upsert 丢掉。改服务商端点会重写整组
+   * 模型，漏掉它们就不是丢一条，而是丢一组。
+   */
+  headers?: Record<string, string>
+  thinkingLevelMap?: Record<string, string | null>
+  cost?: Record<string, unknown>
+  promptCache?: Record<string, unknown>
 }
 
 /** `get-config` 给出的、渲染层只读的三份词表（权威在主进程）。 */
@@ -50,6 +64,78 @@ const EMPTY_VOCABULARIES: AgentModelVocabularies = {
   apiOptions: [],
   thinkingVocabulary: [],
   defaults: { contextWindow: 0, maxTokens: 0, thinkingLevels: ['off'] }
+}
+
+/**
+ * 工作区级 tuning 的一整组字段。写它必须走 `saveTuning`，因为
+ * `agent:set-config` 是整体覆盖 —— 只写自己那几个字段会把模型引用一起抹掉。
+ */
+export interface AgentTuningPatch {
+  systemPrompt?: string
+  maxTurns?: number
+  temperature?: number
+  thinkingLevel?: string
+  requestTimeoutMs?: number
+}
+
+/**
+ * 一个服务商＝共享同一个 provider id 的那组模型。
+ *
+ * 存储里**没有** provider 实体（provider / api / baseUrl / 密钥都是模型上的
+ * 字段），所以服务商只能在渲染层派生 —— 这也意味着一个服务商至少在它名下有
+ * 一个模型时才存在，「添加服务商」必须同时收下第一个模型。
+ */
+export interface ProviderGroup {
+  provider: string
+  /** 组内模型共有的方言与端点。 */
+  api: string
+  baseUrl: string
+  models: AgentModelView[]
+  modelCount: number
+  hasApiKey: boolean
+  keySource: 'stored' | 'env' | null
+  availableCount: number
+  /** 第一个不可用模型的原因，给列表行做提示。 */
+  unavailableReason?: string
+  /** 组内 (api, baseUrl) 不一致 —— 只可能来自手改过的 providers.json。 */
+  endpointConflict: boolean
+}
+
+/**
+ * 按 provider 分组。顺序沿用 models 的顺序（`upsertModel` 已按 provider 再 id
+ * 排序），所以保存后列表位置稳定。
+ *
+ * 不变式是「一个 provider＝一个网关」，`validateModel` 在写入时保证它；但手改过
+ * 的文件可能违反，所以这里不静默取第一个 —— 把 `endpointConflict` 报出去。
+ */
+export function groupByProvider(models: AgentModelView[]): ProviderGroup[] {
+  const groups: ProviderGroup[] = []
+  for (const model of models) {
+    let group = groups.find((g) => g.provider === model.provider)
+    if (!group) {
+      group = {
+        provider: model.provider,
+        api: model.api,
+        baseUrl: model.baseUrl,
+        models: [],
+        modelCount: 0,
+        hasApiKey: false,
+        keySource: null,
+        availableCount: 0,
+        endpointConflict: false
+      }
+      groups.push(group)
+    }
+    group.models.push(model)
+    group.modelCount += 1
+    // 一个 provider 一把密钥，所以组内每一项的判定都一样，取第一个非空即可。
+    if (!group.keySource && model.keySource) group.keySource = model.keySource
+    if (model.hasApiKey) group.hasApiKey = true
+    if (model.available) group.availableCount += 1
+    if (!model.available && !group.unavailableReason) group.unavailableReason = model.unavailableReason
+    if (model.api !== group.api || model.baseUrl !== group.baseUrl) group.endpointConflict = true
+  }
+  return groups
 }
 
 // —— 模块级单例状态 ——
@@ -92,6 +178,9 @@ export function useAgentModelConfig() {
       ? selectedModel.value.thinkingLevels
       : vocabularies.value.defaults.thinkingLevels
   )
+
+  /** 设置页「模型服务」的服务商列表与详情都从这一份派生。 */
+  const providers = computed(() => groupByProvider(models.value))
 
   /** 上下文窗口上限（指标条的分母）。 */
   const selectedContextWindow = computed(() => selectedModel.value?.contextWindow ?? 0)
@@ -167,6 +256,29 @@ export function useAgentModelConfig() {
     await persist()
   }
 
+  /**
+   * 写工作区级 tuning（设置页「通用 · Agent」那一张卡）。
+   *
+   * 和 `persist` 一样必须先读回：`agent:set-config` 是整体覆盖，只写这几个
+   * tuning 字段会顺手把 `model` 抹掉 —— Agent 会立刻变成「尚未选择模型」。
+   * `patch` 里显式给的字段是权威（置空即清空），其余原样带回。
+   */
+  async function saveTuning(
+    patch: AgentTuningPatch
+  ): Promise<{ ok: boolean; error?: string; path?: string }> {
+    if (!window.agent?.getConfig || !window.agent?.setConfig) {
+      return { ok: false, error: 'agent 桥接不可用' }
+    }
+    const current = await window.agent.getConfig()
+    const res = await window.agent.setConfig({
+      ...(current.config ?? {}),
+      ...patch,
+      model: current.config?.model
+    })
+    if (res?.ok) await refresh()
+    return res ?? { ok: false, error: '未知错误' }
+  }
+
   async function selectThinkingLevel(value: string) {
     if (!value || envLocked.value) return
     thinkingLevel.value = value
@@ -175,6 +287,7 @@ export function useAgentModelConfig() {
 
   return {
     models,
+    providers,
     groupedModels,
     selectedModel,
     thinkingOptions,
@@ -191,6 +304,7 @@ export function useAgentModelConfig() {
     vocabularies,
     refresh,
     persist,
+    saveTuning,
     selectModel,
     selectThinkingLevel
   }
