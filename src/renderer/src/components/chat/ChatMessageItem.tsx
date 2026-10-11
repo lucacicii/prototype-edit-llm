@@ -6,6 +6,10 @@ import { ToolCallsState } from './ToolCallsState'
 import type { LiveSegment } from './useAgentChatStream'
 import type { PrototypeChatMessage } from '../../stores/usePrototypeStore'
 
+// 与 chat.css 中 .pc-bubble 的字号/行高保持一致，让用户纯文本与 Agent Markdown 同大。
+const BUBBLE_FONT_SIZE = 12.5
+const BUBBLE_LINE_HEIGHT = 1.65
+
 interface ChatMessageItemProps {
   message: PrototypeChatMessage
   index?: number
@@ -67,7 +71,9 @@ export function ChatMessageItem({
         }
         return (
           <div className="pc-bubble" key={`seg_text_${segmentIndex}`}>
-            <Markdown>{segment.text}</Markdown>
+            <Markdown fontSize={BUBBLE_FONT_SIZE} lineHeight={BUBBLE_LINE_HEIGHT}>
+              {segment.text}
+            </Markdown>
             {isStreaming && isLast && <span className="pc-caret" />}
           </div>
         )
@@ -89,7 +95,9 @@ export function ChatMessageItem({
             isUser ? (
               <div className="whitespace-pre-wrap">{message.content}</div>
             ) : (
-              <Markdown>{message.content}</Markdown>
+              <Markdown fontSize={BUBBLE_FONT_SIZE} lineHeight={BUBBLE_LINE_HEIGHT}>
+                {message.content}
+              </Markdown>
             )
           ) : isStreaming ? (
             <div className="pc-streaming-placeholder">

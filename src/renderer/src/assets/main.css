@@ -66,3 +66,36 @@ html, body, #root, #app {
   width: 100% !important;
   height: 100% !important;
 }
+
+/* 主工作区顶栏：按顶栏自身宽度（而非窗口宽度）逐级收起次要信息。
+ * 拖宽左侧两个面板时，顶栏会随之变窄，所以用 container query。 */
+.workspace-header {
+  container-type: inline-size;
+  container-name: workspace-header;
+}
+
+@container workspace-header (max-width: 860px) {
+  .wh-id {
+    display: none;
+  }
+}
+
+@container workspace-header (max-width: 720px) {
+  .wh-action-label {
+    display: none;
+  }
+  .wh-action {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+}
+
+@container workspace-header (max-width: 520px) {
+  .wh-tab-label {
+    display: none;
+  }
+  .wh-tab {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+}
