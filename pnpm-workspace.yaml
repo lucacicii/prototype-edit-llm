@@ -1,0 +1,13 @@
+# pnpm 11 build-script approval (replaces onlyBuiltDependencies)
+allowBuilds:
+  electron: true
+  '@parcel/watcher': true
+  electron-winstaller: true
+  esbuild: true
+
+# pnpm 11 defaults minimumReleaseAge to 1440 min (24h) and re-verifies committed
+# lockfile entries against it. These two were published <24h before they were
+# pinned in 48ac2ae, so exclude exactly those versions until they age out.
+minimumReleaseAgeExclude:
+  - '@lobehub/ui@5.57.3'
+  - 'lucide-react@1.55.0'

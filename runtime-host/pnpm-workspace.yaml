@@ -1,0 +1,6 @@
+# runtime-host is its own pnpm project (separate lockfile), not a member of
+# the parent workspace. This file makes it its own workspace root so the
+# parent's pnpm-workspace.yaml doesn't make installs here a no-op.
+allowBuilds:
+  esbuild: true
+  vue-demi: true
