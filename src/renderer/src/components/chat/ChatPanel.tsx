@@ -506,9 +506,13 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     })
 
     if (!res.ok) {
+      const errText = (res.error || '未知错误').trim()
+      const partial = res.partialContent?.trim()
       addChatMessage(currentPrototype.id, {
         role: 'assistant',
-        content: `生成异常: ${res.error ?? '未知错误'}`,
+        content:
+          `⚠️ **本次生成中断**\n\n${errText}` +
+          (partial ? `\n\n---\n\n**中断前已生成的部分内容：**\n\n${partial}` : ''),
         timestamp: Date.now()
       })
       return

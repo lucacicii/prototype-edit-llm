@@ -186,7 +186,7 @@ node scripts/fetch-thunder-binaries.mjs --from-release --arch linux-x64 --bless
 
 ---
 
-## 五、两个必须知道的坑
+## 五、三个必须知道的坑
 
 ### 1. 不要在 `src/main` 的字符串里写「静态 import」
 
@@ -201,6 +201,15 @@ electron-vite 的 `esmShimPlugin` 会在 bundle 命中 `__dirname` / `require(` 
 `techStack` 与 `entryFile` 必须永远一致。若项目目录里同时存在 `index.html` 与 `index.vue`，按「最新修改时间」判定入口会在两者间随机翻转，导致 `native-html` 项目被当成 `.vue` 去服务而 ERR_FAILED。
 
 `ProjectRunner.syncAndResolvePreviewUrl()` 在写入入口前会先删掉同层的其他入口候选，`syncProjectEntryAndStack()` 还会按内容声明校正栈并把内容归一到规范文件名（见 `project-store.ts` 的 `entryFileForStack` / `ENTRY_CANDIDATES`）。新增入口形态请只改这两个常量。
+
+### 3. thunder 的后台调用只认它自己的 `models.json`
+
+我们逐任务传给 daemon 的 `model_descriptor`（含本次要用的模型与 key）只影响**本次任务**。thunder 自己的后台调用 —— 自动命名会话、以后可能的摘要/工具 —— 走的是 thunder 的配置链：`$THUNDER_CONFIG_DIR/models.json`（`thunder-agent-providers/src/source.rs` 的 `ConfigSource::thunder_user`）。这个文件不存在时，thunder 退回内置目录（默认 `openai/gpt-4o`），在本应用里没有 key，于是每次任务结束都刷一条
+`WARN Auto title generation failed ... [no_utility_model]`，会话标题也一塌糊涂。
+
+所以 `src/main/agent/thunder-model-config.ts` 会把 app 的模型库镜像写入 `~/.prototype-studio/thunder/models.json`（0600，含明文 key —— thunder 没有 keyring 接口，这也是它只能待在隔离数据根、绝不能落进项目目录的原因），并显式钉住 `utilityModel`。写入时机有两处：`index.ts` 启动时、以及 `agent-bridge` 拉起 daemon 之前（内容不变则跳过写入）。
+
+新增 provider 字段时，记得同时更新 `thunder-model-config.ts` 的映射，否则 thunder 侧会缺字段（例如 `thinkingLevels` 缺失会让它重新联网探测）。
 
 ---
 

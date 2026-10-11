@@ -14,6 +14,7 @@ import { ProjectRunner } from './project-runner'
 import { setupPrototypeStoreIpc } from './project-store'
 import { workspaceDir } from './app-paths'
 import { applyPackagedRuntimeEnv } from './runtime-env'
+import { syncThunderModelConfig } from './agent/thunder-model-config'
 
 // 打包版的 userData 必须与 dev 分开，否则两边共用一份 localStorage、一份工作区；
 // 而 Electron 的 app.getName() 取自 package.json 的 name（prototype-edit-llm），
@@ -106,6 +107,11 @@ app.whenReady().then(async () => {
   // 先备好打包运行时（主要是把 thunder 的数据根挪出用户 home），再起任何子进程：
   // HostServerManager 与 thunder 都靠环境变量找东西。dev 下是空操作。
   await applyPackagedRuntimeEnv()
+
+  // thunder 的后台调用（自动命名会话等）只认它自己的 models.json，不认我们逐任务
+  // 传的 model_descriptor。这里同步一次，免得它退回没 key 的内置目录并报
+  // `[no_utility_model]`。agent-bridge 在拉起 daemon 前还会再同步一次。
+  await syncThunderModelConfig()
 
   // 启动 runtime-host 本地纯净 Vite 服务 (方案 C) 与静态预览服务器
   const hostManager = HostServerManager.getInstance()

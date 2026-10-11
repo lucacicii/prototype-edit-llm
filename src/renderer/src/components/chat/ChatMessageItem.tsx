@@ -171,7 +171,7 @@ export function ChatMessageItem({
               {copied ? <Check size={11} /> : <Copy size={11} />}
               <span>{copied ? '已复制' : '复制'}</span>
             </button>
-            {onRegenerate && !message.content?.startsWith('⚠️') && (
+            {onRegenerate && (
               <button
                 type="button"
                 className="pc-action-btn has-label"

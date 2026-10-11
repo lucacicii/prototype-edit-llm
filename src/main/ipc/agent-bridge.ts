@@ -17,6 +17,7 @@ import { resolveRuntimeBinary, RuntimeClient } from '../agent/runtime-client'
 import { PointedTarget, PrototypeAgent } from '../agent/prototype-agent'
 import { detectTechStack, stackInfo, TechStack } from '../agent/tech-stack'
 import { ThunderClient, getSharedThunderClient } from './thunder-client'
+import { syncThunderModelConfig } from '../agent/thunder-model-config'
 import { ProjectRunner } from '../project-runner'
 import {
   loadProjectItem,
@@ -146,6 +147,51 @@ function keyStoreStatus() {
   }
 }
 
+
+/**
+ * Turn a transport failure into something a person can act on.
+ *
+ * thunder reports a run that ended on an error as
+ * `FinishReason::Error (see observed error events for details)` — accurate in a
+ * log, useless in a chat bubble. The real reason (usually the provider's own
+ * HTTP error) arrives separately as an observed `error` event, captured here as
+ * `detail`. The provider text is kept verbatim underneath, because it is what a
+ * bug report needs.
+ */
+function describeAgentFailure(rawError: string, detail?: string): string {
+  const raw = (rawError || '').trim()
+  const d = (detail || '').trim()
+  const haystack = `${raw}\n${d}`
+  const generic = /FinishReason::Error|see observed error events/i.test(raw)
+
+  let hint: string | null = null
+  if (/\b429\b|rate[_ ]?limit|too many requests|temporarily unavailable|overloaded/i.test(haystack)) {
+    hint =
+      '模型服务商限流或暂时不可用（HTTP 429）。这类问题多出在上游，稍等几十秒重试通常即可恢复；若持续出现，可在设置里换一个模型。'
+  } else if (/\b401\b|\b403\b|invalid[_ ]?api[_ ]?key|unauthorized|authentication|no api key/i.test(haystack)) {
+    hint = '模型鉴权失败（401/403）。请在设置里检查该模型的 API Key 与 Base URL。'
+  } else if (/\b404\b|model[_ ]?not[_ ]?found|does not exist/i.test(haystack)) {
+    hint = '模型不存在，或该服务商不提供这个模型（404）。请在设置里确认模型 ID。'
+  } else if (/insufficient|quota|billing|balance/i.test(haystack)) {
+    hint = '账户额度不足或计费异常，请检查模型服务商账户。'
+  } else if (/timed? ?out|timeout|ETIMEDOUT|ECONNRESET|socket hang up/i.test(haystack)) {
+    hint = '网络超时或连接被中断，请检查网络后重试。'
+  }
+
+  const lines: string[] = []
+  if (hint) {
+    lines.push(hint)
+    if (d) lines.push(`原始错误：${d}`)
+  } else if (generic) {
+    lines.push('Agent 运行失败，未产出结果。')
+    lines.push(d ? `原始错误：${d}` : '（daemon 未上报具体原因，详情见运行日志。）')
+  } else {
+    lines.push(raw)
+    if (d && !raw.includes(d)) lines.push(`原始错误：${d}`)
+  }
+
+  return lines.filter(Boolean).join('\n\n')
+}
 
 function extractAllowedLevelsFromError(errorText: string): string[] | null {
   const lower = errorText.toLowerCase()
@@ -1004,6 +1050,8 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
       projectItem?.sessionId || `sess_${params.prototypeId || 'proto'}`
 
     let lastStats: Record<string, any> | undefined
+    /** Last non-recoverable AgentEvent::Error message; the daemon's own notice is generic. */
+    let lastErrorDetail = ''
     const broadcastSyncProject = async () => {
       if (isExternalWorkspace) {
         BrowserViewManager.getInstance().reload()
@@ -1031,6 +1079,10 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
     }
 
     try {
+      // thunder resolves its background/utility model (auto-titles) from its own
+      // models.json, not from the per-task descriptor we pass below. Refresh it
+      // before the daemon starts so those calls have a real model to use.
+      await syncThunderModelConfig()
       daemonClient.start()
       const taskResult = await daemonClient.runTask({
         taskId: runId,
@@ -1052,6 +1104,13 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
 
           if (ev.type === 'loop_complete' && ev.stats) {
             lastStats = ev.stats
+          }
+
+          // The daemon's own failure notice is generic ("see observed error
+          // events for details"), so keep the real reason here to put it in
+          // front of the user when the task rejects.
+          if (ev.type === 'error' && typeof ev.message === 'string' && ev.message.trim()) {
+            lastErrorDetail = ev.message.trim()
           }
 
           // When thunder-daemon modifies or creates a file via `write_file` or `bash`,
@@ -1112,7 +1171,7 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
           code: activeCode
         }
       }
-      return { ok: false, runId, error: errMsg }
+      return { ok: false, runId, error: describeAgentFailure(errMsg, lastErrorDetail) }
     } finally {
       active = null
     }

@@ -65,6 +65,8 @@ export interface RunOutcome {
   error?: string
   finishReason?: string
   finalContent?: string | null
+  /** 失败/中断前已经流出的正文，供调用方在报错时一并展示。 */
+  partialContent?: string
   code?: string
   techStack?: string
 }
@@ -374,7 +376,11 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
         })
 
         if (!res?.ok) {
-          return { ok: false, error: res?.error ?? '未知错误' }
+          return {
+            ok: false,
+            error: res?.error ?? '未知错误',
+            partialContent: liveTextOf(segmentsRef.current).trim() || undefined
+          }
         }
 
         // 结束原因带 failure notice 时，把它作为正文呈现给调用方。
@@ -398,7 +404,11 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
           techStack: res.techStack
         }
       } catch (err: any) {
-        return { ok: false, error: err?.message ?? String(err) }
+        return {
+          ok: false,
+          error: err?.message ?? String(err),
+          partialContent: liveTextOf(segmentsRef.current).trim() || undefined
+        }
       } finally {
         offStream?.()
         offQuestion?.()
