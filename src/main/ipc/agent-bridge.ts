@@ -16,6 +16,14 @@ import { agentReadiness } from '../runtime-env'
 import { resolveRuntimeBinary, RuntimeClient } from '../agent/runtime-client'
 import { PointedTarget, PrototypeAgent } from '../agent/prototype-agent'
 import { detectTechStack, stackInfo, TechStack } from '../agent/tech-stack'
+import { ThunderClient } from './thunder-client'
+import { ProjectRunner } from '../project-runner'
+import {
+  loadProjectItem,
+  projectDirFor,
+  syncProjectEntryAndStack
+} from '../project-store'
+import { ProjectWorkspaceManager } from '../project-workspace-manager'
 import {
   AgentConfigFile,
   loadLibrary,
@@ -156,6 +164,27 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
   let active: AgentRunParams | null = null
   let activeCode = ''
   let activeStack: TechStack = 'vue3-element'
+
+  // Full-capability Thunder Daemon client (`read_file`, `write_file`, `bash`, `grep`, `find`, `ls`, `ask_user_question`)
+  const daemonClient = new ThunderClient({ workspaceDir: options.workspaceDir })
+  daemonClient.on('error', (err: Error) => {
+    console.warn('[agent] thunder-daemon error:', err?.message ?? err)
+  })
+  daemonClient.on('user_question', (msg: any) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      win.webContents.send('agent:user-question', msg)
+    }
+  })
+  daemonClient.on('ui_request', (msg: any) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      win.webContents.send('agent:ui-request', msg)
+    }
+  })
+  try {
+    daemonClient.start()
+  } catch (err) {
+    console.warn('[agent] thunder-daemon deferred start:', err)
+  }
 
   /**
    * 落栈标记 + 必要时整页刷新预览。
@@ -471,11 +500,61 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
     }
   )
 
-  ipcMain.handle('agent:tools', () => agent.toolSpecs)
+  ipcMain.handle('agent:tools', () => [
+    {
+      name: 'ask_user_question',
+      description: '向产品经理发起结构化的单选/多选问题卡片，澄清产品形态、核心模块、风格与技术栈',
+      effect: 'read'
+    },
+    {
+      name: 'read_file',
+      description: '读取原型项目工作区内的源码文件',
+      effect: 'read'
+    },
+    {
+      name: 'write_file',
+      description: '创建或修改原型项目工作区内的源码文件',
+      effect: 'write'
+    },
+    {
+      name: 'ls',
+      description: '列出原型项目目录结构',
+      effect: 'read'
+    },
+    {
+      name: 'find',
+      description: '在原型项目中按文件名搜索',
+      effect: 'read'
+    },
+    {
+      name: 'grep',
+      description: '在原型项目中检索代码或文案内容',
+      effect: 'read'
+    },
+    {
+      name: 'bash',
+      description: '在原型项目工作区中执行构建、脚本或包管理命令',
+      effect: 'exec'
+    }
+  ])
+
+  ipcMain.handle(
+    'agent:answer-question',
+    async (
+      _,
+      params: { questionId: string; answers?: Record<string, any> | any; cancelled?: boolean }
+    ) => {
+      try {
+        if (!daemonClient) return { ok: false, error: 'daemon 未就绪' }
+        await daemonClient.answerQuestion(params)
+        return { ok: true }
+      } catch (err: any) {
+        return { ok: false, error: err?.message ?? String(err) }
+      }
+    }
+  )
 
   ipcMain.handle('agent:run', async (_, params: AgentRunParams) => {
-    // Same seam as agent:get-config, so the model a run uses is always the one
-    // the dialog last showed — including any legacy-config adoption it did.
     const resolved = await resolveAgentModel(options.workspaceDir)
     if (!resolved.model) {
       return { ok: false, error: `尚未配置模型。${resolved.reason ?? ''}`.trim() }
@@ -485,25 +564,195 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
     activeCode = params.code
     const runId = params.runId ?? `run_${Date.now()}`
 
-    try {
-      const outcome = await agent.run({
-        runId,
-        prompt: params.prompt,
-        history: (params.history ?? []).map((m) => m as any),
-        model: resolved.model,
-        config: resolved.config,
-        attachments: params.attachments
+    // Resolve the target independent project workspace directory
+    const wsManager = ProjectWorkspaceManager.getInstance()
+    const currentWs = wsManager.getCurrentWorkspace()
+    const isExternalWorkspace =
+      currentWs && currentWs.id !== 'default-host' && currentWs.rootPath
+    const projectDir = isExternalWorkspace
+      ? currentWs.rootPath!
+      : projectDirFor(params.prototypeId || 'blank-prototype')
+
+    await fs.mkdir(projectDir, { recursive: true })
+    const projectItem = !isExternalWorkspace ? await loadProjectItem(projectDir) : null
+    if (projectItem?.techStack) {
+      activeStack = projectItem.techStack
+    }
+
+    // Build enriched prompt with browser probe inspect/markup targets & runtime diagnostics
+    const contextSections: string[] = []
+    if (params.inspectTarget?.tagName) {
+      const t = params.inspectTarget
+      const loc = t.sourceFile
+        ? `${t.sourceFile}${t.sourceLine ? ':' + t.sourceLine : ''}${
+            t.sourceLocated === false ? ' (文本推断位置)' : ' (探针精确位置)'
+          }`
+        : `主入口文件 ${projectItem?.entryFile || 'index.html'}`
+      contextSections.push(
+        [
+          `【浏览器探针圈选元素】`,
+          `- 标签: <${t.tagName}>`,
+          t.componentName ? `- 组件: <${t.componentName}>` : '',
+          t.className ? `- 类名: ${t.className}` : '',
+          t.selector ? `- 选择器: ${t.selector}` : '',
+          `- 源码位置: ${loc}`,
+          t.text ? `- 元素文本: "${t.text}"` : ''
+        ]
+          .filter(Boolean)
+          .join('\n')
+      )
+    }
+
+    if (params.markupTargets?.length) {
+      const mLines = ['【浏览器探针圈改区域】']
+      params.markupTargets.forEach((m, idx) => {
+        const el = m.element
+        const loc = el?.sourceFile
+          ? `${el.sourceFile}${el.sourceLine ? ':' + el.sourceLine : ''}`
+          : projectItem?.entryFile || 'index.html'
+        mLines.push(
+          `${idx + 1}. 批注要求: "${m.note}" | 目标元素: <${el?.tagName || 'div'}> | 源码位置: ${loc}${
+            el?.selector ? ` | 选择器: ${el.selector}` : ''
+          }`
+        )
       })
-      return { ok: true, runId, ...outcome }
+      contextSections.push(mLines.join('\n'))
+    }
+
+    const diag = BrowserViewManager.getInstance().getDiagnostics()
+    if (diag.hasErrors && diag.errors.length > 0) {
+      const errLines = diag.errors.slice(0, 6).map((e) => `- ${e.text}`)
+      contextSections.push(`【当前浏览器运行期报错 (${diag.errorCount} 项)】\n${errLines.join('\n')}`)
+    }
+
+    const fullPrompt = contextSections.length
+      ? `${contextSections.join('\n\n')}\n\n${params.prompt}`
+      : params.prompt
+
+    const sessionId =
+      projectItem?.sessionId || `sess_${params.prototypeId || 'proto'}`
+
+    let lastStats: Record<string, any> | undefined
+    const broadcastSyncProject = async () => {
+      if (isExternalWorkspace) {
+        BrowserViewManager.getInstance().reload()
+        return
+      }
+      const prevStack = activeStack
+      const synced = await ProjectRunner.getInstance().syncAndResolvePreviewUrl({
+        projectId: params.prototypeId
+      })
+      activeStack = synced.techStack
+      activeCode = synced.code
+      if (synced.techStack === 'native-html') {
+        BrowserViewManager.getInstance().reload()
+      }
+      for (const win of BrowserWindow.getAllWindows()) {
+        win.webContents.send('agent:code-updated', {
+          code: synced.code,
+          techStack: synced.techStack,
+          previewUrl: synced.previewUrl,
+          entryFile: synced.entryFile,
+          experimental: stackInfo(synced.techStack).experimental,
+          stackChanged: synced.techStack !== prevStack
+        })
+      }
+    }
+
+    try {
+      daemonClient.start()
+      const taskResult = await daemonClient.runTask({
+        taskId: runId,
+        prompt: fullPrompt,
+        sessionId,
+        model: selectionId(resolved.model),
+        modelDescriptor: resolved.model as unknown as Record<string, any>,
+        thinkingLevel: resolved.config.thinkingLevel,
+        workspaceDir: projectDir,
+        headless: false,
+        attachments: params.attachments?.map((a) => ({
+          data: a.data,
+          mimeType: a.mimeType,
+          name: a.name
+        })),
+        onEvent: (observed: any) => {
+          const ev = observed?.event ?? observed
+          if (!ev || typeof ev !== 'object') return
+
+          if (ev.type === 'loop_complete' && ev.stats) {
+            lastStats = ev.stats
+          }
+
+          // When thunder-daemon modifies or creates a file via `write_file` or `bash`,
+          // sync and refresh the live preview immediately!
+          if (
+            (ev.type === 'custom' && ev.kind === 'file_change') ||
+            (ev.type === 'tool_exec_result' &&
+              (ev.name === 'write_file' || ev.name === 'bash') &&
+              !ev.result?.is_error)
+          ) {
+            void broadcastSyncProject()
+          }
+
+          for (const win of BrowserWindow.getAllWindows()) {
+            win.webContents.send('agent:stream-event', {
+              type: 'observation',
+              run_id: runId,
+              event: ev
+            })
+          }
+        }
+      })
+
+      await broadcastSyncProject()
+
+      for (const win of BrowserWindow.getAllWindows()) {
+        win.webContents.send('agent:stream-event', {
+          type: 'run_finished',
+          run_id: runId,
+          finish_reason: (taskResult?.finish_reason || 'done').toLowerCase(),
+          final_content: taskResult?.final_content ?? null,
+          messages: [],
+          stats: lastStats ?? {}
+        })
+      }
+
+      const latestItem = !isExternalWorkspace
+        ? await syncProjectEntryAndStack(params.prototypeId)
+        : null
+
+      return {
+        ok: true,
+        runId,
+        finishReason: (taskResult?.finish_reason || 'done').toLowerCase(),
+        finalContent: taskResult?.final_content ?? null,
+        code: latestItem?.vueCode ?? activeCode,
+        techStack: latestItem?.techStack ?? activeStack
+      }
     } catch (err: any) {
-      return { ok: false, runId, error: err?.message ?? String(err) }
+      // Fallback to `thunder-runtime` if `thunder-daemon` is unavailable
+      const errMsg = err?.message ?? String(err)
+      if (errMsg.includes('Cancelled') || errMsg.includes('cancelled')) {
+        return {
+          ok: true,
+          runId,
+          finishReason: 'cancelled',
+          finalContent: null,
+          code: activeCode
+        }
+      }
+      return { ok: false, runId, error: errMsg }
     } finally {
       active = null
     }
   })
 
-  ipcMain.handle('agent:cancel', (_, runId: string) => {
-    agent.cancel(runId)
+  ipcMain.handle('agent:cancel', async (_, runId: string) => {
+    try {
+      await daemonClient.cancelTask(runId)
+    } catch {
+      agent.cancel(runId)
+    }
     return true
   })
 

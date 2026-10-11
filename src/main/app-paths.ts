@@ -13,6 +13,8 @@
  */
 
 import { app } from 'electron'
+import { copyFileSync, existsSync, mkdirSync } from 'fs'
+import { homedir } from 'os'
 import { join, resolve } from 'path'
 
 export function isPackaged(): boolean {
@@ -20,41 +22,123 @@ export function isPackaged(): boolean {
 }
 
 /**
+ * The repository checkout root in dev (where `build/thunder-bin` and the template
+ * `runtime-host` live).
+ */
+export function repoRootDir(): string {
+  return process.cwd()
+}
+
+/**
+ * Unified user data directory (`~/.prototype-studio`).
+ *
+ * Every prototype project, model library (`providers.json`), encrypted keys
+ * (`provider-secrets.json`), agent config (`.prototype-agent.json`), version
+ * history (`.prototype-history/`), and thunder conversation state (`thunder/`)
+ * live here — completely decoupled from the application's source repository.
+ */
+export function studioDataDir(): string {
+  const override = process.env.PROTOTYPE_STUDIO_HOME?.trim()
+  const dir = override ? resolve(override) : join(homedir(), '.prototype-studio')
+  if (!existsSync(dir)) {
+    try {
+      mkdirSync(dir, { recursive: true })
+    } catch {
+      // ignore
+    }
+  }
+  return dir
+}
+
+let migratedOnce = false
+
+/**
+ * Migrate legacy config files from the repo checkout (`process.cwd()`) into
+ * `~/.prototype-studio` on first run so existing user providers/keys are kept.
+ */
+export function ensureStudioDataMigrated(): void {
+  if (migratedOnce) return
+  migratedOnce = true
+  try {
+    const dataDir = studioDataDir()
+    const projectsDir = join(dataDir, 'projects')
+    if (!existsSync(projectsDir)) mkdirSync(projectsDir, { recursive: true })
+
+    if (!isPackaged()) {
+      const legacyRoot = repoRootDir()
+      if (legacyRoot !== dataDir) {
+        for (const file of ['providers.json', 'provider-secrets.json', '.prototype-agent.json']) {
+          const src = join(legacyRoot, file)
+          const dst = join(dataDir, file)
+          if (existsSync(src) && !existsSync(dst)) {
+            copyFileSync(src, dst)
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[app-paths] data migration warning:', err)
+  }
+}
+
+/**
  * Root of everything writable: `.prototype-agent.json`, `.prototype-history/`,
- * `providers.json`, `provider-secrets.json`, `thunder/`, `runtime-host/`.
+ * `providers.json`, `provider-secrets.json`, `thunder/`, `runtime-host/`, `projects/`.
  */
 export function workspaceDir(): string {
-  return isPackaged() ? app.getPath('userData') : process.cwd()
+  ensureStudioDataMigrated()
+  return studioDataDir()
+}
+
+/**
+ * Root directory where all independent prototype projects live:
+ * `~/.prototype-studio/projects/<project-id>/`
+ */
+export function projectsRootDir(): string {
+  const dir = join(workspaceDir(), 'projects')
+  if (!existsSync(dir)) {
+    try {
+      mkdirSync(dir, { recursive: true })
+    } catch {
+      // ignore
+    }
+  }
+  return dir
 }
 
 /**
  * The model library: which gateways this app talks to and which models it
  * knows. No secrets — those live in `providerSecretsPath()`.
- *
- * It sits under `workspaceDir()` and not in the workspace of a prototype: a
- * gateway and its credential are a property of *this install*, not of the
- * project being edited, so every prototype shares one library.
  */
 export function providerStorePath(): string {
   return join(workspaceDir(), 'providers.json')
 }
 
 /**
- * API keys, sealed with Electron's `safeStorage`. Separate file from the
- * library so the two have different lifetimes: the library is safe to read,
- * copy and diff; this one is not, and is written 0600.
+ * API keys, sealed with Electron's `safeStorage`.
  */
 export function providerSecretsPath(): string {
   return join(workspaceDir(), 'provider-secrets.json')
 }
 
 /**
- * The preview host (a Vite project). Packaged builds read the copy provisioned
- * into the workspace, never the read-only Resources directory: Vite writes its
- * dep cache there and we rewrite the active prototype file on every edit.
+ * The preview host (a Vite project) staged inside `~/.prototype-studio/runtime-host`
+ * so runtime compilation never modifies the git repository checkout.
  */
 export function runtimeHostDir(): string {
   return resolve(workspaceDir(), 'runtime-host')
+}
+
+/**
+ * Source template for `runtime-host` (from Resources in packaged build, or repo root in dev).
+ */
+export function templateRuntimeHostDir(): string | null {
+  const resourcesPath = (process as any).resourcesPath as string | undefined
+  if (isPackaged() && resourcesPath) {
+    return join(resourcesPath, 'runtime-host')
+  }
+  const devHost = join(repoRootDir(), 'runtime-host')
+  return existsSync(devHost) ? devHost : null
 }
 
 /** The single prototype file the preview host serves, per tech stack. */
@@ -75,26 +159,11 @@ export function prototypeStackMarker(): string {
 
 /** Where `extraResources` staged the preview host inside the bundle, if it ships one. */
 export function bundledRuntimeHostDir(): string | null {
-  const resourcesPath = (process as any).resourcesPath as string | undefined
-  return isPackaged() && resourcesPath ? join(resourcesPath, 'runtime-host') : null
+  return templateRuntimeHostDir()
 }
 
 /**
- * thunder's user data root, handed over as `THUNDER_CONFIG_DIR`.
- *
- * thunder normally keeps everything it owns in `~/.thunder` — conversations,
- * scratchpad, skills, plugins. A distributable app must not read or write the
- * end user's home directory, so in a packaged build the whole root moves under
- * userData (resolution lives in thunder: `thunder-agent-loop/src/core/paths.rs`).
- *
- * Note what is *not* read here any more: `models.json` / `auth.json`. The
- * provider layer belongs to this app now (see `provider-store.ts`), and the
- * spawned binaries are handed a fully resolved model descriptor per run, so
- * thunder never has to look up a model on its own. Nothing is seeded into this
- * root from the user's `~/.thunder`.
- *
- * Only meaningful when packaged. In dev the variable stays unset and thunder
- * uses the developer's own `~/.thunder` for the state it still owns.
+ * thunder's user data root (`~/.prototype-studio/thunder`), handed over as `THUNDER_CONFIG_DIR`.
  */
 export function thunderDataDir(): string {
   return join(workspaceDir(), 'thunder')

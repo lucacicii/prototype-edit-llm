@@ -7,24 +7,26 @@
 <script setup lang="ts">
 import { onMounted, ref, watch, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
+import React from 'react'
 
 const mountRef = ref<HTMLElement | null>(null)
 const route = useRoute()
 
-// React 根组件默认导出在 ../../prototypes/active.tsx；这里不静态
+// React 根组件默认导出在 ./active.tsx；这里不静态
 // import —— 静态 import 会在 Vue 栈的模块图里强制解析 .tsx。
 let cleanup: (() => void) | null = null
 
 async function mount() {
   if (!mountRef.value) return
   try {
-    const mod = await import('../../prototypes/active.tsx')
+    const mod = await import('./active.tsx')
     const Root = mod.default
     if (!Root) return
     // createRoot 每次挂载新实例；换原型（HMR 重载）时先卸旧的。
     const { createRoot } = await import('react-dom/client')
     const root = createRoot(mountRef.value)
-    root.render(Root)
+    const element = typeof Root === 'function' ? React.createElement(Root) : Root
+    root.render(element)
     cleanup = () => {
       // React 18 的 root.unmount 是异步的，但足以防住重复挂载泄漏
       root.unmount()

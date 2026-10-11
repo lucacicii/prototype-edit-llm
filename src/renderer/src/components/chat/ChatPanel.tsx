@@ -86,7 +86,24 @@ interface ChatPanelProps {
   markupAnnotations: MarkupAnnotation[]
   onRemoveMarkupAnnotation: (index: number) => void
   onClearSelectionState: () => void
-  onCodeUpdated: (code: string, label: string, techStack?: string) => void
+  onCodeUpdated: (
+    code: string,
+    label: string,
+    techStack?: string,
+    previewUrl?: string,
+    entryFile?: string
+  ) => void
+}
+
+interface PendingUserQuestion {
+  taskId: string
+  questionId: string
+  questions: Array<{
+    question: string
+    header?: string
+    multi_select?: boolean
+    options: Array<{ label: string; description?: string }>
+  }>
 }
 
 function getProviderIcon(provider: string, size = 14) {
@@ -159,6 +176,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const chatScrollEl = useRef<HTMLDivElement>(null)
   const runTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
+  // Interactive PM Question Card (`ask_user_question` from thunder-daemon)
+  const [pendingQuestion, setPendingQuestion] = useState<PendingUserQuestion | null>(null)
+  const [questionSelections, setQuestionSelections] = useState<Record<number, string[]>>({})
+  const [questionCustomText, setQuestionCustomText] = useState<Record<number, string>>({})
+  const [submittingAnswer, setSubmittingAnswer] = useState(false)
+
   const scrollToBottom = () => {
     setTimeout(() => {
       if (chatScrollEl.current) {
@@ -169,7 +192,47 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
   useEffect(() => {
     scrollToBottom()
-  }, [currentPrototype?.chatMessages?.length, runStreamed])
+  }, [currentPrototype?.chatMessages?.length, runStreamed, pendingQuestion])
+
+  const handleToggleOption = (qIdx: number, label: string, multi?: boolean) => {
+    setQuestionSelections((prev) => {
+      const current = prev[qIdx] || []
+      if (multi) {
+        const next = current.includes(label)
+          ? current.filter((item) => item !== label)
+          : [...current, label]
+        return { ...prev, [qIdx]: next }
+      }
+      return { ...prev, [qIdx]: [label] }
+    })
+  }
+
+  const handleSubmitQuestionAnswers = async (cancelled = false) => {
+    if (!pendingQuestion || !window.agent?.answerQuestion) return
+    setSubmittingAnswer(true)
+    try {
+      const answers: Record<string, string> = {}
+      pendingQuestion.questions.forEach((q, idx) => {
+        const picked = questionSelections[idx] || []
+        const custom = (questionCustomText[idx] || '').trim()
+        const combined = [...picked, ...(custom ? [custom] : [])].join('；')
+        answers[q.question] = combined || (q.options?.[0]?.label ?? '由 AI 自行决定')
+      })
+
+      await window.agent.answerQuestion({
+        questionId: pendingQuestion.questionId,
+        answers,
+        cancelled
+      })
+      setPendingQuestion(null)
+      setQuestionSelections({})
+      setQuestionCustomText({})
+    } catch (e: any) {
+      message.error(`提交回答失败: ${e.message}`)
+    } finally {
+      setSubmittingAnswer(false)
+    }
+  }
 
   const copyMessage = async (text: string, idx: number) => {
     try {
@@ -518,12 +581,39 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         handleStreamFrame(frame)
       })
 
-      const offCode = window.agent.onCodeUpdated((data: { code: string; techStack?: string }) => {
-        onCodeUpdated(data.code, instruction.slice(0, 40), data.techStack)
-        if (data.techStack && data.techStack !== currentPrototype.techStack) {
-          updateTechStack(currentPrototype.id, data.techStack as any)
+      const offQuestion = window.agent.onUserQuestion
+        ? window.agent.onUserQuestion((qData) => {
+            if (qData?.task_id && qData.task_id !== runId) return
+            setPendingQuestion({
+              taskId: qData.task_id,
+              questionId: qData.question_id,
+              questions: qData.questions || []
+            })
+            setQuestionSelections({})
+            setQuestionCustomText({})
+            scrollToBottom()
+          })
+        : undefined
+
+      const offCode = window.agent.onCodeUpdated(
+        (data: {
+          code: string
+          techStack?: string
+          previewUrl?: string
+          entryFile?: string
+        }) => {
+          onCodeUpdated(
+            data.code,
+            instruction.slice(0, 40),
+            data.techStack,
+            data.previewUrl,
+            data.entryFile
+          )
+          if (data.techStack && data.techStack !== currentPrototype.techStack) {
+            updateTechStack(currentPrototype.id, data.techStack as any, data.entryFile)
+          }
         }
-      })
+      )
 
       let res: any
       try {
@@ -539,7 +629,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         })
       } finally {
         offStream?.()
+        offQuestion?.()
         offCode?.()
+        setPendingQuestion(null)
       }
 
       if (!res?.ok) {
@@ -904,6 +996,107 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                 <div className="text-[13px] leading-relaxed break-words text-slate-200 mt-2 bg-slate-900/50 p-2.5 rounded-lg border border-slate-800">
                   <Markdown>{runStreamed}</Markdown>
                   <span className="inline-block w-1.5 h-3.5 bg-amber-400/80 align-middle animate-pulse ml-0.5"></span>
+                </div>
+              )}
+
+              {/* AI 产品顾问交互式澄清问题卡片 (`ask_user_question`) */}
+              {pendingQuestion && (
+                <div className="mt-2 p-3 rounded-xl bg-indigo-950/60 border border-indigo-500/50 space-y-3 text-xs shadow-lg">
+                  <div className="flex items-center justify-between border-b border-indigo-800/60 pb-2">
+                    <span className="font-bold text-indigo-200 flex items-center gap-1.5">
+                      <Sparkles size={13} className="text-amber-400" />
+                      <span>AI 产品顾问需要与你确认几个细节</span>
+                    </span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-900/80 text-indigo-300">
+                      共 {pendingQuestion.questions.length} 项
+                    </span>
+                  </div>
+
+                  <div className="space-y-3">
+                    {pendingQuestion.questions.map((q, qIdx) => {
+                      const picked = questionSelections[qIdx] || []
+                      return (
+                        <div key={qIdx} className="space-y-1.5">
+                          <div className="font-medium text-slate-100 leading-snug">
+                            <span className="text-indigo-400 font-mono mr-1">{qIdx + 1}.</span>
+                            {q.header && (
+                              <span className="text-[10px] px-1.5 py-0.2 mr-1.5 rounded bg-slate-800 text-sky-300">
+                                {q.header}
+                              </span>
+                            )}
+                            <span>{q.question}</span>
+                            {q.multi_select && (
+                              <span className="text-[10px] text-slate-400 ml-1">（可多选）</span>
+                            )}
+                          </div>
+
+                          {q.options && q.options.length > 0 && (
+                            <div className="grid grid-cols-1 gap-1.5 pt-0.5">
+                              {q.options.map((opt, oIdx) => {
+                                const isSelected = picked.includes(opt.label)
+                                return (
+                                  <button
+                                    key={oIdx}
+                                    type="button"
+                                    onClick={() =>
+                                      handleToggleOption(qIdx, opt.label, q.multi_select)
+                                    }
+                                    className={`p-2 rounded-lg border text-left transition cursor-pointer ${
+                                      isSelected
+                                        ? 'bg-indigo-600/35 border-indigo-400 text-white shadow-sm'
+                                        : 'bg-slate-900/70 border-slate-800 hover:border-slate-700 text-slate-300'
+                                    }`}
+                                  >
+                                    <div className="font-medium text-[11px] flex items-center justify-between">
+                                      <span>{opt.label}</span>
+                                      {isSelected && <Check size={12} className="text-indigo-300" />}
+                                    </div>
+                                    {opt.description && (
+                                      <div className="text-[10px] text-slate-400 mt-0.5">
+                                        {opt.description}
+                                      </div>
+                                    )}
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          )}
+
+                          <input
+                            type="text"
+                            value={questionCustomText[qIdx] || ''}
+                            onChange={(e) =>
+                              setQuestionCustomText((prev) => ({
+                                ...prev,
+                                [qIdx]: e.target.value
+                              }))
+                            }
+                            placeholder="或输入你的补充要求 / 自定义说明（可选）..."
+                            className="w-full mt-1 px-2.5 py-1.5 rounded bg-slate-900/90 border border-slate-700/80 text-[11px] text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-400"
+                          />
+                        </div>
+                      )
+                    })}
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2 pt-2 border-t border-indigo-800/50">
+                    <button
+                      type="button"
+                      disabled={submittingAnswer}
+                      onClick={() => handleSubmitQuestionAnswers(true)}
+                      className="px-2.5 py-1 rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] cursor-pointer"
+                    >
+                      跳过，由 AI 直接决定
+                    </button>
+                    <button
+                      type="button"
+                      disabled={submittingAnswer}
+                      onClick={() => handleSubmitQuestionAnswers(false)}
+                      className="px-3 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-[11px] shadow cursor-pointer"
+                    >
+                      {submittingAnswer ? '提交中...' : '确认回答并开始生成'}
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

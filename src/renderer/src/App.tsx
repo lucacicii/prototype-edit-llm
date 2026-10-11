@@ -16,7 +16,9 @@ import { VersionHistoryModal } from './components/modals/VersionHistoryModal'
 import {
   usePrototypeStore,
   useCurrentPrototype,
-  type PrototypeItem
+  type PrototypeItem,
+  type ProductScenario,
+  type PreferredStack
 } from './stores/usePrototypeStore'
 import { useAgentModelConfigStore } from './stores/useAgentModelConfigStore'
 import { locateCodeSnippet } from './utils/inspector'
@@ -43,21 +45,24 @@ export const App: React.FC = () => {
   const [markupAnnotations, setMarkupAnnotations] = useState<MarkupAnnotation[]>([])
 
   const embeddedBrowserRef = useRef<EmbeddedBrowserViewerRef>(null)
+  const [selectedFile, setSelectedFile] = useState<string>('')
+  const [selectedFileContent, setSelectedFileContent] = useState<string | null>(null)
 
   // Initial load
   useEffect(() => {
     async function init() {
+      await prototypeStore.loadFromDisk()
       await refreshModelConfig()
       await refreshVersionNo()
-      if (prototypeStore.hydratedFromSnapshot) {
-        await syncActivePrototypeToFile()
-      }
+      await syncActivePrototypeToFile()
     }
     init()
   }, [])
 
   // Sync version number on activeId change
   useEffect(() => {
+    setSelectedFile('')
+    setSelectedFileContent(null)
     refreshVersionNo()
     syncActivePrototypeToFile()
   }, [prototypeStore.activeId])
@@ -75,15 +80,21 @@ export const App: React.FC = () => {
     }
   }
 
-  const syncActivePrototypeToFile = async () => {
-    const p = currentPrototype
+  const syncActivePrototypeToFile = async (overrideCode?: string, overrideStack?: string) => {
+    const p = usePrototypeStore.getState().prototypes.find(
+      (item) => item.id === usePrototypeStore.getState().activeId
+    ) || currentPrototype
     if (!p) return
     if (window.hostApi?.savePrototypeFile) {
       try {
-        await window.hostApi.savePrototypeFile({
+        const res = await window.hostApi.savePrototypeFile({
           prototypeId: p.id,
-          code: p.vueCode
+          code: overrideCode ?? p.vueCode,
+          techStack: (overrideStack ?? p.techStack) as any
         })
+        if (res?.previewUrl && (!currentWorkspace || currentWorkspace.id === 'default-host')) {
+          embeddedBrowserRef.current?.navigateToUrl(res.previewUrl)
+        }
       } catch (e) {
         console.warn('syncActivePrototypeToFile error:', e)
       }
@@ -222,25 +233,35 @@ export const App: React.FC = () => {
     })
   }
 
-  const handleCreatePrototype = (data: { name: string; description: string }) => {
-    const item = prototypeStore.createPrototype(data.name, data.description)
-    syncActivePrototypeToFile()
-    message.success(`已创建原型【${item.name}】`)
+  const handleCreatePrototype = async (data: {
+    name: string
+    description: string
+    scenario: ProductScenario
+    preferredStack: PreferredStack
+  }) => {
+    const item = await prototypeStore.createPrototype(
+      data.name,
+      data.description,
+      data.scenario,
+      data.preferredStack
+    )
+    await syncActivePrototypeToFile(item.vueCode, item.techStack)
+    message.success(`已创建独立原型项目【${item.name}】`)
   }
 
-  const handleClonePrototype = (item: PrototypeItem) => {
-    const cloned = prototypeStore.clonePrototype(item.id)
+  const handleClonePrototype = async (item: PrototypeItem) => {
+    const cloned = await prototypeStore.clonePrototype(item.id)
     if (cloned) {
-      syncActivePrototypeToFile()
+      await syncActivePrototypeToFile(cloned.vueCode, cloned.techStack)
       message.success(`已复制出【${cloned.name}】`)
     }
   }
 
-  const handleDeletePrototype = (id: string) => {
-    prototypeStore.deletePrototype(id)
-    syncActivePrototypeToFile()
+  const handleDeletePrototype = async (id: string) => {
+    await prototypeStore.deletePrototype(id)
+    await syncActivePrototypeToFile()
     refreshVersionNo()
-    message.info('已移除原型')
+    message.info('已移除原型项目')
   }
 
   return (
@@ -267,10 +288,14 @@ export const App: React.FC = () => {
         markupAnnotations={markupAnnotations}
         onRemoveMarkupAnnotation={handleRemoveMarkupAnnotation}
         onClearSelectionState={clearSelectionState}
-        onCodeUpdated={(newCode, label) => {
+        onCodeUpdated={(newCode, label, techStack, previewUrl) => {
           if (currentPrototype) {
             applyCodeChange(currentPrototype.id, newCode, label)
-            syncActivePrototypeToFile()
+            if (previewUrl && (!currentWorkspace || currentWorkspace.id === 'default-host')) {
+              embeddedBrowserRef.current?.navigateToUrl(previewUrl)
+            } else {
+              syncActivePrototypeToFile(newCode, techStack)
+            }
           }
         }}
       />
@@ -363,12 +388,35 @@ export const App: React.FC = () => {
           {activeTab === 'code' && (
             <div className="absolute inset-0 z-20">
               <CodeEditorPane
-                code={currentPrototype?.vueCode || ''}
+                code={selectedFileContent !== null ? selectedFileContent : currentPrototype?.vueCode || ''}
                 techStack={currentPrototype?.techStack}
+                entryFile={currentPrototype?.entryFile}
+                files={currentPrototype?.files}
+                selectedFile={selectedFile || currentPrototype?.entryFile}
+                onSelectFile={async (filePath) => {
+                  setSelectedFile(filePath)
+                  if (!currentPrototype || filePath === currentPrototype.entryFile) {
+                    setSelectedFileContent(null)
+                    return
+                  }
+                  const res = await window.prototypeApi?.readFile({
+                    id: currentPrototype.id,
+                    filePath
+                  })
+                  if (res?.ok && typeof res.content === 'string') {
+                    setSelectedFileContent(res.content)
+                  }
+                }}
                 onChange={(newCode) => {
                   if (currentPrototype) {
-                    prototypeStore.updateCode(currentPrototype.id, newCode)
-                    syncActivePrototypeToFile()
+                    const targetFile = selectedFile || currentPrototype.entryFile
+                    if (selectedFileContent !== null && targetFile !== currentPrototype.entryFile) {
+                      setSelectedFileContent(newCode)
+                      prototypeStore.updateCode(currentPrototype.id, newCode, targetFile)
+                    } else {
+                      prototypeStore.updateCode(currentPrototype.id, newCode)
+                      syncActivePrototypeToFile(newCode, currentPrototype.techStack)
+                    }
                   }
                 }}
               />

@@ -35,18 +35,12 @@ export interface RunTaskOptions {
   prompt: string;
   sessionId?: string;
   model?: string;
-  /**
-   * Full model descriptor from this app's own model library.
-   *
-   * With it, the daemon builds its stream client from the descriptor and never
-   * reads `models.json` / `auth.json` for the run. Without it the daemon falls
-   * back to resolving `model` (a selection id) out of its own data root — which
-   * this app no longer populates, so a host that owns its provider
-   * configuration must send this.
-   */
   modelDescriptor?: Record<string, any>;
+  thinkingLevel?: string;
+  attachments?: Array<{ path?: string; data?: string; mimeType?: string; name?: string }>;
   useMock?: boolean;
   workspaceDir?: string;
+  extraWorkspaceDirs?: string[];
   /** Disable ask_user_question for clients that cannot answer it. */
   headless?: boolean;
   /** Callback for real-time observed events (tokens, tools, turns) */
@@ -197,9 +191,10 @@ export class ThunderClient extends EventEmitter {
         prompt: opts.prompt,
         session_id: opts.sessionId,
         model: opts.model,
-        // 只有真的带上了才发这个字段：老的 daemon 会忽略它，但一个显式的
-        // null 会让「宿主没配模型」和「宿主配了但解析不出来」看起来一样。
         ...(opts.modelDescriptor ? { model_descriptor: opts.modelDescriptor } : {}),
+        ...(opts.thinkingLevel ? { thinking_level: opts.thinkingLevel } : {}),
+        ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
+        ...(opts.extraWorkspaceDirs?.length ? { extra_workspace_dirs: opts.extraWorkspaceDirs } : {}),
         use_mock: opts.useMock ?? this.options.useMock ?? false,
         workspace_dir: opts.workspaceDir ?? this.options.workspaceDir,
         headless: opts.headless ?? false,
@@ -209,6 +204,53 @@ export class ThunderClient extends EventEmitter {
         this.off('task_failed', onFailed);
         reject(err);
       });
+    });
+  }
+
+  /**
+   * Answer a pending `ask_user_question` raised by `thunder-daemon`.
+   */
+  public async answerQuestion(params: {
+    questionId: string;
+    answers?: Record<string, any> | any;
+    cancelled?: boolean;
+  }): Promise<any> {
+    return this.sendRequest('answer_question', {
+      question_id: params.questionId,
+      answers: params.answers ?? {},
+      cancelled: Boolean(params.cancelled),
+    });
+  }
+
+  /**
+   * Answer a pending `ui_request` dialog raised by `thunder-daemon`.
+   */
+  public async answerUi(params: {
+    requestId: string;
+    value?: string;
+    confirmed?: boolean;
+    cancelled?: boolean;
+  }): Promise<any> {
+    return this.sendRequest('answer_ui', {
+      request_id: params.requestId,
+      ...(params.value !== undefined ? { value: params.value } : {}),
+      ...(params.confirmed !== undefined ? { confirmed: params.confirmed } : {}),
+      cancelled: Boolean(params.cancelled),
+    });
+  }
+
+  /**
+   * Steer or queue follow-up input into an active task.
+   */
+  public async steerTask(params: {
+    taskId: string;
+    message: string;
+    behavior?: 'steer' | 'follow_up';
+  }): Promise<any> {
+    return this.sendRequest('steer_task', {
+      task_id: params.taskId,
+      message: params.message,
+      behavior: params.behavior ?? 'steer',
     });
   }
 
@@ -274,6 +316,14 @@ export class ThunderClient extends EventEmitter {
         this.emit('task_completed', msg);
       } else if (type === 'task_failed') {
         this.emit('task_failed', msg);
+      } else if (type === 'user_question') {
+        this.emit('user_question', msg);
+      } else if (type === 'ui_request') {
+        this.emit('ui_request', msg);
+      } else if (type === 'task_paused') {
+        this.emit('task_paused', msg);
+      } else if (type === 'task_queue_update') {
+        this.emit('task_queue_update', msg);
       }
     } catch (e) {
       console.error('[ThunderClient] Failed to parse daemon output line:', trimmed, e);

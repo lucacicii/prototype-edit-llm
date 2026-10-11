@@ -20,7 +20,7 @@
 
 import { existsSync } from 'fs'
 import { join } from 'path'
-import { isPackaged, resourcesDir, workspaceDir } from '../app-paths'
+import { isPackaged, repoRootDir, resourcesDir } from '../app-paths'
 
 export type SidecarName = 'thunder-runtime' | 'thunder-daemon'
 
@@ -39,12 +39,12 @@ export function archKey(): string {
 }
 
 /**
- * The verified artefact cache. In dev `workspaceDir()` is the checkout, which
+ * The verified artefact cache. In dev `repoRootDir()` is the checkout, which
  * is where `scripts/fetch-thunder-binaries.mjs` puts it; when packaged this
  * path simply never exists and branch 2 has already answered.
  */
 export function sidecarCacheDir(): string {
-  return join(workspaceDir(), 'build', 'thunder-bin', archKey())
+  return join(repoRootDir(), 'build', 'thunder-bin', archKey())
 }
 
 /**

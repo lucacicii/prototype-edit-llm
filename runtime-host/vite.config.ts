@@ -59,12 +59,9 @@ const plugins: PluginOption[] = [
   vueInspectorVueOnly()
 ]
 
-if (stack === 'react-ts') {
-  // React 栈需要 jsx 转换 + 快速刷新；行号由 esbuild 的 __source 注入，
-  // 探针侧另有 sourcemap 偏移校正（见 src/main/injected-browser-probe.ts）。
-  // 依赖在 runtime-host/package.json 里（devDependency 同装）。
-  plugins.push((await import('@vitejs/plugin-react')).default())
-}
+// 始终挂载 @vitejs/plugin-react（其仅对 .tsx/.jsx 生效），
+// 这样运行期从 Vue 切换到 React 时无需重启 Vite dev server。
+plugins.push((await import('@vitejs/plugin-react')).default())
 
 export default defineConfig({
   plugins,

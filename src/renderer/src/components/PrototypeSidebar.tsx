@@ -10,17 +10,71 @@ import {
   Link as LinkIcon,
   ChevronDown
 } from 'lucide-react'
-import type { PrototypeItem } from '../stores/usePrototypeStore'
+import type {
+  PrototypeItem,
+  ProductScenario,
+  PreferredStack
+} from '../stores/usePrototypeStore'
 
 interface PrototypeSidebarProps {
   prototypes: PrototypeItem[]
   activeId: string
   onSelect: (id: string) => void
-  onCreate: (data: { name: string; description: string }) => void
+  onCreate: (data: {
+    name: string
+    description: string
+    scenario: ProductScenario
+    preferredStack: PreferredStack
+  }) => void
   onClone: (item: PrototypeItem) => void
   onDelete: (id: string) => void
   onWorkspaceChanged: (ws: any) => void
 }
+
+const SCENARIO_OPTIONS: Array<{
+  key: ProductScenario
+  label: string
+  badge: string
+  desc: string
+}> = [
+  {
+    key: 'auto',
+    label: '🤖 AI 顾问引导规划',
+    badge: 'AI 规划',
+    desc: '不限定模板，AI 先通过几个问题与你对齐产品需求，再自动决定最佳技术栈'
+  },
+  {
+    key: 'website',
+    label: '🌐 品牌官网 / 落地页',
+    badge: '官网',
+    desc: '适合 SaaS 主页、产品宣传页、营销着陆页，注重视觉表现与转化动线'
+  },
+  {
+    key: 'admin',
+    label: '🖥️ 中台 / 后台管理系统',
+    badge: '中后台',
+    desc: '适合 CRM、ERP、运营工作台，包含筛选表格、表单抽屉与状态流转'
+  },
+  {
+    key: 'mobile',
+    label: '📱 手机端 / H5 / 小程序',
+    badge: '移动端',
+    desc: '适合移动端 App、小程序核心流程原型，采用移动端卡片与底部导航'
+  },
+  {
+    key: 'dashboard',
+    label: '📊 数据大屏 / BI 看板',
+    badge: '数据看板',
+    desc: '适合经营分析看板、实时监控大屏，含指标卡片与多维图表'
+  }
+]
+
+const STACK_OPTIONS: Array<{ key: PreferredStack; label: string; hint: string }> = [
+  { key: 'auto', label: '🤖 由 AI 自动决定（推荐）', hint: 'AI 根据产品问答结果自动选栈' },
+  { key: 'native-html', label: '⚡ 轻量 HTML 直出（免构建秒开）', hint: 'HTML5 + Tailwind CDN' },
+  { key: 'vue3-element', label: '🟢 Vue 3 + Element Plus', hint: '标准中后台组件库' },
+  { key: 'react-ts', label: '⚛️ React + TypeScript', hint: 'React TSX 组件化' }
+]
 
 export const PrototypeSidebar: React.FC<PrototypeSidebarProps> = ({
   prototypes,
@@ -39,6 +93,8 @@ export const PrototypeSidebar: React.FC<PrototypeSidebarProps> = ({
 
   const [newFormName, setNewFormName] = useState('')
   const [newFormDesc, setNewFormDesc] = useState('')
+  const [newFormScenario, setNewFormScenario] = useState<ProductScenario>('auto')
+  const [newFormStack, setNewFormStack] = useState<PreferredStack>('auto')
 
   const [urlFormName, setUrlFormName] = useState('')
   const [urlFormUrl, setUrlFormUrl] = useState('')
@@ -109,10 +165,14 @@ export const PrototypeSidebar: React.FC<PrototypeSidebarProps> = ({
     if (!newFormName.trim()) return
     onCreate({
       name: newFormName.trim(),
-      description: newFormDesc.trim()
+      description: newFormDesc.trim(),
+      scenario: newFormScenario,
+      preferredStack: newFormStack
     })
     setNewFormName('')
     setNewFormDesc('')
+    setNewFormScenario('auto')
+    setNewFormStack('auto')
     setShowCreateModal(false)
   }
 
@@ -221,7 +281,16 @@ export const PrototypeSidebar: React.FC<PrototypeSidebarProps> = ({
                   </p>
 
                   <div className="flex items-center justify-between pt-1 border-t border-slate-800/50 text-[10px] text-slate-500">
-                    <span>{lineCount} 行代码</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 font-mono">
+                        {item.techStack === 'react-ts'
+                          ? 'React'
+                          : item.techStack === 'native-html'
+                          ? 'HTML'
+                          : 'Vue3'}
+                      </span>
+                      <span>{lineCount} 行</span>
+                    </div>
                     <div className="flex items-center space-x-2 opacity-0 group-hover:opacity-100 transition-opacity">
                       <button
                         className="text-indigo-400 hover:text-indigo-300 flex items-center gap-0.5"
@@ -284,33 +353,92 @@ export const PrototypeSidebar: React.FC<PrototypeSidebarProps> = ({
       {/* 新建原型模态框 */}
       <Modal
         open={showCreateModal}
-        title="新建原型页面"
-        width={420}
+        title="新建独立原型项目"
+        width={500}
         onCancel={() => setShowCreateModal(false)}
         onOk={handleCreate}
-        okText="确定创建"
+        okText="创建项目"
         cancelText="取消"
         okButtonProps={{ disabled: !newFormName.trim() }}
       >
-        <div className="py-2 space-y-3">
+        <div className="py-2 space-y-3.5 text-xs">
           <div>
-            <label className="block text-xs font-medium text-slate-300 mb-1">
-              原型名称 <span className="text-rose-500">*</span>
+            <label className="block font-medium text-slate-300 mb-1">
+              项目名称 <span className="text-rose-500">*</span>
             </label>
             <Input
               value={newFormName}
               onChange={(e) => setNewFormName(e.target.value)}
-              placeholder="如：订单履约中心 / 财务结算审批"
-              maxLength={20}
+              placeholder="如：SaaS 品牌官网 / 订单履约中台 / 生鲜配送小程序"
+              maxLength={28}
             />
           </div>
+
           <div>
-            <label className="block text-xs font-medium text-slate-300 mb-1">原型简要描述</label>
+            <label className="block font-medium text-slate-300 mb-1.5">
+              选择产品场景模板（不选则默认由 AI 顾问提问规划）
+            </label>
+            <div className="grid grid-cols-1 gap-1.5">
+              {SCENARIO_OPTIONS.map((opt) => {
+                const active = newFormScenario === opt.key
+                return (
+                  <div
+                    key={opt.key}
+                    onClick={() => setNewFormScenario(opt.key)}
+                    className={`p-2 rounded-lg border cursor-pointer transition ${
+                      active
+                        ? 'bg-indigo-950/60 border-indigo-500/80 text-white'
+                        : 'bg-slate-900/60 border-slate-800 hover:border-slate-700 text-slate-300'
+                    }`}
+                  >
+                    <div className="font-semibold text-xs flex items-center justify-between">
+                      <span>{opt.label}</span>
+                      {active && (
+                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-indigo-600 text-white">
+                          已选
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-[11px] text-slate-400 mt-0.5">{opt.desc}</div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+          <div>
+            <label className="block font-medium text-slate-300 mb-1">
+              技术栈偏好（可选）
+            </label>
+            <div className="grid grid-cols-2 gap-1.5">
+              {STACK_OPTIONS.map((st) => {
+                const active = newFormStack === st.key
+                return (
+                  <button
+                    key={st.key}
+                    type="button"
+                    onClick={() => setNewFormStack(st.key)}
+                    className={`p-2 rounded-lg border text-left transition cursor-pointer ${
+                      active
+                        ? 'bg-sky-950/60 border-sky-500/80 text-sky-200'
+                        : 'bg-slate-900/60 border-slate-800 hover:border-slate-700 text-slate-300'
+                    }`}
+                  >
+                    <div className="font-medium text-[11px]">{st.label}</div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">{st.hint}</div>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          <div>
+            <label className="block font-medium text-slate-300 mb-1">项目背景或初始想法（可选）</label>
             <Input.TextArea
               value={newFormDesc}
               onChange={(e) => setNewFormDesc(e.target.value)}
               rows={2}
-              placeholder="描述该原型的核心业务诉求与关键组件"
+              placeholder="简述目标用户、核心功能点或参考风格（留空也可创建后在对话中直接和 AI 聊）"
             />
           </div>
         </div>

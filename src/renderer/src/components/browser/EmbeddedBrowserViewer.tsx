@@ -38,7 +38,7 @@ interface EmbeddedBrowserViewerProps {
 export const EmbeddedBrowserViewer = forwardRef<EmbeddedBrowserViewerRef, EmbeddedBrowserViewerProps>(
   (
     {
-      activePrototypeId,
+      activePrototypeId: _activePrototypeId,
       currentCode,
       isVisible,
       currentWorkspace,
@@ -54,11 +54,13 @@ export const EmbeddedBrowserViewer = forwardRef<EmbeddedBrowserViewerRef, Embedd
   ) => {
     const viewportContainerRef = useRef<HTMLDivElement>(null)
     const [isConsoleCollapsed, setIsConsoleCollapsed] = useState(true)
-    const [inputUrl, setInputUrl] = useState('http://127.0.0.1:4321')
-    const [hostUrl, setHostUrl] = useState('http://127.0.0.1:4321')
+    const [inputUrl, setInputUrl] = useState('')
     const [inspectMode, setInspectMode] = useState<'inspect' | 'markup' | 'off'>('off')
     const [viewportMode, setViewportMode] = useState<'responsive' | 'desktop-1080' | 'desktop-900' | 'mobile-iphone'>('responsive')
     const [zoomLevel, setZoomLevel] = useState('1.0')
+    const [domModalOpen, setDomModalOpen] = useState(false)
+
+    const effectiveSuspended = Boolean(suspended || domModalOpen)
 
     const [navState, setNavState] = useState({
       canGoBack: false,
@@ -72,7 +74,7 @@ export const EmbeddedBrowserViewer = forwardRef<EmbeddedBrowserViewerRef, Embedd
     const { status: debugStatus, currentRound: debugRound } = useSelfDebugStore()
 
     const syncBounds = () => {
-      if (!isVisible || suspended || !viewportContainerRef.current || !window.browser) return
+      if (!isVisible || effectiveSuspended || !viewportContainerRef.current || !window.browser) return
       const rect = viewportContainerRef.current.getBoundingClientRect()
       window.browser.setBounds({
         x: Math.round(rect.left),
@@ -103,22 +105,31 @@ export const EmbeddedBrowserViewer = forwardRef<EmbeddedBrowserViewerRef, Embedd
       }
     }))
 
-    // Init host URL
+    // Auto-detect any open Ant Design modal (.ant-modal-wrap / .ant-modal-mask)
+    // and automatically hide the native BrowserView so it never covers any popup!
     useEffect(() => {
-      async function initHost() {
-        if (window.hostApi?.getHostUrl) {
-          try {
-            const url = await window.hostApi.getHostUrl()
-            if (url) {
-              setHostUrl(url)
-              setInputUrl(`${url}/prototypes/${activePrototypeId}`)
-            }
-          } catch (e) {
-            console.warn('Cannot fetch host url:', e)
+      const checkModals = () => {
+        const wraps = document.querySelectorAll('.ant-modal-wrap, .ant-image-preview-wrap')
+        let anyVisible = false
+        wraps.forEach((el) => {
+          const htmlEl = el as HTMLElement
+          const style = window.getComputedStyle(htmlEl)
+          if (style.display !== 'none' && style.visibility !== 'hidden') {
+            anyVisible = true
           }
-        }
+        })
+        setDomModalOpen(anyVisible)
       }
-      initHost()
+
+      checkModals()
+      const mo = new MutationObserver(checkModals)
+      mo.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['style', 'class']
+      })
+      return () => mo.disconnect()
     }, [])
 
     // Register Browser events
@@ -154,9 +165,11 @@ export const EmbeddedBrowserViewer = forwardRef<EmbeddedBrowserViewerRef, Embedd
       ]
 
       window.browser.setInspectMode('off')
-      window.browser.loadUrl(inputUrl)
+      if (inputUrl) {
+        window.browser.loadUrl(inputUrl)
+      }
 
-      if (isVisible && !suspended) {
+      if (isVisible && !effectiveSuspended) {
         window.browser.show()
       }
 
@@ -178,30 +191,26 @@ export const EmbeddedBrowserViewer = forwardRef<EmbeddedBrowserViewerRef, Embedd
         observer.disconnect()
         window.removeEventListener('resize', syncBounds)
       }
-    }, [isVisible, suspended, viewportMode, isConsoleCollapsed])
+    }, [isVisible, effectiveSuspended, viewportMode, isConsoleCollapsed])
 
     // Visibility & Suspended tracking
     useEffect(() => {
       if (!window.browser) return
-      if (isVisible && !suspended) {
+      if (isVisible && !effectiveSuspended) {
         window.browser.show()
         setTimeout(syncBounds, 50)
       } else {
         window.browser.hide()
       }
-    }, [isVisible, suspended])
+    }, [isVisible, effectiveSuspended])
 
     // Prototype or workspace URL sync
     useEffect(() => {
-      if (!currentWorkspace || currentWorkspace.id === 'default-host') {
-        const nextUrl = `${hostUrl}/prototypes/${activePrototypeId}`
-        setInputUrl(nextUrl)
-        if (window.browser) window.browser.loadUrl(nextUrl)
-      } else {
+      if (currentWorkspace && currentWorkspace.id !== 'default-host' && currentWorkspace.url) {
         setInputUrl(currentWorkspace.url)
         if (window.browser) window.browser.loadUrl(currentWorkspace.url)
       }
-    }, [activePrototypeId, currentWorkspace, hostUrl])
+    }, [currentWorkspace])
 
     const handleGoBack = () => window.browser?.goBack()
     const handleGoForward = () => window.browser?.goForward()

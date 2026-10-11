@@ -105,21 +105,14 @@ export async function agentReadiness(): Promise<ReadinessItem[]> {
   return items
 }
 
-/** Nothing to do in dev; a packaged build only needs its data root moved. */
+/** Ensure thunder's data root (`~/.prototype-studio/thunder`) is set up in both dev and packaged builds. */
 export async function applyPackagedRuntimeEnv(): Promise<void> {
-  if (!isPackaged()) {
-    report = { ...report, packaged: false }
-    return
-  }
-
   const problems: string[] = []
 
   // thunder's user data root. Everything thunder owns for this user —
-  // models.json, auth.json, models_metadata.json, conversations, scratchpad,
-  // plugins — resolves under this one variable
-  // (thunder-agent-loop/src/core/paths.rs), so a packaged app touches none of
-  // the end user's ~/.thunder. Both spawned binaries inherit it from here:
-  // runtime-client passes no env at all, thunder-client copies process.env.
+  // conversations, scratchpad, plugins — resolves under this one variable
+  // (thunder-agent-loop/src/core/paths.rs), so everything stays cleanly inside
+  // ~/.prototype-studio/thunder.
   const dataRoot = thunderDataDir()
   let dataRootOk = false
   try {
@@ -131,13 +124,13 @@ export async function applyPackagedRuntimeEnv(): Promise<void> {
   }
 
   report = {
-    packaged: true,
+    packaged: isPackaged(),
     dataRoot,
     dataRootOk,
     problems
   }
   if (problems.length) {
-    console.warn('[runtime-env] 打包运行时环境不完整：\n  - ' + problems.join('\n  - '))
+    console.warn('[runtime-env] 运行时环境不完整：\n  - ' + problems.join('\n  - '))
   } else {
     console.log(`[runtime-env] thunder 数据根 → ${dataRoot}`)
   }

@@ -50,8 +50,30 @@ const historyApi = {
   deleteAll: (params: { prototypeId: string }) => ipcRenderer.invoke('history:delete-all', params)
 }
 
+const prototypeApi = {
+  // 独立原型项目存储（~/.prototype-studio/projects/<id>/）
+  list: () => ipcRenderer.invoke('prototype:list'),
+  setActive: (id: string) => ipcRenderer.invoke('prototype:set-active', id),
+  create: (params: {
+    name: string
+    description?: string
+    scenario?: string
+    preferredStack?: string
+  }) => ipcRenderer.invoke('prototype:create', params),
+  clone: (sourceId: string) => ipcRenderer.invoke('prototype:clone', sourceId),
+  delete: (id: string) => ipcRenderer.invoke('prototype:delete', id),
+  updateCode: (params: { id: string; code: string; filePath?: string; techStack?: string }) =>
+    ipcRenderer.invoke('prototype:update-code', params),
+  saveChat: (params: { id: string; messages: any[]; resetSession?: boolean }) =>
+    ipcRenderer.invoke('prototype:save-chat', params),
+  readFile: (params: { id: string; filePath: string }) =>
+    ipcRenderer.invoke('prototype:read-file', params),
+  migrateLocalStorage: (items: any[]) =>
+    ipcRenderer.invoke('prototype:migrate-localstorage', items)
+}
+
 const agentApi = {
-  // 原型 Agent（thunder-runtime 通用内核）
+  // 原型 Agent（thunder-daemon 全能力宿主）
   ping: () => ipcRenderer.invoke('agent:ping'),
   getConfig: () => ipcRenderer.invoke('agent:get-config'),
   setConfig: (config: any) => ipcRenderer.invoke('agent:set-config', config),
@@ -74,6 +96,11 @@ const agentApi = {
     apiKey?: string
     modelId: string
   }) => ipcRenderer.invoke('agent:probe-thinking-levels', params),
+  answerQuestion: (params: {
+    questionId: string
+    answers?: Record<string, any> | any
+    cancelled?: boolean
+  }) => ipcRenderer.invoke('agent:answer-question', params),
   run: (params: any) => ipcRenderer.invoke('agent:run', params),
   cancel: (runId: string) => ipcRenderer.invoke('agent:cancel', runId),
   onStreamEvent: (callback: (frame: any) => void) => {
@@ -81,15 +108,24 @@ const agentApi = {
     ipcRenderer.on('agent:stream-event', handler)
     return () => ipcRenderer.removeListener('agent:stream-event', handler)
   },
+  onUserQuestion: (callback: (data: any) => void) => {
+    const handler = (_: any, data: any) => callback(data)
+    ipcRenderer.on('agent:user-question', handler)
+    return () => ipcRenderer.removeListener('agent:user-question', handler)
+  },
   onCodeUpdated: (callback: (data: {
     code: string
     techStack?: string
+    previewUrl?: string
+    entryFile?: string
     experimental?: boolean
     stackChanged?: boolean
   }) => void) => {
     const handler = (_: any, data: {
       code: string
       techStack?: string
+      previewUrl?: string
+      entryFile?: string
       experimental?: boolean
       stackChanged?: boolean
     }) => callback(data)
@@ -183,6 +219,7 @@ if (process.contextIsolated) {
     contextBridge.exposeInMainWorld('project', projectApi)
     contextBridge.exposeInMainWorld('hostApi', hostApi)
     contextBridge.exposeInMainWorld('historyApi', historyApi)
+    contextBridge.exposeInMainWorld('prototypeApi', prototypeApi)
     contextBridge.exposeInMainWorld('browser', browserApi)
     contextBridge.exposeInMainWorld('agent', agentApi)
   } catch (error) {
@@ -199,6 +236,8 @@ if (process.contextIsolated) {
   window.hostApi = hostApi
   // @ts-ignore
   window.historyApi = historyApi
+  // @ts-ignore
+  window.prototypeApi = prototypeApi
   // @ts-ignore
   window.browser = browserApi
   // @ts-ignore

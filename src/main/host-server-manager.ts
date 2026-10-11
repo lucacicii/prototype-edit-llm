@@ -93,43 +93,37 @@ export class HostServerManager {
   }
 
   /**
-   * 打包态：把随包的预览宿主铺一份到可写的 userData 下再跑。
+   * 把随包或仓库里的预览宿主模板铺一份到可写的 ~/.prototype-studio/runtime-host 下再跑。
    *
-   * 不能在 Resources/runtime-host 里就地跑：.app 包内等同只读，而 Vite 要在那儿
-   * 写自己的依赖缓存，我们每改一次原型还要重写活动原型文件 —— 往包体里写还会
-   * 破坏签名。首启复制约 165M（SSD 上一两秒），之后靠版本戳判断是否要重铺：
-   * app 一升级就重铺，免得旧的 Vite 配置残留下来。
-   *
-   * pnpm 的 node_modules 软链是相对的（`element-plus -> .pnpm/...`），整树复制
-   * 后依然自洽，所以这里用 verbatimSymlinks 保住链接原样。
+   * 这样不论是 dev 还是打包态，都不会往 git 仓库里的 runtime-host 写 active.vue / .prototype-stack，
+   * 保证代码仓库永远干净。
    */
   private async ensureProvisioned(): Promise<void> {
     const bundled = bundledRuntimeHostDir()
-    if (!bundled) return // dev：直接用仓库里的 runtime-host
+    if (!bundled) return
 
     const target = runtimeHostDir()
+    if (bundled === target) return
+
     const stampFile = join(target, '.runtime-host-version')
     const viteCli = join(target, 'node_modules', 'vite', 'bin', 'vite.js')
+    const expectedStamp = `${app.getVersion()}-clean-v2`
 
     try {
       const stamp = await fs.readFile(stampFile, 'utf-8').catch(() => null)
-      if (stamp?.trim() === app.getVersion() && existsSync(viteCli)) {
+      if (stamp?.trim() === expectedStamp && existsSync(viteCli)) {
         return
       }
-      console.log(`[preview] 铺设预览宿主：${bundled} → ${target}（首次或版本变化，约 165M）`)
+      console.log(`[preview] 铺设预览宿主：${bundled} → ${target}（首次或版本变化）`)
       await fs.rm(target, { recursive: true, force: true })
       await fs.mkdir(dirname(target), { recursive: true })
       await fs.cp(bundled, target, { recursive: true, verbatimSymlinks: true })
-      // 多栈宿主：铺完确保栈标记存在（缺省 vue3-element，
-      // 与存量快照一致）。LLM 运行中换栈时主进程会重写这里。
       const marker = join(target, '.prototype-stack')
       const markerCurrent = await fs.readFile(marker, 'utf-8').catch(() => null)
       if (!markerCurrent) await fs.writeFile(marker, 'vue3-element', 'utf-8')
-      await fs.writeFile(stampFile, app.getVersion(), 'utf-8')
+      await fs.writeFile(stampFile, expectedStamp, 'utf-8')
       console.log('[preview] 预览宿主就绪')
     } catch (err: any) {
-      // 不抛：让它继续走到 startServer 的 waitForServer，那里会失败并留下日志，
-      // 而这里的一句「为什么没铺成」通常才是真正的线索。
       console.error('[preview] 铺设预览宿主失败：', err?.message ?? err)
     }
   }

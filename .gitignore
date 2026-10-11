@@ -16,11 +16,12 @@ provider-secrets.json
 .probe
 .work
 # runtime-host 的栈标记与 LLM 生成的当前原型文件：
-# 全是运行期状态（主进程仲裁/重写），进版本库只会
-# 造成无意义的 diff。宿主源码（src/、vite.config.ts）
-# 仍然要入库。
+# 实际运行期数据已全部迁往 ~/.prototype-studio/，
+# 这里保留忽略规则防止本地调试时误提交。
 runtime-host/.prototype-stack
 runtime-host/src/prototypes/
+runtime-host/src/views/prototypes/active.tsx
+runtime-host/src/views/prototypes/active.html
 .DS_Store
 .vscode
 .idea

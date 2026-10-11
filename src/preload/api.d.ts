@@ -80,7 +80,52 @@ export interface IThunderAPI {
 
 export interface IHostAPI {
   getHostUrl: () => Promise<string>
-  savePrototypeFile: (params: { prototypeId: string; code: string }) => Promise<{ success: boolean; filePath?: string; error?: string }>
+  savePrototypeFile: (params: {
+    prototypeId: string
+    code: string
+    techStack?: string
+  }) => Promise<{
+    success: boolean
+    filePath?: string
+    previewUrl?: string
+    techStack?: string
+    entryFile?: string
+    error?: string
+  }>
+}
+
+export interface IPrototypeAPI {
+  list: () => Promise<{ ok: boolean; projects: any[]; activeId: string }>
+  setActive: (id: string) => Promise<{ ok: boolean }>
+  create: (params: {
+    name: string
+    description?: string
+    scenario?: string
+    preferredStack?: string
+  }) => Promise<{ ok: boolean; item?: any; error?: string }>
+  clone: (sourceId: string) => Promise<{ ok: boolean; item?: any; error?: string }>
+  delete: (id: string) => Promise<{ ok: boolean; projects?: any[]; activeId?: string }>
+  updateCode: (params: {
+    id: string
+    code: string
+    filePath?: string
+    techStack?: string
+  }) => Promise<{ ok: boolean; item?: any; error?: string }>
+  saveChat: (params: {
+    id: string
+    messages: any[]
+    resetSession?: boolean
+  }) => Promise<{ ok: boolean; error?: string }>
+  readFile: (params: {
+    id: string
+    filePath: string
+  }) => Promise<{ ok: boolean; content?: string; filePath?: string; error?: string }>
+  migrateLocalStorage: (items: any[]) => Promise<{
+    ok: boolean
+    migrated?: number
+    projects?: any[]
+    activeId?: string
+  }>
 }
 
 export interface IHistoryAPI {
@@ -348,10 +393,38 @@ export interface IAgentAPI {
     finishReason?: string
     finalContent?: string | null
     code?: string
+    techStack?: string
   }>
+  answerQuestion: (params: {
+    questionId: string
+    answers?: Record<string, any> | any
+    cancelled?: boolean
+  }) => Promise<{ ok: boolean; error?: string }>
   cancel: (runId: string) => Promise<boolean>
   onStreamEvent: (callback: (frame: any) => void) => () => void
-  onCodeUpdated: (callback: (data: { code: string }) => void) => () => void
+  onUserQuestion: (
+    callback: (data: {
+      task_id: string
+      session_id?: string
+      question_id: string
+      questions: Array<{
+        question: string
+        header?: string
+        multi_select?: boolean
+        options: Array<{ label: string; description?: string }>
+      }>
+    }) => void
+  ) => () => void
+  onCodeUpdated: (
+    callback: (data: {
+      code: string
+      techStack?: string
+      previewUrl?: string
+      entryFile?: string
+      experimental?: boolean
+      stackChanged?: boolean
+    }) => void
+  ) => () => void
 }
 
 declare global {
@@ -361,6 +434,7 @@ declare global {
     project: IProjectAPI
     hostApi: IHostAPI
     historyApi: IHistoryAPI
+    prototypeApi: IPrototypeAPI
     browser: IBrowserAPI
     agent: IAgentAPI
   }
