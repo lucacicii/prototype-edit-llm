@@ -42,6 +42,8 @@ export const App: React.FC = () => {
   const [chatCollapsed, setChatCollapsed] = useState(false)
   const [activeTab, setActiveTab] = useState<'preview' | 'code'>('preview')
   const [currentWorkspace, setCurrentWorkspace] = useState<any>(null)
+  const currentWorkspaceRef = useRef<any>(null)
+  currentWorkspaceRef.current = currentWorkspace
   const [currentVersionNo, setCurrentVersionNo] = useState<number | null>(null)
 
   // Dialog toggles
@@ -79,6 +81,21 @@ export const App: React.FC = () => {
     syncActivePrototypeToFile()
   }, [prototypeStore.activeId])
 
+  // 工作区切换：切回默认工作区（我的原型）时，浏览器要回到当前原型的预览。
+  // 外部工作区的跳转由 EmbeddedBrowserViewer 按 workspace.url 处理。
+  const prevWorkspaceIdRef = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    const id: string | undefined = currentWorkspace?.id
+    const prev = prevWorkspaceIdRef.current
+    prevWorkspaceIdRef.current = id
+    if (prev === undefined || prev === id) return
+    setSelectedFile('')
+    setSelectedFileContent(null)
+    if (!id || id === 'default-host') {
+      void syncActivePrototypeToFile()
+    }
+  }, [currentWorkspace?.id])
+
   const refreshVersionNo = async () => {
     if (!currentPrototype || !window.historyApi) {
       setCurrentVersionNo(null)
@@ -104,7 +121,8 @@ export const App: React.FC = () => {
           code: overrideCode ?? p.vueCode,
           techStack: (overrideStack ?? p.techStack) as any
         })
-        if (res?.previewUrl && (!currentWorkspace || currentWorkspace.id === 'default-host')) {
+        const ws = currentWorkspaceRef.current
+        if (res?.previewUrl && (!ws || ws.id === 'default-host')) {
           embeddedBrowserRef.current?.navigateToUrl(res.previewUrl)
         }
       } catch (e) {
@@ -114,9 +132,10 @@ export const App: React.FC = () => {
   }
 
   const applyCodeChange = (id: string, newCode: string, label: string, runId?: string) => {
-    const prev = currentPrototype?.vueCode
+    const target = usePrototypeStore.getState().prototypes.find((p) => p.id === id)
+    const prev = target?.vueCode
     prototypeStore.updateCode(id, newCode)
-    if (!currentPrototype || prev === undefined || prev === newCode || !window.historyApi) return
+    if (!target || prev === undefined || prev === newCode || !window.historyApi) return
     window.historyApi
       .record({
         prototypeId: id,
@@ -141,7 +160,10 @@ export const App: React.FC = () => {
 
     if (window.project?.findSourceFile && (target.sourceFile || target.componentName)) {
       try {
-        const match = await window.project.findSourceFile(target.sourceFile || target.componentName)
+        const match = await window.project.findSourceFile(
+          target.sourceFile || target.componentName,
+          prototypeStore.activeId || undefined
+        )
         if (match) {
           sourceCode = match.content
           target.resolvedLocalPath = match.filePath
@@ -289,7 +311,10 @@ export const App: React.FC = () => {
         onCreate={handleCreatePrototype}
         onClone={handleClonePrototype}
         onDelete={handleDeletePrototype}
-        onWorkspaceChanged={setCurrentWorkspace}
+        onWorkspaceChanged={(ws) => {
+          setCurrentWorkspace(ws)
+          clearSelectionState()
+        }}
         onOpenSettings={() => setIsSettingsOpen(true)}
         collapsed={sidebarCollapsed}
         width={sidebarWidth}
@@ -302,6 +327,7 @@ export const App: React.FC = () => {
 
       {/* 栏目 2：AI 原型对话迭代区 */}
       <ChatPanel
+        currentWorkspace={currentWorkspace}
         onOpenSettings={() => setIsSettingsOpen(true)}
         collapsed={chatCollapsed}
         width={chatWidth}
@@ -317,9 +343,15 @@ export const App: React.FC = () => {
         markupAnnotations={markupAnnotations}
         onRemoveMarkupAnnotation={handleRemoveMarkupAnnotation}
         onClearSelectionState={clearSelectionState}
-        onCodeUpdated={(newCode, label, techStack, previewUrl) => {
-          if (currentPrototype) {
-            applyCodeChange(currentPrototype.id, newCode, label)
+        onCodeUpdated={(newCode, label, techStack, previewUrl, _entryFile, ownerId) => {
+          // run 期间用户可能已切到别的项目：代码要写回发起 run 的那个原型，
+          // 预览也只在它仍是当前项目时才跳转。
+          const targetId = ownerId || currentPrototype?.id
+          if (targetId) {
+            const prevActive = usePrototypeStore.getState().activeId
+            const stillActive = targetId === prevActive
+            applyCodeChange(targetId, newCode, label)
+            if (!stillActive) return
             if (previewUrl && (!currentWorkspace || currentWorkspace.id === 'default-host')) {
               embeddedBrowserRef.current?.navigateToUrl(previewUrl)
             } else {

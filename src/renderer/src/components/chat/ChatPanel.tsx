@@ -20,6 +20,10 @@ import {
 import { Tag } from '@lobehub/ui'
 import { ResizeHandle } from '../ResizeHandle'
 import {
+  useWorkspaceChatStore,
+  workspaceSessionKey
+} from '../../stores/useWorkspaceChatStore'
+import {
   OpenAI,
   Anthropic,
   DeepSeek,
@@ -35,7 +39,8 @@ import {
 } from '@lobehub/icons'
 import {
   usePrototypeStore,
-  useCurrentPrototype
+  useCurrentPrototype,
+  type PrototypeChatMessage
 } from '../../stores/usePrototypeStore'
 import {
   useAgentModelConfigStore,
@@ -84,6 +89,8 @@ interface PendingAttachment {
 }
 
 interface ChatPanelProps {
+  /** 当前工作区；非默认工作区时对话与 agent 会话独立于原型项目。 */
+  currentWorkspace?: { id: string; name: string } | null
   onOpenSettings: () => void
   collapsed: boolean
   width: number
@@ -101,7 +108,9 @@ interface ChatPanelProps {
     label: string,
     techStack?: string,
     previewUrl?: string,
-    entryFile?: string
+    entryFile?: string,
+    /** 产生这次代码更新的原型（run 期间用户可能已切走）。 */
+    prototypeId?: string
   ) => void
 }
 
@@ -151,6 +160,7 @@ function hashTokenAtCursor(text: string, cursor: number): { start: number; query
 }
 
 export const ChatPanel: React.FC<ChatPanelProps> = ({
+  currentWorkspace,
   onOpenSettings,
   inspectTarget,
   onClearInspectTarget,
@@ -166,7 +176,33 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   onToggleSidebar
 }) => {
   const currentPrototype = useCurrentPrototype()
-  const { addChatMessage, updateTechStack, truncateChat } = usePrototypeStore()
+  const {
+    addChatMessage: addPrototypeChatMessage,
+    updateTechStack,
+    truncateChat: truncatePrototypeChat
+  } = usePrototypeStore()
+  const wsChats = useWorkspaceChatStore((s) => s.chats)
+  const addWorkspaceMessage = useWorkspaceChatStore((s) => s.addMessage)
+  const truncateWorkspaceChat = useWorkspaceChatStore((s) => s.truncate)
+
+  // 会话归属：外部工作区用工作区自己的对话，否则跟当前原型走。
+  const externalWs =
+    currentWorkspace && currentWorkspace.id !== 'default-host' ? currentWorkspace : null
+  const wsChat = externalWs ? wsChats[externalWs.id] : undefined
+  /** 对话的稳定 id（草稿、消息存取用）。 */
+  const convId = externalWs ? externalWs.id : currentPrototype?.id
+  /** 发给 agent 的会话键；run 归属也以它为准。 */
+  const runKey = externalWs
+    ? workspaceSessionKey(externalWs.id, wsChat?.epoch ?? 0)
+    : currentPrototype?.id
+  const convMessages = externalWs ? wsChat?.messages ?? [] : currentPrototype?.chatMessages ?? []
+
+  const addChatMessage = (_id: string, message: PrototypeChatMessage) => {
+    if (externalWs) addWorkspaceMessage(externalWs.id, message)
+    else addPrototypeChatMessage(_id, message)
+  }
+  const truncateChat = (_id: string, keepCount: number) =>
+    externalWs ? truncateWorkspaceChat(externalWs.id, keepCount) : truncatePrototypeChat(_id, keepCount)
 
   const {
     selectionId,
@@ -211,23 +247,46 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   // ============ 流式运行（LiveSegment 时序模型 + 指标 + 问题卡 + steer） ============
   const stream = useAgentChatStream({
     contextWindowLimit: selectedModel?.contextWindow,
-    onCodeUpdated: (code, techStack, previewUrl, entryFile) => {
-      onCodeUpdated(code, lastInstructionLabel.current, techStack, previewUrl, entryFile)
-      if (techStack && currentPrototype && techStack !== currentPrototype.techStack) {
-        updateTechStack(currentPrototype.id, techStack as any, entryFile)
+    onCodeUpdated: (code, techStack, previewUrl, entryFile, runPrototypeId) => {
+      // 归属以发起 run 的原型为准，而不是「此刻正在看的」那个。
+      const owner = usePrototypeStore.getState().prototypes.find((p) => p.id === runPrototypeId)
+      // 外部工作区的 run 不属于任何原型：代码不写回原型，由主进程直接刷新预览。
+      if (!owner) return
+      onCodeUpdated(code, lastInstructionLabel.current, techStack, previewUrl, entryFile, owner.id)
+      if (techStack && techStack !== owner.techStack) {
+        updateTechStack(owner.id, techStack as any, entryFile)
       }
     }
   })
 
+  /** 正在跑的 run 属于当前项目才展示流式内容；别的项目在跑时只当作「忙」。 */
+  const streamHere = stream.isStreaming && stream.runPrototypeId === runKey
+  const runElsewhere = stream.isStreaming && !streamHere
+
   useEffect(() => {
     scrollToBottom()
-  }, [currentPrototype?.chatMessages?.length, stream.liveSegments, stream.pendingQuestion, scrollToBottom])
+  }, [convMessages.length, stream.liveSegments, stream.pendingQuestion, scrollToBottom])
 
-  // 切换项目重置累计指标
+  // 切换项目：重置累计指标、按项目保存/恢复草稿、清空附件与补全状态、滚到底
+  const draftsRef = useRef<Map<string, string>>(new Map())
+  const prevProtoIdRef = useRef<string | undefined>(convId)
   useEffect(() => {
-    stream.resetSessionCounters()
+    const prevId = prevProtoIdRef.current
+    const nextId = convId
+    if (prevId === nextId) return
+    if (prevId) draftsRef.current.set(prevId, promptInput)
+    prevProtoIdRef.current = nextId
+    setPromptInput(nextId ? draftsRef.current.get(nextId) ?? '' : '')
+    setCursorPos(0)
+    setPendingAttachments([])
+    setFileSuggestDismissed(false)
+    // 别的项目正在跑时，当前这个项目的指标不该被清掉后又被它的事件污染，
+    // 但也没有可展示的指标，重置即可。
+    if (!stream.isStreaming) stream.resetSessionCounters()
+    stickToBottom.current = true
+    requestAnimationFrame(() => scrollToBottom(true))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentPrototype?.id])
+  }, [convId])
 
   // ============ 附件处理 ============
   const ALLOWED_IMAGE_MIME = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif'])
@@ -316,11 +375,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const fileSuggestions = useMemo(() => {
     if (!hashToken) return []
     const q = hashToken.query.toLowerCase()
-    const files = currentPrototype?.files || []
+    const files = externalWs ? [] : currentPrototype?.files || []
     return files
       .filter((f) => !q || f.toLowerCase().includes(q))
       .slice(0, 12)
-  }, [hashToken, currentPrototype?.files])
+  }, [hashToken, currentPrototype?.files, externalWs])
 
   const fileSuggestOpen =
     Boolean(hashToken) && !fileSuggestDismissed && fileSuggestions.length > 0 && !stream.isStreaming
@@ -409,7 +468,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
   /** 读取 #引用 的项目文件，编译成 [Referenced File] 上下文块。 */
   const compileReferencedFiles = async (rawText: string): Promise<string[]> => {
-    if (!currentPrototype || !window.prototypeApi?.readFile) return []
+    if (!currentPrototype || externalWs || !window.prototypeApi?.readFile) return []
     const paths = new Set<string>()
     for (const m of rawText.matchAll(/(?:^|\s)#([a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+)/g)) {
       if (m[1]) paths.add(m[1])
@@ -469,12 +528,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     if (!instruction && images.length) instruction = '请分析这张图片。'
 
     const stackHeader =
-      currentPrototype.techStack && currentPrototype.techStack !== 'vue3-element'
+      !externalWs && currentPrototype.techStack && currentPrototype.techStack !== 'vue3-element'
         ? `【当前技术栈】: ${currentPrototype.techStack}（请保持该栈）\n`
         : ''
     instruction = stackHeader + instruction
 
-    const history = (currentPrototype.chatMessages || [])
+    const history = convMessages
       .filter((m) => m.role === 'user' || m.role === 'assistant')
       .slice(-8)
       .map((m) => ({ role: m.role, content: m.content }))
@@ -509,9 +568,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
     const res = await stream.startRun({
       runId,
-      prototypeId: currentPrototype.id,
+      prototypeId: runKey ?? currentPrototype.id,
       prompt: instruction,
-      code: currentPrototype.vueCode,
+      code: externalWs ? '' : currentPrototype.vueCode,
       history,
       inspectTarget: target ? (target as any) : undefined,
       markupTargets: markups.length ? (markups as any) : undefined,
@@ -531,8 +590,15 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       return
     }
 
-    if (res.code && res.code !== currentPrototype.vueCode) {
-      onCodeUpdated(res.code, lastInstructionLabel.current, res.techStack)
+    if (!externalWs && res.code && res.code !== currentPrototype.vueCode) {
+      onCodeUpdated(
+        res.code,
+        lastInstructionLabel.current,
+        res.techStack,
+        undefined,
+        undefined,
+        currentPrototype.id
+      )
       if (res.techStack && res.techStack !== currentPrototype.techStack) {
         updateTechStack(currentPrototype.id, res.techStack as any)
       }
@@ -559,6 +625,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   }
 
   const handleSendClick = () => {
+    if (runElsewhere) return
     if (stream.isStreaming) {
       void stream.cancelRun()
     } else if (promptInput.trim() || pendingAttachments.length > 0) {
@@ -601,6 +668,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
+      // 别的项目的 run 不能被这里的输入插话
+      if (runElsewhere) return
       if (stream.isStreaming) {
         void handleSteer(e.altKey)
         return
@@ -627,7 +696,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   /** 重发某条用户消息：截断其后会话（新 thunder 会话）再原样发送。 */
   const handleResend = async (index: number) => {
     if (!currentPrototype || stream.isStreaming) return
-    const target = currentPrototype.chatMessages[index]
+    const target = convMessages[index]
     if (!target || target.role !== 'user') return
     const content = target.content
     truncateChat(currentPrototype.id, index)
@@ -640,13 +709,13 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     if (!currentPrototype || stream.isStreaming) return
     let userIndex = -1
     for (let i = assistantIndex - 1; i >= 0; i--) {
-      if (currentPrototype.chatMessages[i]?.role === 'user') {
+      if (convMessages[i]?.role === 'user') {
         userIndex = i
         break
       }
     }
     if (userIndex === -1) return
-    const content = currentPrototype.chatMessages[userIndex].content
+    const content = convMessages[userIndex].content
     truncateChat(currentPrototype.id, userIndex)
     await new Promise((r) => setTimeout(r, 150))
     await doSend(undefined, content)
@@ -703,7 +772,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const cacheHit = cacheCount > 0 && (m?.promptTokens ?? 0) > 0
   const cachePct = cacheHit ? ((cacheCount / (m!.promptTokens as number)) * 100).toFixed(0) : null
 
-  const chatMessages = currentPrototype?.chatMessages || []
+  const chatMessages = convMessages
   const isEmptyConversation =
     chatMessages.length === 0 ||
     (chatMessages.length === 1 && chatMessages[0].role === 'assistant')
@@ -857,10 +926,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
       {/* 消息流 / 空状态 */}
       <div className="pc-feed" ref={chatScrollEl} onScroll={handleScroll}>
-        {isEmptyConversation && !stream.isStreaming ? (
+        {isEmptyConversation && !streamHere ? (
           <ChatEmptyState
-            scenario={currentPrototype?.scenario}
-            projectName={currentPrototype?.name}
+            scenario={externalWs ? undefined : currentPrototype?.scenario}
+            projectName={externalWs ? externalWs.name : currentPrototype?.name}
             onSelectPrompt={(prompt) => void doSend(undefined, prompt)}
           />
         ) : (
@@ -877,7 +946,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             ))}
 
             {/* 实时流式回合（时序 segments） */}
-            {stream.isStreaming && (
+            {streamHere && (
               <ChatMessageItem
                 message={{ role: 'assistant', content: '', timestamp: Date.now() }}
                 index={chatMessages.length}
@@ -892,7 +961,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
       {/* 底部输入区：问题卡停靠 + 队列徽章 + Composer */}
       <div className="pc-composer-zone">
-        {hasQuestion && stream.pendingQuestion && (
+        {streamHere && hasQuestion && stream.pendingQuestion && (
           <ChatQuestionBubble
             question={stream.pendingQuestion}
             onAnswer={(answers, cancelled) => void stream.answerQuestion(answers, cancelled)}
@@ -900,7 +969,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           />
         )}
 
-        {stream.isStreaming && stream.queuedCount > 0 && (
+        {streamHere && stream.queuedCount > 0 && (
           <div className="pc-queued">
             <strong>📥 已排队 {stream.queuedCount} 条</strong>
             <span>Enter 插话 · ⌥Enter 追问</span>
@@ -949,7 +1018,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             onPaste={handlePaste}
             onKeyDown={handleKeyDown}
             placeholder={
-              stream.isStreaming
+              runElsewhere
+                ? '其他项目的 Agent 正在运行，请稍候...'
+                : stream.isStreaming
                 ? '运行中：Enter 插话引导（⌥Enter 待本轮结束后追问）...'
                 : inspectTarget
                   ? '针对圈选区域输入修改意见（输入 # 可引用项目文件）...'
@@ -981,7 +1052,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           {/* 指标条 */}
           <div className="pc-metrics">
             <div className="pc-metrics-group">
-              {stream.isStreaming ? (
+              {streamHere ? (
                 <>
                   <span className="pc-metrics-pulse" />
                   <span className="pc-metrics-speed">
@@ -1105,7 +1176,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
               </Dropdown>
             </div>
 
-            {stream.isStreaming ? (
+            {streamHere ? (
               <button
                 type="button"
                 className="pc-send-btn is-stop"
@@ -1120,7 +1191,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                 type="button"
                 className="pc-send-btn"
                 onClick={handleSendClick}
-                disabled={!promptInput.trim() && pendingAttachments.length === 0}
+                disabled={runElsewhere || (!promptInput.trim() && pendingAttachments.length === 0)}
                 title={stream.isStreaming ? '停止' : '发送 (Enter)'}
               >
                 <ArrowUp size={12} />
@@ -1131,7 +1202,13 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         </div>
 
         {/* 运行提示行 */}
-        {stream.isStreaming && (
+        {runElsewhere && (
+          <div className="flex items-center gap-2 mt-1.5 text-[10.5px] text-slate-400 px-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+            <span>其他项目的 Agent 正在运行，完成后才能在此发送</span>
+          </div>
+        )}
+        {streamHere && (
           <div className="flex items-center gap-2 mt-1.5 text-[10.5px] text-slate-400 font-mono px-1">
             <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
             <span>Agent 运行中 {(stream.elapsedMs / 1000).toFixed(1)}s</span>

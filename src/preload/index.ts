@@ -144,7 +144,8 @@ const projectApi = {
   listWorkspaces: () => ipcRenderer.invoke('project:list-workspaces'),
   getCurrentWorkspace: () => ipcRenderer.invoke('project:get-current-workspace'),
   switchWorkspace: (id: string) => ipcRenderer.invoke('project:switch-workspace', id),
-  findSourceFile: (target: string) => ipcRenderer.invoke('project:find-source-file', target),
+  findSourceFile: (target: string, prototypeId?: string) =>
+    ipcRenderer.invoke('project:find-source-file', target, prototypeId),
   saveCode: (params: { filePath: string; content: string }) =>
     ipcRenderer.invoke('project:save-code', params),
   checkFileExists: (filePath: string) =>

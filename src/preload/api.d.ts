@@ -178,7 +178,7 @@ export interface IProjectAPI {
   listWorkspaces: () => Promise<ProjectWorkspace[]>
   getCurrentWorkspace: () => Promise<ProjectWorkspace | null>
   switchWorkspace: (id: string) => Promise<ProjectWorkspace | null>
-  findSourceFile: (target: string) => Promise<{ filePath: string; content: string } | null>
+  findSourceFile: (target: string, prototypeId?: string) => Promise<{ filePath: string; content: string } | null>
   saveCode: (params: { filePath: string; content: string }) => Promise<{ success: boolean; savedPath?: string; error?: string }>
   checkFileExists: (filePath: string) => Promise<{ exists: boolean }>
 }

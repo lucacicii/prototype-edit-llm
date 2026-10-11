@@ -252,7 +252,7 @@ export const PrototypeSidebar: React.FC<PrototypeSidebarProps> = ({
         >
           {workspaces.map((ws) => (
             <option key={ws.id} value={ws.id}>
-              {ws.name} ({getFrameworkBadge(ws.framework)})
+              {ws.id === 'default-host' ? ws.name : `${ws.name} (${getFrameworkBadge(ws.framework)})`}
             </option>
           ))}
         </select>

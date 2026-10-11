@@ -1,6 +1,10 @@
 import { promises as fs } from 'fs'
 import * as path from 'path'
-import { runtimeHostDir } from './app-paths'
+import { projectsRootDir } from './app-paths'
+import { projectDirFor } from './project-store'
+
+/** 默认工作区 id：用户自己的独立原型项目（~/.prototype-studio/projects/<id>/）。 */
+export const DEFAULT_WORKSPACE_ID = 'default-host'
 
 export interface ProjectWorkspace {
   id: string
@@ -27,16 +31,14 @@ export class ProjectWorkspaceManager {
   }
 
   constructor() {
-    // Default workspace: Built-in Prototype Host
+    // 默认工作区：用户自己的独立原型项目。技术栈由每个原型自选，这里不预设。
     this.currentWorkspace = {
-      id: 'default-host',
-      name: '内置原型工程 (runtime-host)',
+      id: DEFAULT_WORKSPACE_ID,
+      name: '我的原型',
       type: 'local-directory',
-      url: 'http://127.0.0.1:4321',
-      rootPath: runtimeHostDir(),
-      framework: 'vue3',
-      uiLibrary: 'Element Plus',
-      devTool: 'vite'
+      url: '',
+      rootPath: projectsRootDir(),
+      framework: 'unknown'
     }
     this.workspaces.push(this.currentWorkspace)
   }
@@ -150,10 +152,15 @@ export class ProjectWorkspaceManager {
    * 在当前工作区中根据组件名或相对文件路径查找源文件内容
    */
   public async findSourceFile(
-    fileNameOrComponent: string
+    fileNameOrComponent: string,
+    prototypeId?: string
   ): Promise<{ filePath: string; content: string } | null> {
-    if (!this.currentWorkspace || !this.currentWorkspace.rootPath) return null
-    const root = this.currentWorkspace.rootPath
+    if (!this.currentWorkspace) return null
+    const isDefault = this.currentWorkspace.id === DEFAULT_WORKSPACE_ID
+    // 默认工作区：只在当前原型自己的项目目录里找，而不是整个 projects 根目录
+    if (isDefault && !prototypeId) return null
+    const root = isDefault ? projectDirFor(prototypeId!) : this.currentWorkspace.rootPath
+    if (!root) return null
 
     // 1. Direct path check
     const directPath = path.isAbsolute(fileNameOrComponent)
@@ -171,13 +178,16 @@ export class ProjectWorkspaceManager {
     }
 
     // 2. Search in src/ directory recursively
-    const srcDir = path.join(root, 'src')
+    const srcDir = isDefault ? root : path.join(root, 'src')
     const candidates = [
       `${fileNameOrComponent}.vue`,
       `${fileNameOrComponent}.tsx`,
       `${fileNameOrComponent}.jsx`,
       `${fileNameOrComponent}/index.vue`,
-      `${fileNameOrComponent}/index.tsx`
+      `${fileNameOrComponent}/index.tsx`,
+      `${fileNameOrComponent}.html`,
+      `${fileNameOrComponent}.css`,
+      `${fileNameOrComponent}.js`
     ]
 
     try {

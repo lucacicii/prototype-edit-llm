@@ -61,8 +61,8 @@ export function setupProjectIpc(): void {
   })
 
   // 在工作区中反查源文件
-  ipcMain.handle('project:find-source-file', async (_event, target: string) => {
-    return wsManager.findSourceFile(target)
+  ipcMain.handle('project:find-source-file', async (_event, target: string, prototypeId?: string) => {
+    return wsManager.findSourceFile(target, prototypeId)
   })
 
   // 保存代码到指定文件（支持自动创建多级子目录）

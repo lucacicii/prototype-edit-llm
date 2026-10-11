@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Modal, Input, Radio, Button, Alert, message } from 'antd'
+import { Modal, Input, Button, Alert, Checkbox, message } from 'antd'
 import { FolderOpen } from 'lucide-react'
 
 interface ExportModalProps {
@@ -27,7 +27,6 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     localStorage.getItem('wb_prototype_export_dir') || defaultPasswordTemplateDir
   )
   const [relativeFilePath, setRelativeFilePath] = useState(defaultRelPath)
-  const [routerExportMode, setRouterExportMode] = useState<'static' | 'none'>('static')
   const [fileExists, setFileExists] = useState(false)
   const [exporting, setExporting] = useState(false)
 
@@ -107,7 +106,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   return (
     <Modal
       open={open}
-      title="导出代码至本地业务工程"
+      title="导出页面文件至本地业务工程"
       width={620}
       onCancel={onClose}
       onOk={handleConfirmExport}
@@ -151,18 +150,16 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         </div>
 
         <div>
-          <label className="block text-slate-300 font-medium mb-1">路由同步模式 (Router Mode)</label>
-          <Radio.Group
-            value={routerExportMode}
-            onChange={(e) => setRouterExportMode(e.target.value)}
-          >
-            <Radio value="static">
-              <span className="text-slate-300">直接配置到本地静态路由 (src/router/local_router.ts)</span>
-            </Radio>
-            <Radio value="none">
-              <span className="text-slate-300">仅导出页面代码 (自行配置)</span>
-            </Radio>
-          </Radio.Group>
+          <label className="block text-slate-300 font-medium mb-1">路由同步</label>
+          <Checkbox disabled>
+            <span className="text-slate-500">
+              自动写入业务工程路由 (src/router/local_router.ts)
+              <span className="ml-1 text-amber-500">（暂未支持）</span>
+            </span>
+          </Checkbox>
+          <p className="text-[11px] text-slate-500 mt-1">
+            当前仅导出单个页面文件，导出后请自行配置路由
+          </p>
         </div>
 
         {computedFullPath && (

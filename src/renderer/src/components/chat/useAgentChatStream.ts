@@ -79,7 +79,9 @@ interface UseAgentChatStreamOptions {
     code: string,
     techStack?: string,
     previewUrl?: string,
-    entryFile?: string
+    entryFile?: string,
+    /** 这次 run 所属的原型（run 期间用户可能已切到别的项目）。 */
+    prototypeId?: string
   ) => void
 }
 
@@ -148,6 +150,9 @@ function failureNoticeFor(reason: string, detail?: string): string | undefined {
 export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
   const [isStreaming, setIsStreaming] = useState(false)
   const [activeRunId, setActiveRunId] = useState<string | null>(null)
+  /** 正在跑的 run 属于哪个原型；切换项目后据此判断流式状态该不该显示。 */
+  const [runPrototypeId, setRunPrototypeId] = useState<string | null>(null)
+  const runPrototypeIdRef = useRef<string | null>(null)
   const [liveSegments, setLiveSegments] = useState<LiveSegment[]>([])
   const [elapsedMs, setElapsedMs] = useState(0)
 
@@ -332,6 +337,8 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
       segmentsRef.current = []
       setIsStreaming(true)
       setActiveRunId(params.runId)
+      setRunPrototypeId(params.prototypeId)
+      runPrototypeIdRef.current = params.prototypeId
       activeRunIdRef.current = params.runId
 
       const startWall = Date.now()
@@ -359,7 +366,13 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
 
       const offCode = window.agent.onCodeUpdated
         ? window.agent.onCodeUpdated((data: any) => {
-            onCodeUpdatedRef.current?.(data.code, data.techStack, data.previewUrl, data.entryFile)
+            onCodeUpdatedRef.current?.(
+              data.code,
+              data.techStack,
+              data.previewUrl,
+              data.entryFile,
+              runPrototypeIdRef.current ?? undefined
+            )
           })
         : undefined
 
@@ -415,6 +428,8 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
         offCode?.()
         setIsStreaming(false)
         setActiveRunId(null)
+        setRunPrototypeId(null)
+        runPrototypeIdRef.current = null
         activeRunIdRef.current = null
         setPendingQuestion(null)
         stopTimer()
@@ -503,6 +518,7 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
   return {
     isStreaming,
     activeRunId,
+    runPrototypeId,
     liveSegments,
     elapsedMs,
     lastRunMetrics,
