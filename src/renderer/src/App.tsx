@@ -4,7 +4,9 @@ import {
   Globe,
   Code2,
   Clock,
-  FolderOutput
+  FolderOutput,
+  PanelLeftOpen,
+  PanelLeftClose
 } from 'lucide-react'
 import { PrototypeSidebar } from './components/PrototypeSidebar'
 import { ChatPanel, type PointedTarget, type MarkupAnnotation } from './components/chat/ChatPanel'
@@ -23,11 +25,21 @@ import {
 import { useAgentModelConfigStore } from './stores/useAgentModelConfigStore'
 import { locateCodeSnippet } from './utils/inspector'
 
+function loadWidth(key: string, fallback: number): number {
+  const v = Number(localStorage.getItem(`layout.width.${key}`))
+  return Number.isFinite(v) && v > 0 ? v : fallback
+}
+
 export const App: React.FC = () => {
   const prototypeStore = usePrototypeStore()
   const currentPrototype = useCurrentPrototype()
   const { refresh: refreshModelConfig } = useAgentModelConfigStore()
 
+  const [sidebarWidth, setSidebarWidth] = useState(() => loadWidth('sidebar', 256))
+  const [chatWidth, setChatWidth] = useState(() => loadWidth('chat', 384))
+  const [isResizing, setIsResizing] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [chatCollapsed, setChatCollapsed] = useState(false)
   const [activeTab, setActiveTab] = useState<'preview' | 'code'>('preview')
   const [currentWorkspace, setCurrentWorkspace] = useState<any>(null)
   const [currentVersionNo, setCurrentVersionNo] = useState<number | null>(null)
@@ -38,7 +50,7 @@ export const App: React.FC = () => {
   const [isHistoryOpen, setIsHistoryOpen] = useState(false)
 
   // Suspension of native browser view when modals are open
-  const browserSuspended = isSettingsOpen || isExportDialogOpen || isHistoryOpen
+  const browserSuspended = isSettingsOpen || isExportDialogOpen || isHistoryOpen || isResizing
 
   // Selection states
   const [inspectTarget, setInspectTarget] = useState<PointedTarget | null>(null)
@@ -278,11 +290,28 @@ export const App: React.FC = () => {
         onClone={handleClonePrototype}
         onDelete={handleDeletePrototype}
         onWorkspaceChanged={setCurrentWorkspace}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+        collapsed={sidebarCollapsed}
+        width={sidebarWidth}
+        onWidthChange={(w) => {
+          setSidebarWidth(w)
+          localStorage.setItem('layout.width.sidebar', String(w))
+        }}
+        onResizeDragChange={setIsResizing}
       />
 
       {/* 栏目 2：AI 原型对话迭代区 */}
       <ChatPanel
         onOpenSettings={() => setIsSettingsOpen(true)}
+        collapsed={chatCollapsed}
+        width={chatWidth}
+        onWidthChange={(w) => {
+          setChatWidth(w)
+          localStorage.setItem('layout.width.chat', String(w))
+        }}
+        onResizeDragChange={setIsResizing}
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleSidebar={() => setSidebarCollapsed((v) => !v)}
         inspectTarget={inspectTarget}
         onClearInspectTarget={() => setInspectTarget(null)}
         markupAnnotations={markupAnnotations}
@@ -303,60 +332,74 @@ export const App: React.FC = () => {
       {/* 栏目 3：核心工作区（内置工程浏览器 / Monaco 代码编辑器） */}
       <main className="flex-1 flex flex-col min-w-0 bg-slate-950 overflow-hidden relative">
         {/* 顶部主工作区 Header */}
-        <header className="app-drag h-14 border-b border-slate-800 px-4 flex items-center justify-between bg-slate-900 select-none z-10 flex-shrink-0">
-          <div className="flex items-center space-x-3">
-            <span className="text-sm font-semibold text-slate-200">
+        <header
+          className={`workspace-header app-drag h-14 gap-3 border-b border-slate-800 px-4 flex items-center justify-between bg-slate-900 select-none z-10 flex-shrink-0 ${
+            sidebarCollapsed && chatCollapsed ? 'traffic-light-inset' : ''
+          }`}
+        >
+          <div className="flex items-center space-x-3 min-w-0 flex-1">
+            <button
+              onClick={() => setChatCollapsed((v) => !v)}
+              className="text-slate-400 hover:text-slate-200 transition p-1 rounded hover:bg-slate-800 cursor-pointer flex-shrink-0"
+              title={chatCollapsed ? '展开 AI 原型对话' : '折叠 AI 原型对话'}
+            >
+              {chatCollapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
+            </button>
+            <span className="text-sm font-semibold text-slate-200 truncate min-w-0">
               {currentWorkspace && currentWorkspace.id !== 'default-host'
                 ? currentWorkspace.name
                 : currentPrototype?.name || '空白原型'}
             </span>
-            <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400">
+            <span className="wh-id text-[11px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400 truncate min-w-0 max-w-[220px]">
               {currentWorkspace && currentWorkspace.id !== 'default-host'
                 ? currentWorkspace.url
                 : `ID: ${currentPrototype?.id || ''}`}
             </span>
           </div>
 
-          <div className="flex items-center space-x-3">
+          <div className="flex items-center space-x-3 flex-shrink-0">
             {/* 标签切换 */}
             <div className="flex bg-slate-950 border border-slate-800 rounded-lg p-0.5 text-xs font-medium">
               <button
-                className={`px-3 py-1 rounded-md transition flex items-center gap-1.5 cursor-pointer ${
+                title="内置浏览器 (CDP)"
+                className={`wh-tab px-3 py-1 rounded-md transition flex items-center gap-1.5 cursor-pointer ${
                   activeTab === 'preview' ? 'bg-sky-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
                 }`}
                 onClick={() => setActiveTab('preview')}
               >
                 <Globe size={13} />
-                <span>内置浏览器 (CDP)</span>
+                <span className="wh-tab-label whitespace-nowrap">内置浏览器 (CDP)</span>
               </button>
               <button
-                className={`px-3 py-1 rounded-md transition flex items-center gap-1.5 cursor-pointer ${
+                title="源码视图"
+                className={`wh-tab px-3 py-1 rounded-md transition flex items-center gap-1.5 cursor-pointer ${
                   activeTab === 'code' ? 'bg-sky-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
                 }`}
                 onClick={() => setActiveTab('code')}
               >
                 <Code2 size={13} />
-                <span>源码视图</span>
+                <span className="wh-tab-label whitespace-nowrap">源码视图</span>
               </button>
             </div>
 
             {/* 版本历史按钮 */}
             <button
               onClick={() => setIsHistoryOpen(true)}
-              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-100 text-xs font-medium rounded-lg shadow transition flex items-center gap-1.5 cursor-pointer border border-slate-700"
+              className="wh-action px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-100 text-xs font-medium rounded-lg shadow transition flex items-center gap-1.5 cursor-pointer border border-slate-700"
               title="查看历史版本与快照回滚"
             >
               <Clock size={13} />
-              <span>版本{currentVersionNo ? ` v${currentVersionNo}` : ''}</span>
+              <span className="wh-action-label whitespace-nowrap">版本{currentVersionNo ? ` v${currentVersionNo}` : ''}</span>
             </button>
 
             {/* 导出按钮 */}
             <button
               onClick={() => setIsExportDialogOpen(true)}
-              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg shadow transition flex items-center gap-1.5 cursor-pointer"
+              title="导出至业务工程"
+              className="wh-action px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg shadow transition flex items-center gap-1.5 cursor-pointer"
             >
               <FolderOutput size={13} />
-              <span>导出至业务工程</span>
+              <span className="wh-action-label whitespace-nowrap">导出至业务工程</span>
             </button>
           </div>
         </header>

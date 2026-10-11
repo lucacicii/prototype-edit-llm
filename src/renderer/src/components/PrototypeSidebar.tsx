@@ -8,8 +8,10 @@ import {
   Trash2,
   FolderOpen,
   Link as LinkIcon,
-  ChevronDown
+  ChevronDown,
+  Settings
 } from 'lucide-react'
+import { ResizeHandle } from './ResizeHandle'
 import type {
   PrototypeItem,
   ProductScenario,
@@ -29,6 +31,11 @@ interface PrototypeSidebarProps {
   onClone: (item: PrototypeItem) => void
   onDelete: (id: string) => void
   onWorkspaceChanged: (ws: any) => void
+  onOpenSettings: () => void
+  collapsed: boolean
+  width: number
+  onWidthChange: (w: number) => void
+  onResizeDragChange: (dragging: boolean) => void
 }
 
 const SCENARIO_OPTIONS: Array<{
@@ -83,7 +90,12 @@ export const PrototypeSidebar: React.FC<PrototypeSidebarProps> = ({
   onCreate,
   onClone,
   onDelete,
-  onWorkspaceChanged
+  onWorkspaceChanged,
+  onOpenSettings,
+  collapsed,
+  width,
+  onWidthChange,
+  onResizeDragChange
 }) => {
   const [workspaces, setWorkspaces] = useState<any[]>([])
   const [activeWorkspaceId, setActiveWorkspaceId] = useState('default-host')
@@ -204,7 +216,19 @@ export const PrototypeSidebar: React.FC<PrototypeSidebarProps> = ({
   }
 
   return (
-    <aside className="w-64 bg-slate-950 border-r border-slate-800 flex flex-col shrink-0 select-none">
+    <aside
+      style={{ width }}
+      className={`relative bg-slate-950 border-r border-slate-800 ${
+        collapsed ? 'hidden' : 'flex'
+      } flex-col shrink-0 select-none`}
+    >
+      <ResizeHandle
+        width={width}
+        min={200}
+        max={480}
+        onChange={onWidthChange}
+        onDragChange={onResizeDragChange}
+      />
       {/* 1. 工作区切换与项目导入顶栏 */}
       <div className="p-2.5 border-b border-slate-800 bg-slate-900/60 flex flex-col gap-2 shrink-0">
         <div className="app-drag traffic-light-inset flex items-center justify-between">
@@ -349,6 +373,18 @@ export const PrototypeSidebar: React.FC<PrototypeSidebarProps> = ({
           </div>
         </div>
       )}
+
+      {/* 3. 底部：模型与 Agent 设置 */}
+      <div className="mt-auto p-2.5 border-t border-slate-800 bg-slate-900/60 shrink-0">
+        <button
+          onClick={onOpenSettings}
+          className="w-full px-2.5 py-1.5 rounded text-xs text-slate-300 hover:text-white hover:bg-slate-800 transition flex items-center gap-2 cursor-pointer"
+          title="模型与 Agent 设置"
+        >
+          <Settings size={14} />
+          <span>模型与 Agent 设置</span>
+        </button>
+      </div>
 
       {/* 新建原型模态框 */}
       <Modal

@@ -122,7 +122,6 @@ interface PrototypeStoreState {
     entryFile?: string
   ) => void
   addChatMessage: (prototypeId: string, message: PrototypeChatMessage) => void
-  resetChat: (prototypeId: string) => void
   /** 只保留前 keepCount 条消息，并重置 thunder 会话（重发/重新生成用）。 */
   truncateChat: (prototypeId: string, keepCount: number) => PrototypeChatMessage[]
 }
@@ -322,25 +321,6 @@ export const usePrototypeStore = create<PrototypeStoreState>((set, get) => ({
       .then(() => get().loadFromDisk())
       .catch(() => {})
     return kept
-  },
-
-  resetChat: (prototypeId: string) => {
-    const proto = get().prototypes.find((p) => p.id === prototypeId)
-    if (!proto) return
-    const nextMessages: PrototypeChatMessage[] = [
-      {
-        role: 'assistant' as const,
-        content: `已重置当前原型项目【${proto.name}】的对话历史（已分配新会话）。你可以通过自然语言提出修改，或使用内置浏览器“🎯 圈选 / ✏️ 圈改”工具。`,
-        timestamp: Date.now()
-      }
-    ]
-    const updated = get().prototypes.map((p) =>
-      p.id === prototypeId ? { ...p, chatMessages: nextMessages, updatedAt: Date.now() } : p
-    )
-    set({ prototypes: updated })
-    window.prototypeApi
-      ?.saveChat({ id: prototypeId, messages: nextMessages, resetSession: true })
-      .catch(() => {})
   }
 }))
 

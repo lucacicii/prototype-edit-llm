@@ -3,8 +3,8 @@ import { message, Dropdown } from 'antd'
 import type { MenuProps } from 'antd'
 import {
   Zap,
-  Settings,
-  Trash2,
+  PanelLeftClose,
+  PanelLeftOpen,
   Paperclip,
   X,
   Target,
@@ -18,6 +18,7 @@ import {
   ChevronRight
 } from 'lucide-react'
 import { Tag } from '@lobehub/ui'
+import { ResizeHandle } from '../ResizeHandle'
 import {
   OpenAI,
   Anthropic,
@@ -84,6 +85,12 @@ interface PendingAttachment {
 
 interface ChatPanelProps {
   onOpenSettings: () => void
+  collapsed: boolean
+  width: number
+  onWidthChange: (w: number) => void
+  onResizeDragChange: (dragging: boolean) => void
+  sidebarCollapsed: boolean
+  onToggleSidebar: () => void
   inspectTarget: PointedTarget | null
   onClearInspectTarget: () => void
   markupAnnotations: MarkupAnnotation[]
@@ -150,10 +157,16 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   markupAnnotations,
   onRemoveMarkupAnnotation,
   onClearSelectionState,
-  onCodeUpdated
+  onCodeUpdated,
+  collapsed,
+  width,
+  onWidthChange,
+  onResizeDragChange,
+  sidebarCollapsed,
+  onToggleSidebar
 }) => {
   const currentPrototype = useCurrentPrototype()
-  const { addChatMessage, resetChat, updateTechStack, truncateChat } = usePrototypeStore()
+  const { addChatMessage, updateTechStack, truncateChat } = usePrototypeStore()
 
   const {
     selectionId,
@@ -705,10 +718,31 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   }, [promptInput])
 
   return (
-    <section className="pc-chat-root w-96 flex flex-col border-r border-slate-800 bg-slate-900/90 z-10 flex-shrink-0 select-none">
+    <section
+      style={{ width }}
+      className={`pc-chat-root relative ${collapsed ? 'hidden' : 'flex'} flex-col border-r border-slate-800 bg-slate-900/90 z-10 flex-shrink-0 select-none`}
+    >
+      <ResizeHandle
+        width={width}
+        min={320}
+        max={720}
+        onChange={onWidthChange}
+        onDragChange={onResizeDragChange}
+      />
       {/* 顶部 Header */}
-      <header className="app-drag h-14 border-b border-slate-800 px-4 flex items-center justify-between bg-slate-900 flex-shrink-0">
+      <header
+        className={`app-drag h-14 border-b border-slate-800 px-4 flex items-center justify-between bg-slate-900 flex-shrink-0 ${
+          sidebarCollapsed ? 'traffic-light-inset' : ''
+        }`}
+      >
         <div className="flex items-center gap-2 min-w-0">
+          <button
+            onClick={onToggleSidebar}
+            className="text-slate-400 hover:text-slate-200 transition p-1 rounded hover:bg-slate-800 cursor-pointer flex-shrink-0"
+            title={sidebarCollapsed ? '展开工作空间侧栏' : '折叠工作空间侧栏'}
+          >
+            {sidebarCollapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
+          </button>
           <span className="text-amber-400 font-bold flex items-center gap-1">
             <Zap size={15} />
             <span>AI 原型对话</span>
@@ -729,22 +763,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           </button>
         </div>
 
-        <div className="flex items-center gap-2">
-          <button
-            onClick={onOpenSettings}
-            className="text-xs text-slate-400 hover:text-slate-200 transition p-1 rounded hover:bg-slate-800 cursor-pointer"
-            title="模型与 Agent 设置"
-          >
-            <Settings size={14} />
-          </button>
-          <button
-            onClick={() => currentPrototype && resetChat(currentPrototype.id)}
-            className="text-xs text-slate-400 hover:text-slate-200 transition p-1 rounded hover:bg-slate-800 cursor-pointer"
-            title="清空对话"
-          >
-            <Trash2 size={14} />
-          </button>
-        </div>
       </header>
 
       {/* 未配置模型提示 */}
