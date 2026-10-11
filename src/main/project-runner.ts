@@ -15,7 +15,7 @@ import * as path from 'path'
 import { BrowserViewManager } from './browser-view-manager'
 import { HostServerManager } from './host-server-manager'
 import { activePrototypeFile, prototypeStackMarker } from './app-paths'
-import { projectDirFor, syncProjectEntryAndStack } from './project-store'
+import { projectDirFor, syncProjectEntryAndStack, entryFileForStack, ENTRY_CANDIDATES } from './project-store'
 import { type TechStack } from './agent/tech-stack'
 
 const MIME_TYPES: Record<string, string> = {
@@ -130,19 +130,43 @@ export class ProjectRunner {
     techStack?: TechStack
   }): Promise<{ previewUrl: string; techStack: TechStack; code: string; entryFile: string }> {
     await this.startStaticServer()
-    const synced = await syncProjectEntryAndStack(params.projectId)
-    const stack: TechStack = params.techStack || synced?.techStack || 'native-html'
-    const entryFile =
-      synced?.entryFile ||
-      (stack === 'native-html' ? 'index.html' : stack === 'react-ts' ? 'index.tsx' : 'index.vue')
-    const code = params.code ?? synced?.vueCode ?? ''
+    const dir = projectDirFor(params.projectId)
 
-    if (stack === 'native-html') {
-      const previewUrl = this.getStaticProjectUrl(params.projectId, entryFile)
-      return { previewUrl, techStack: stack, code, entryFile }
+    // 显式给了栈就信它（渲染层知道当前项目是什么），只有没给时才去磁盘
+    // 自动侦测（`thunder-daemon` 可能刚写了个新栈的入口文件）。
+    const synced = params.techStack ? null : await syncProjectEntryAndStack(params.projectId)
+    const stack: TechStack = params.techStack || synced?.techStack || 'native-html'
+    const entryFile = entryFileForStack(stack)
+
+    // 先把同层的旧入口文件清掉。一个项目只能有一个入口，
+    // index.html 与 index.vue 并存时「按 mtime 取最新」会随机翻转。
+    for (const c of ENTRY_CANDIDATES) {
+      if (c.file === entryFile) continue
+      await fs.rm(path.join(dir, c.file), { force: true })
     }
 
-    // Vue 3 / React TS: stage into ~/.prototype-studio/runtime-host
+    // 无论哪个栈，都把最新代码落到项目自己的入口文件上：
+    // 不写的话「渲染层的新代码」就只活在内存里。
+    const storedPath = path.join(dir, entryFile)
+    const stored = await fs.readFile(storedPath, 'utf-8').catch(() => null)
+    const code = params.code ?? stored ?? synced?.vueCode ?? ''
+    if (params.code !== undefined && stored !== code) {
+      await fs.mkdir(path.dirname(storedPath), { recursive: true })
+      await fs.writeFile(storedPath, code, 'utf-8')
+    }
+
+    if (stack === 'native-html') {
+      // 静态直出：直接服务项目目录里的 index.html，零编译。
+      return {
+        previewUrl: this.getStaticProjectUrl(params.projectId, entryFile),
+        techStack: stack,
+        code,
+        entryFile
+      }
+    }
+
+    // Vue 3 / React TS：把入口代码投到 ~/.prototype-studio/runtime-host 的
+    // 单槽位 active.<ext> 上，由那里的真 Vite dev server 编译 + HMR。
     const marker = prototypeStackMarker()
     await fs.mkdir(path.dirname(marker), { recursive: true })
     const markerCurrent = await fs.readFile(marker, 'utf-8').catch(() => null)
@@ -151,17 +175,17 @@ export class ProjectRunner {
       await fs.writeFile(marker, stack, 'utf-8')
     }
 
-    const filePath = activePrototypeFile(stack)
-    await fs.mkdir(path.dirname(filePath), { recursive: true })
+    const activePath = activePrototypeFile(stack)
+    await fs.mkdir(path.dirname(activePath), { recursive: true })
+    const curExt = stack === 'react-ts' ? 'tsx' : 'vue'
     for (const ext of ['vue', 'tsx', 'html']) {
-      const cur = stack === 'react-ts' ? 'tsx' : stack === 'native-html' ? 'html' : 'vue'
-      if (ext === cur) continue
-      await fs.rm(path.join(path.dirname(filePath), `active.${ext}`), { force: true })
+      if (ext === curExt) continue
+      await fs.rm(path.join(path.dirname(activePath), `active.${ext}`), { force: true })
     }
 
-    const current = await fs.readFile(filePath, 'utf-8').catch(() => null)
-    if (current !== code) {
-      await fs.writeFile(filePath, code, 'utf-8')
+    const activeCurrent = await fs.readFile(activePath, 'utf-8').catch(() => null)
+    if (activeCurrent !== code) {
+      await fs.writeFile(activePath, code, 'utf-8')
     }
     if (stackChanged) {
       BrowserViewManager.getInstance().reload()

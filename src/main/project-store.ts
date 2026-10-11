@@ -106,9 +106,10 @@ export function skeletonForStack(
   if (stack === 'react-ts') {
     return {
       entryFile: 'index.tsx',
+      // 不写 `import React from 'react'`：runtime-host 用 @vitejs/plugin-react 的
+      // 自动 JSX 运行时不需手动引入；同时避免在主进程 bundle 的字符串里
+      // 出现「静态 import」文本（会误导 electron-vite 的 CJS 垫片注入位置）。
       code: `// tech-stack: react-ts
-import React from 'react'
-
 export default function App() {
   return (
     <div style={{ padding: 32, fontFamily: 'system-ui, sans-serif' }}>
@@ -198,8 +199,35 @@ async function listProjectSourceFiles(dir: string, prefix = ''): Promise<string[
 }
 
 /**
- * Detect which entry file is currently active in the project directory
- * (in case `thunder-daemon` created `index.html` or `index.vue` or `index.tsx` during a run).
+ * The one canonical entry filename per stack.
+ *
+ * Kept single-valued on purpose: `techStack` and `entryFile` must never be able
+ * to disagree (a project that claims `native-html` but whose entry is
+ * `index.vue` gets served as a `.vue` file and the preview breaks).
+ */
+export function entryFileForStack(stack: TechStack): string {
+  if (stack === 'react-ts') return 'index.tsx'
+  if (stack === 'vue3-element') return 'index.vue'
+  return 'index.html'
+}
+
+/** Every top-level entry filename a project might have. */
+export const ENTRY_CANDIDATES: Array<{ file: string; stack: TechStack }> = [
+  { file: 'index.html', stack: 'native-html' },
+  { file: 'index.vue', stack: 'vue3-element' },
+  { file: 'index.tsx', stack: 'react-ts' }
+]
+
+/**
+ * Reconcile a project's entry file with its stack.
+ *
+ * `thunder-daemon` writes files directly, so after a run the project directory
+ * can hold a stack switch (e.g. `index.vue` beside a stale `index.html`).
+ * "Newest file wins" is how the switch is noticed, but the winner alone is not
+ * enough: its extension must match the stack its declaration/content implies,
+ * or the preview would serve the wrong kind of file. So the chosen content is
+ * moved to the canonical filename for its stack and every other sibling entry
+ * is removed — after which the two fields cannot disagree again.
  */
 export async function syncProjectEntryAndStack(projectId: string): Promise<PrototypeProjectItem | null> {
   const dir = projectDirFor(projectId)
@@ -208,45 +236,42 @@ export async function syncProjectEntryAndStack(projectId: string): Promise<Proto
 
   try {
     const meta = JSON.parse(await fs.readFile(metaFile, 'utf-8')) as ProjectMetaFile
-    const candidates: Array<{ file: string; stack: TechStack }> = [
-      { file: 'index.html', stack: 'native-html' },
-      { file: 'index.vue', stack: 'vue3-element' },
-      { file: 'index.tsx', stack: 'react-ts' },
-      { file: 'src/App.vue', stack: 'vue3-element' },
-      { file: 'src/App.tsx', stack: 'react-ts' }
-    ]
 
-    let newestFile = meta.entryFile
-    let newestStack = meta.techStack
-    let newestMtime = 0
-
-    for (const c of candidates) {
-      const full = path.join(dir, c.file)
-      try {
-        const stat = await fs.stat(full)
-        if (stat.isFile() && stat.mtimeMs >= newestMtime) {
-          newestMtime = stat.mtimeMs
-          newestFile = c.file
-          newestStack = c.stack
-        }
-      } catch {
-        // not present
+    // 1. Which entry file exists (newest wins; ties resolved by candidate order).
+    let winner: { file: string; stack: TechStack; mtimeMs: number } | null = null
+    for (const c of ENTRY_CANDIDATES) {
+      const stat = await fs.stat(path.join(dir, c.file)).catch(() => null)
+      if (stat?.isFile() && (!winner || stat.mtimeMs > winner.mtimeMs)) {
+        winner = { ...c, mtimeMs: stat.mtimeMs }
       }
     }
-
-    const entryPath = path.join(dir, newestFile)
-    let code = ''
-    if (existsSync(entryPath)) {
-      code = await fs.readFile(entryPath, 'utf-8')
-      const detected = detectTechStack(code)
-      if (detected.stack) {
-        newestStack = detected.stack
-      }
+    if (!winner) {
+      // Nothing on disk: trust the recorded stack and create nothing here.
+      return await loadProjectItem(dir)
     }
 
-    if (newestFile !== meta.entryFile || newestStack !== meta.techStack) {
-      meta.entryFile = newestFile
-      meta.techStack = newestStack
+    // 2. Content wins over the filename: an `index.vue` holding an HTML
+    //    document is a native-html project misnamed, not a Vue one.
+    const winnerPath = path.join(dir, winner.file)
+    const code = await fs.readFile(winnerPath, 'utf-8').catch(() => '')
+    const detected = detectTechStack(code)
+    const stack: TechStack = detected.stack || winner.stack
+    const canonical = entryFileForStack(stack)
+
+    // 3. Normalize onto the canonical filename and drop stale siblings.
+    if (winner.file !== canonical) {
+      await fs.mkdir(path.dirname(path.join(dir, canonical)), { recursive: true })
+      await fs.writeFile(path.join(dir, canonical), code, 'utf-8')
+      await fs.rm(winnerPath, { force: true })
+    }
+    for (const c of ENTRY_CANDIDATES) {
+      if (c.file === canonical) continue
+      await fs.rm(path.join(dir, c.file), { force: true })
+    }
+
+    if (canonical !== meta.entryFile || stack !== meta.techStack) {
+      meta.entryFile = canonical
+      meta.techStack = stack
       meta.updatedAt = Date.now()
       await fs.writeFile(metaFile, JSON.stringify(meta, null, 2), 'utf-8')
     }

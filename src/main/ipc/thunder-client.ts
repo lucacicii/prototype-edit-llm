@@ -340,3 +340,23 @@ export class ThunderClient extends EventEmitter {
     return resolveThunderBinary('thunder-daemon') ?? path.join(sidecarCacheDir(), binName);
   }
 }
+
+/**
+ * Process-wide singleton for the thunder daemon.
+ *
+ * Both the legacy `thunder-bridge` (self-debug loop) and `agent-bridge` (the
+ * main run pipeline) need a client. Creating one each would spawn two daemon
+ * processes fighting over the same data root, so both go through here.
+ */
+let sharedClient: ThunderClient | null = null
+
+export function getSharedThunderClient(options: ThunderClientOptions = {}): ThunderClient {
+  if (!sharedClient) {
+    sharedClient = new ThunderClient(options)
+  }
+  return sharedClient
+}
+
+export function getExistingThunderClient(): ThunderClient | null {
+  return sharedClient
+}

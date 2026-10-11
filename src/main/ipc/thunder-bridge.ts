@@ -1,14 +1,16 @@
 import { ipcMain } from 'electron'
-import { ThunderClient } from './thunder-client'
+import { getSharedThunderClient } from './thunder-client'
 import { workspaceDir } from '../app-paths'
 import { resolveAgentModel } from '../agent/model-config'
 import { selectionId } from '../agent/provider-store'
 
-export function setupThunderIpc(): ThunderClient {
+export function setupThunderIpc() {
   // No explicit binaryPath: passing one bypassed ThunderClient.resolveBinaryPath(),
   // which is the only thing that knows about $THUNDER_DAEMON_BIN and about a
   // packaged build's Resources/bin. Leaving it undefined lets that resolver run.
-  const client = new ThunderClient({
+  //
+  // 单例：agent-bridge 也用它，两个 bridge 不能再各起一个 daemon 进程。
+  const client = getSharedThunderClient({
     workspaceDir: workspaceDir()
   })
 

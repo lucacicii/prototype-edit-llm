@@ -186,7 +186,25 @@ node scripts/fetch-thunder-binaries.mjs --from-release --arch linux-x64 --bless
 
 ---
 
-## 五、常用开发与构建命令汇总
+## 五、两个必须知道的坑
+
+### 1. 不要在 `src/main` 的字符串里写「静态 import」
+
+electron-vite 的 `esmShimPlugin` 会在 bundle 命中 `__dirname` / `require(` 时，用正则把 CJS 垫片插在**整个 bundle 里最后一个静态 `import ... from '...'` 之后**。而这个正则扫描的是**包括字符串字面量在内的全部文本** —— 只要主进程源码的某个模板字符串里出现了 `import X from 'y'`（例如内置的 React 骨架代码），垫片就会被插进字符串里，`__dirname` 永远未定义，主进程启动即崩（`ReferenceError: __dirname is not defined`）。
+
+两条规则：
+- 主进程需要目录路径时用自算的 `moduleDir = dirname(fileURLToPath(import.meta.url))`（见 `src/main/index.ts`），不要依赖 `__dirname`。
+- 模板字符串里尽量不出现裸的 `import ... from '...'`（React 骨架已因此改为依赖自动 JSX 运行时，不再写 `import React`）。
+
+### 2. 一个项目只能有一个入口文件
+
+`techStack` 与 `entryFile` 必须永远一致。若项目目录里同时存在 `index.html` 与 `index.vue`，按「最新修改时间」判定入口会在两者间随机翻转，导致 `native-html` 项目被当成 `.vue` 去服务而 ERR_FAILED。
+
+`ProjectRunner.syncAndResolvePreviewUrl()` 在写入入口前会先删掉同层的其他入口候选，`syncProjectEntryAndStack()` 还会按内容声明校正栈并把内容归一到规范文件名（见 `project-store.ts` 的 `entryFileForStack` / `ENTRY_CANDIDATES`）。新增入口形态请只改这两个常量。
+
+---
+
+## 六、常用开发与构建命令汇总
 
 ```bash
 # 启动开发模式（Electron 主进程 + Preload + React 渲染层热更新）

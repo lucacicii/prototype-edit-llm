@@ -145,7 +145,14 @@ export const AddProviderModal: React.FC<AddProviderModalProps> = ({ open, onClos
     setSaving(true)
     try {
       const targetModelId = modelId.trim()
-      let resolvedSpec =
+      let resolvedSpec: {
+        contextWindow?: number
+        maxTokens?: number
+        reasoning?: boolean
+        supportsImages?: boolean
+        thinkingLevels?: string[]
+        defaultThinkingLevel?: string
+      } =
         selectedRemoteModel && selectedRemoteModel.id === targetModelId
           ? selectedRemoteModel
           : inferModelCapabilities(targetModelId)

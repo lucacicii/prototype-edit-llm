@@ -135,10 +135,15 @@ export class BrowserViewManager {
 
   public async loadURL(url: string): Promise<void> {
     if (!this.browserView) return
+    // 同址重复导航直接跳过：一次项目切换会触发多次 save/navigate，
+    // 每次都真正 loadURL 会让前一次被 abort（日志里的 ERR_ABORTED -3）。
+    if (url === this.currentUrl && this.browserView.webContents.getURL() === url) return
     this.currentUrl = url
     try {
       await this.browserView.webContents.loadURL(url)
     } catch (err: any) {
+      // -3 ERR_ABORTED 是「新导航取代了旧导航」的正常结果，不是错误。
+      if (err?.code === 'ERR_ABORTED' || err?.errno === -3) return
       console.warn('[BrowserView] loadURL error:', err.message)
     }
   }

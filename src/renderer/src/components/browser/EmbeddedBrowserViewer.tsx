@@ -270,7 +270,7 @@ ${log.stack ? `调用栈:\n${log.stack}` : ''}
       message.info('启动自闭环 Debug 自测与自愈...')
 
       await selfDebugEngine.executeLoop({
-        prototypeId: activePrototypeId,
+        prototypeId: _activePrototypeId,
         getCurrentCode: () => currentCode,
         updateCode: async (newCode: string) => {
           onCodeUpdated(newCode)

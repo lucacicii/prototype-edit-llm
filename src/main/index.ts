@@ -1,6 +1,7 @@
 import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { join, dirname } from 'path'
-import { promises as fs, existsSync } from 'fs'
+import { fileURLToPath } from 'url'
+import { existsSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { setupThunderIpc } from './ipc/thunder-bridge'
 import { setupAgentIpc } from './ipc/agent-bridge'
@@ -22,6 +23,17 @@ import { applyPackagedRuntimeEnv } from './runtime-env'
 // 字符串与 electron-builder.yml 的 productName 必须保持一致。
 if (app.isPackaged) app.setName('Prototype Studio')
 
+/**
+ * 本模块所在目录（即 `out/main/`），等价于 electron-vite 以往注入的 `__dirname`。
+ *
+ * 不直接用 `__dirname`：electron-vite 的 `esmShimPlugin` 会用正则扫描整
+ * 个 bundle（**包括字符串字面量**）找「最后一个静态 import」并把 CJS 兼容垫片
+ * 插在它后面。一旦主进程源码的某个模板字符串里出现 `import X from 'y'`
+ * （例如内置 React 骨架代码），垫片就会被插进字符串里，`__dirname` 于是永远
+ * 未定义并让主进程启动即崩。自己算目录可以彻底绕开这个陷阱。
+ */
+const moduleDir = dirname(fileURLToPath(import.meta.url))
+
 // 强制内核级别停用所有 HTTP 缓存及 GPU Shader 缓存
 app.commandLine.appendSwitch('disable-http-cache')
 app.commandLine.appendSwitch('disable-gpu-shader-disk-cache')
@@ -39,7 +51,7 @@ function createWindow(): void {
     autoHideMenuBar: true,
     titleBarStyle: 'hiddenInset',
     webPreferences: {
-      preload: existsSync(join(__dirname, '../preload/index.mjs')) ? join(__dirname, '../preload/index.mjs') : join(__dirname, '../preload/index.js'),
+      preload: existsSync(join(moduleDir, '../preload/index.mjs')) ? join(moduleDir, '../preload/index.mjs') : join(moduleDir, '../preload/index.js'),
       sandbox: false,
       contextIsolation: true
     }
@@ -67,7 +79,7 @@ function createWindow(): void {
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    mainWindow.loadFile(join(moduleDir, '../renderer/index.html'))
   }
 
   mainWindow.on('closed', () => {
@@ -83,7 +95,7 @@ app.whenReady().then(async () => {
   // 的却是 Electron 本体那个默认图；手动指过去，否则开发时看见的是「Electron」。
   // 路径按 out/main/ 往上两级找仓库根的 build/，打包版里没有这个目录，故只在 dev 走。
   if (is.dev && process.platform === 'darwin') {
-    const devIcon = join(__dirname, '../../build/icon.png')
+    const devIcon = join(moduleDir, '../../build/icon.png')
     if (existsSync(devIcon)) app.dock?.setIcon(devIcon)
   }
 
