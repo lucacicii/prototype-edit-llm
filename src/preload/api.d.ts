@@ -307,6 +307,21 @@ export interface IAgentAPI {
       defaultThinkingLevel?: string
     }>
   }>
+  probeThinkingLevels: (params: {
+    provider?: string
+    api?: string
+    baseUrl: string
+    apiKey?: string
+    modelId: string
+  }) => Promise<{
+    ok: boolean
+    error?: string
+    probed?: boolean
+    reasoning?: boolean
+    thinkingLevels?: string[]
+    defaultThinkingLevel?: string
+    source?: 'probed' | 'inferred'
+  }>
   run: (params: {
     /** 渲染层生成并传入，让「停止」按钮能按 run 取消（main 端不传则自己生成）。 */
     runId?: string

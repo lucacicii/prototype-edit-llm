@@ -16,7 +16,13 @@ import {
   draftFrom,
   type ModelDraft
 } from '../../stores/useModelLibraryStore'
-import { fetchRemoteModelsHelper, type RemoteModelItem } from '../../utils/fetchModels'
+import {
+  fetchRemoteModelsHelper,
+  inferModelCapabilities,
+  probeThinkingLevelsHelper,
+  sortThinkingLevels,
+  type RemoteModelItem
+} from '../../utils/fetchModels'
 
 interface ProviderPaneProps {
   onOpenAddProvider: () => void
@@ -48,6 +54,7 @@ export const ProviderPane: React.FC<ProviderPaneProps> = ({ onOpenAddProvider })
   // Remote models fetching
   const [remoteModels, setRemoteModels] = useState<RemoteModelItem[]>([])
   const [fetchingRemoteModels, setFetchingRemoteModels] = useState(false)
+  const [probingThinking, setProbingThinking] = useState(false)
 
   // Keep form in sync when activeGroup changes
   React.useEffect(() => {
@@ -127,65 +134,114 @@ export const ProviderPane: React.FC<ProviderPaneProps> = ({ onOpenAddProvider })
     }
   }
 
+  const probeThinkingForModel = async (targetModelId: string, silent = false) => {
+    if (!activeGroup || !targetModelId.trim()) return
+    setProbingThinking(true)
+    try {
+      const res = await probeThinkingLevelsHelper({
+        provider: activeGroup.provider,
+        api: providerApi || activeGroup.api,
+        baseUrl: providerBaseUrl || activeGroup.baseUrl,
+        apiKey: providerApiKey || undefined,
+        modelId: targetModelId.trim()
+      })
+      if (res?.ok && Array.isArray(res.thinkingLevels) && res.thinkingLevels.length > 0) {
+        const levels = sortThinkingLevels(res.thinkingLevels)
+        const reasoning =
+          typeof res.reasoning === 'boolean'
+            ? res.reasoning
+            : levels.some((lv) => lv !== 'off' && lv !== 'none')
+        const defaultThinkingLevel =
+          res.defaultThinkingLevel && levels.includes(res.defaultThinkingLevel)
+            ? res.defaultThinkingLevel
+            : reasoning
+              ? levels.includes('medium')
+                ? 'medium'
+                : levels[levels.length - 1]
+              : levels[0] || 'off'
+
+        setModelDraft((prev) => {
+          if (!prev || prev.id.trim() !== targetModelId.trim()) return prev
+          return {
+            ...prev,
+            reasoning,
+            thinkingLevels: levels,
+            defaultThinkingLevel
+          }
+        })
+
+        if (!silent) {
+          const sourceLabel = res.probed ? '远端网关探测' : '模型特征推断'
+          message.success(
+            `已通过${sourceLabel}获取思考等级：${levels.map((l) => l.toUpperCase()).join(' / ')}`
+          )
+        }
+      } else if (!silent) {
+        message.warning(res?.error || '未能探测到思考等级')
+      }
+    } catch (e: any) {
+      if (!silent) {
+        message.error(`探测思考等级失败: ${e.message}`)
+      }
+    } finally {
+      setProbingThinking(false)
+    }
+  }
+
   const handleSelectRemoteModelToDraft = (model: RemoteModelItem) => {
     if (!modelDraft) return
+    const levels = model.thinkingLevels?.length ? sortThinkingLevels(model.thinkingLevels) : ['off']
+    const reasoning =
+      typeof model.reasoning === 'boolean'
+        ? model.reasoning
+        : levels.some((lv) => lv !== 'off' && lv !== 'none')
+    const defaultThinkingLevel =
+      model.defaultThinkingLevel && levels.includes(model.defaultThinkingLevel)
+        ? model.defaultThinkingLevel
+        : reasoning
+          ? levels.includes('medium')
+            ? 'medium'
+            : levels[levels.length - 1]
+          : 'off'
+
     setModelDraft({
       ...modelDraft,
       id: model.id,
       name: model.name || '',
       contextWindow: model.contextWindow,
       maxTokens: model.maxTokens,
-      reasoning: Boolean(model.reasoning),
+      reasoning,
       supportsImages: Boolean(model.supportsImages),
-      thinkingLevels: model.thinkingLevels || ['off'],
-      defaultThinkingLevel: model.defaultThinkingLevel || 'off'
+      thinkingLevels: levels,
+      defaultThinkingLevel
     })
     message.success(`已自动填充模型 ${model.id} 的参数与能力！`)
+    // Actively probe the gateway in background to refine exact thinking levels
+    void probeThinkingForModel(model.id, true)
   }
 
-  const handleInferModelCapabilities = () => {
+  const handleInferModelCapabilities = async () => {
     if (!modelDraft || !modelDraft.id.trim()) {
       message.warning('请先输入模型 ID')
       return
     }
-    const id = modelDraft.id.toLowerCase()
-    const isReasoning =
-      id.includes('r1') ||
-      id.includes('reasoner') ||
-      id.includes('o1') ||
-      id.includes('o3') ||
-      id.includes('thinking') ||
-      id.includes('qwq')
+    const targetId = modelDraft.id.trim()
+    const caps = inferModelCapabilities(targetId)
 
-    const isImage =
-      id.includes('4o') ||
-      id.includes('vision') ||
-      id.includes('vl') ||
-      id.includes('claude-3') ||
-      id.includes('gemini') ||
-      id.includes('omni')
-
-    let ctx = 128000
-    if (id.includes('1m') || id.includes('gemini-1.5') || id.includes('gemini-2')) ctx = 1000000
-    else if (id.includes('200k') || id.includes('claude-3')) ctx = 200000
-    else if (id.includes('64k')) ctx = 64000
-    else if (id.includes('32k')) ctx = 32000
-
-    let maxTok = 4096
-    if (id.includes('o1') || id.includes('o3')) maxTok = 65536
-    else if (id.includes('gpt-4o') || id.includes('claude-3-7')) maxTok = 16384
-    else if (id.includes('claude-3-5') || id.includes('deepseek') || id.includes('qwen')) maxTok = 8192
-
-    setModelDraft({
-      ...modelDraft,
-      contextWindow: ctx,
-      maxTokens: maxTok,
-      reasoning: isReasoning,
-      supportsImages: isImage,
-      thinkingLevels: isReasoning ? ['off', 'low', 'medium', 'high'] : ['off'],
-      defaultThinkingLevel: isReasoning ? 'medium' : 'off'
-    })
-    message.success(`已根据模型特征自动推断并填充能力参数！`)
+    setModelDraft((prev) =>
+      prev
+        ? {
+            ...prev,
+            contextWindow: caps.contextWindow,
+            maxTokens: caps.maxTokens,
+            reasoning: caps.reasoning,
+            supportsImages: caps.supportsImages,
+            thinkingLevels: caps.thinkingLevels,
+            defaultThinkingLevel: caps.defaultThinkingLevel
+          }
+        : prev
+    )
+    await probeThinkingForModel(targetId, false)
   }
 
   const handleSaveModel = async () => {
@@ -380,7 +436,18 @@ export const ProviderPane: React.FC<ProviderPaneProps> = ({ onOpenAddProvider })
                         <div className="text-[10px] text-slate-500 mt-1 flex items-center gap-3">
                           <span>窗口: {model.contextWindow || '默认'}</span>
                           <span>输出: {model.maxTokens || '默认'}</span>
-                          {model.reasoning && <span>支持思考</span>}
+                          {model.reasoning && (
+                            <span>
+                              支持思考 (
+                              {(model.thinkingLevels?.length
+                                ? model.thinkingLevels
+                                : ['off', 'low', 'medium', 'high']
+                              )
+                                .map((l) => l.toUpperCase())
+                                .join('/')}
+                              )
+                            </span>
+                          )}
                           {model.input?.includes('image') && <span>支持图片</span>}
                         </div>
                       </div>
@@ -542,11 +609,121 @@ export const ProviderPane: React.FC<ProviderPaneProps> = ({ onOpenAddProvider })
             </div>
 
             <div className="flex items-center justify-between">
-              <span className="text-slate-300">支持思考 / 深度推理 (Reasoning)</span>
+              <div className="flex items-center gap-2">
+                <span className="text-slate-300">支持思考 / 深度推理 (Reasoning)</span>
+                <button
+                  type="button"
+                  disabled={probingThinking || !modelDraft.id.trim()}
+                  onClick={() => probeThinkingForModel(modelDraft.id, false)}
+                  className="text-[10px] px-1.5 py-0.5 rounded bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 border border-sky-500/30 flex items-center gap-1 transition cursor-pointer disabled:opacity-50"
+                  title="向服务商发起轻量请求，自动探测该模型支持的思考等级"
+                >
+                  <Wand2 size={10} className={probingThinking ? 'animate-spin' : ''} />
+                  <span>{probingThinking ? '探测中...' : '自动探测等级'}</span>
+                </button>
+              </div>
               <Switch
                 checked={modelDraft.reasoning}
-                onChange={(checked) => setModelDraft({ ...modelDraft, reasoning: checked })}
+                onChange={(checked) => {
+                  const nextLevels = checked
+                    ? modelDraft.thinkingLevels.some((lv) => lv !== 'off' && lv !== 'none')
+                      ? modelDraft.thinkingLevels
+                      : ['off', 'low', 'medium', 'high']
+                    : ['off']
+                  const nextDefault = checked
+                    ? nextLevels.includes(modelDraft.defaultThinkingLevel) &&
+                      modelDraft.defaultThinkingLevel !== 'off'
+                      ? modelDraft.defaultThinkingLevel
+                      : nextLevels.includes('medium')
+                        ? 'medium'
+                        : nextLevels[nextLevels.length - 1] || 'off'
+                    : 'off'
+                  setModelDraft({
+                    ...modelDraft,
+                    reasoning: checked,
+                    thinkingLevels: nextLevels,
+                    defaultThinkingLevel: nextDefault
+                  })
+                }}
               />
+            </div>
+
+            {/* 思考等级与默认档位配置 */}
+            <div className="p-2.5 rounded-lg bg-slate-900/70 border border-slate-800 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <label className="text-slate-300 font-medium">
+                  思考等级档位 (Thinking Levels)
+                </label>
+                <span className="text-[10px] text-slate-500">
+                  点选启用模型支持的思考强度
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {(vocabularies.thinkingVocabulary?.length
+                  ? vocabularies.thinkingVocabulary
+                  : ['off', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+                ).map((lv) => {
+                  const active = modelDraft.thinkingLevels.includes(lv)
+                  return (
+                    <button
+                      key={lv}
+                      type="button"
+                      onClick={() => {
+                        const exists = modelDraft.thinkingLevels.includes(lv)
+                        const rawNext = exists
+                          ? modelDraft.thinkingLevels.filter((item) => item !== lv)
+                          : [...modelDraft.thinkingLevels, lv]
+                        const nextLevels =
+                          rawNext.length > 0 ? sortThinkingLevels(rawNext) : ['off']
+                        const hasReasoning = nextLevels.some(
+                          (item) => item !== 'off' && item !== 'none'
+                        )
+                        const nextDefault = nextLevels.includes(modelDraft.defaultThinkingLevel)
+                          ? modelDraft.defaultThinkingLevel
+                          : hasReasoning && nextLevels.includes('medium')
+                            ? 'medium'
+                            : nextLevels[0] || 'off'
+                        setModelDraft({
+                          ...modelDraft,
+                          reasoning: hasReasoning,
+                          thinkingLevels: nextLevels,
+                          defaultThinkingLevel: nextDefault
+                        })
+                      }}
+                      className={`px-2 py-0.5 rounded text-[11px] font-mono border transition cursor-pointer ${
+                        active
+                          ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 font-semibold'
+                          : 'bg-slate-800/60 text-slate-400 border-slate-700/70 hover:border-slate-600'
+                      }`}
+                    >
+                      {lv.toUpperCase()}
+                    </button>
+                  )
+                })}
+              </div>
+
+              <div className="flex items-center justify-between pt-1">
+                <label className="text-slate-400 text-[11px]">默认思考档位</label>
+                <Select
+                  size="small"
+                  style={{ width: 140 }}
+                  value={
+                    modelDraft.thinkingLevels.includes(modelDraft.defaultThinkingLevel)
+                      ? modelDraft.defaultThinkingLevel
+                      : modelDraft.thinkingLevels[0] || 'off'
+                  }
+                  onChange={(val) =>
+                    setModelDraft({ ...modelDraft, defaultThinkingLevel: val })
+                  }
+                  options={(modelDraft.thinkingLevels.length
+                    ? modelDraft.thinkingLevels
+                    : ['off']
+                  ).map((lv) => ({
+                    label: lv.toUpperCase(),
+                    value: lv
+                  }))}
+                />
+              </div>
             </div>
           </div>
         )}

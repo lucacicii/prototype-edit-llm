@@ -5,7 +5,13 @@ import {
   useAgentModelConfigStore
 } from '../../stores/useAgentModelConfigStore'
 import { presetsFor, type ProviderPreset } from './provider-presets'
-import { fetchRemoteModelsHelper, type RemoteModelItem } from '../../utils/fetchModels'
+import {
+  fetchRemoteModelsHelper,
+  inferModelCapabilities,
+  probeThinkingLevelsHelper,
+  sortThinkingLevels,
+  type RemoteModelItem
+} from '../../utils/fetchModels'
 
 interface AddProviderModalProps {
   open: boolean
@@ -30,6 +36,7 @@ export const AddProviderModal: React.FC<AddProviderModalProps> = ({ open, onClos
   const [remoteModels, setRemoteModels] = useState<RemoteModelItem[]>([])
   const [fetchingModels, setFetchingModels] = useState(false)
   const [selectedRemoteModel, setSelectedRemoteModel] = useState<RemoteModelItem | null>(null)
+  const [probingThinking, setProbingThinking] = useState(false)
 
   const handleApplyPreset = (item: ProviderPreset) => {
     setPresetKey(item.key)
@@ -77,10 +84,51 @@ export const AddProviderModal: React.FC<AddProviderModalProps> = ({ open, onClos
     }
   }
 
-  const handleSelectRemoteModel = (model: RemoteModelItem) => {
+  const handleSelectRemoteModel = async (model: RemoteModelItem) => {
     setSelectedRemoteModel(model)
     setModelId(model.id)
     setModelName(model.name || '')
+
+    if (!baseUrl.trim() || !model.id.trim()) return
+    setProbingThinking(true)
+    try {
+      const res = await probeThinkingLevelsHelper({
+        provider: provider.trim(),
+        api,
+        baseUrl: baseUrl.trim(),
+        apiKey: apiKey.trim() || undefined,
+        modelId: model.id.trim()
+      })
+      if (res?.ok && Array.isArray(res.thinkingLevels) && res.thinkingLevels.length > 0) {
+        const levels = sortThinkingLevels(res.thinkingLevels)
+        const reasoning =
+          typeof res.reasoning === 'boolean'
+            ? res.reasoning
+            : levels.some((lv) => lv !== 'off' && lv !== 'none')
+        const defaultThinkingLevel =
+          res.defaultThinkingLevel && levels.includes(res.defaultThinkingLevel)
+            ? res.defaultThinkingLevel
+            : reasoning
+              ? levels.includes('medium')
+                ? 'medium'
+                : levels[levels.length - 1]
+              : 'off'
+        setSelectedRemoteModel((prev) =>
+          prev && prev.id === model.id
+            ? {
+                ...prev,
+                reasoning,
+                thinkingLevels: levels,
+                defaultThinkingLevel
+              }
+            : prev
+        )
+      }
+    } catch {
+      // ignore probe errors
+    } finally {
+      setProbingThinking(false)
+    }
   }
 
   const handleSave = async () => {
@@ -96,19 +144,48 @@ export const AddProviderModal: React.FC<AddProviderModalProps> = ({ open, onClos
 
     setSaving(true)
     try {
+      const targetModelId = modelId.trim()
+      let resolvedSpec =
+        selectedRemoteModel && selectedRemoteModel.id === targetModelId
+          ? selectedRemoteModel
+          : inferModelCapabilities(targetModelId)
+
+      // Try probing thinking levels on save if not already selected/probed
+      if (!selectedRemoteModel || selectedRemoteModel.id !== targetModelId) {
+        try {
+          const probeRes = await probeThinkingLevelsHelper({
+            provider: provider.trim(),
+            api,
+            baseUrl: baseUrl.trim(),
+            apiKey: apiKey.trim() || undefined,
+            modelId: targetModelId
+          })
+          if (probeRes?.ok && probeRes.thinkingLevels?.length) {
+            resolvedSpec = {
+              ...resolvedSpec,
+              reasoning: probeRes.reasoning ?? resolvedSpec.reasoning,
+              thinkingLevels: probeRes.thinkingLevels,
+              defaultThinkingLevel: probeRes.defaultThinkingLevel ?? resolvedSpec.defaultThinkingLevel
+            }
+          }
+        } catch {
+          // keep inferred fallback
+        }
+      }
+
       const payload = {
         provider: provider.trim(),
-        id: modelId.trim(),
-        name: modelName.trim() || modelId.trim(),
+        id: targetModelId,
+        name: modelName.trim() || targetModelId,
         api,
         baseUrl: baseUrl.trim(),
         apiKey: apiKey.trim() || undefined,
-        reasoning: selectedRemoteModel?.reasoning ?? false,
-        supportsImages: selectedRemoteModel?.supportsImages ?? false,
-        contextWindow: selectedRemoteModel?.contextWindow,
-        maxTokens: selectedRemoteModel?.maxTokens,
-        thinkingLevels: selectedRemoteModel?.thinkingLevels || ['off'],
-        defaultThinkingLevel: selectedRemoteModel?.defaultThinkingLevel || 'off'
+        reasoning: resolvedSpec.reasoning ?? false,
+        input: resolvedSpec.supportsImages ? ['text', 'image'] : undefined,
+        contextWindow: resolvedSpec.contextWindow,
+        maxTokens: resolvedSpec.maxTokens,
+        thinkingLevels: resolvedSpec.thinkingLevels || ['off'],
+        defaultThinkingLevel: resolvedSpec.defaultThinkingLevel || 'off'
       }
 
       const res = await window.agent.saveModel(payload)
@@ -121,7 +198,7 @@ export const AddProviderModal: React.FC<AddProviderModalProps> = ({ open, onClos
       await useAgentModelConfigStore.getState().refresh()
 
       if (selectAsCurrent && !envLocked) {
-        const selectionId = `${provider.trim()}:${modelId.trim()}`
+        const selectionId = `${provider.trim()}/${targetModelId}`
         await selectModel(selectionId)
       }
 
@@ -284,7 +361,13 @@ export const AddProviderModal: React.FC<AddProviderModalProps> = ({ open, onClos
           <div className="p-2 rounded bg-sky-950/40 border border-sky-800/40 text-[11px] text-sky-300 font-mono flex items-center justify-between">
             <span>窗口: {selectedRemoteModel.contextWindow || '128000'} tok</span>
             <span>输出: {selectedRemoteModel.maxTokens || '4096'} tok</span>
-            <span>{selectedRemoteModel.reasoning ? '✓ 支持思考' : '无思考'}</span>
+            <span>
+              {probingThinking
+                ? '思考等级探测中...'
+                : selectedRemoteModel.reasoning
+                  ? `✓ 思考 (${(selectedRemoteModel.thinkingLevels || ['off', 'low', 'medium', 'high']).map((l) => l.toUpperCase()).join('/')})`
+                  : '无思考 (OFF)'}
+            </span>
             <span>{selectedRemoteModel.supportsImages ? '✓ 支持图片' : '无图片'}</span>
           </div>
         )}

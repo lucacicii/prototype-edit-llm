@@ -32,6 +32,7 @@ import {
 } from '../agent/model-config'
 import {
   availabilityOf,
+  canonicalThinkingLevels,
   DEFAULT_CONTEXT_WINDOW,
   DEFAULT_MAX_TOKENS,
   DEFAULT_THINKING_LEVELS,
@@ -608,11 +609,357 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
           ? rawData
           : []
 
+function extractAllowedLevelsFromError(errorText: string): string[] | null {
+  const lower = errorText.toLowerCase()
+
+  if (
+    lower.includes('reasoning_effort is not supported') ||
+    lower.includes('reasoning_effort not supported') ||
+    lower.includes('unrecognized request argument supplied: reasoning_effort') ||
+    lower.includes('unknown parameter: reasoning_effort') ||
+    lower.includes('unsupported parameter: reasoning_effort') ||
+    (lower.includes('unsupported parameter') && lower.includes('reasoning_effort')) ||
+    lower.includes("unexpected keyword argument 'reasoning_effort'") ||
+    lower.includes('thinking is not supported') ||
+    lower.includes('thinking is not enabled')
+  ) {
+    return ['off']
+  }
+
+  const candidateTokens = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+  const hasEnumHint =
+    lower.includes('supported values') ||
+    lower.includes('must be one of') ||
+    lower.includes('input should be') ||
+    lower.includes('valid choices') ||
+    lower.includes('expected one of') ||
+    lower.includes('allowed values') ||
+    lower.includes('valid values') ||
+    lower.includes('value_error')
+
+  if (hasEnumHint) {
+    const found: string[] = []
+    if (
+      lower.includes("'off'") ||
+      lower.includes('"off"') ||
+      lower.includes(' off ') ||
+      lower.includes('[off')
+    ) {
+      found.push('off')
+    }
+    if (
+      lower.includes("'none'") ||
+      lower.includes('"none"') ||
+      lower.includes(' none ') ||
+      lower.includes('[none')
+    ) {
+      found.push('none')
+    }
+
+    for (const token of candidateTokens) {
+      if (
+        lower.includes(`'${token}'`) ||
+        lower.includes(`"${token}"`) ||
+        lower.includes(` ${token}`) ||
+        lower.includes(`[${token}`) ||
+        lower.includes(`,${token}`) ||
+        lower.includes(`, ${token}`)
+      ) {
+        found.push(token)
+      }
+    }
+
+    if (found.length > 0) {
+      if (!found.includes('off') && !found.includes('none')) {
+        found.unshift('off')
+      }
+      return canonicalThinkingLevels([...new Set(found)])
+    }
+  }
+
+  return null
+}
+
+function inferThinkingSpec(id: string, item?: any): {
+  reasoning: boolean
+  thinkingLevels: string[]
+  defaultThinkingLevel: string
+} {
+  const lower = id.toLowerCase()
+
+  // Extract explicit thinking levels from item if provided by gateway
+  const rawLevels = Array.isArray(item?.thinking_levels)
+    ? item.thinking_levels
+    : Array.isArray(item?.thinkingLevels)
+      ? item.thinkingLevels
+      : null
+  if (rawLevels && rawLevels.length > 0) {
+    const cleaned = canonicalThinkingLevels(
+      rawLevels.filter((v: any) => typeof v === 'string' && v.trim())
+    )
+    const reasoning = cleaned.some((lv) => lv !== 'off' && lv !== 'none')
+    const defaultThinkingLevel =
+      typeof item?.default_thinking_level === 'string'
+        ? item.default_thinking_level
+        : typeof item?.defaultThinkingLevel === 'string'
+          ? item.defaultThinkingLevel
+          : reasoning
+            ? cleaned.includes('medium')
+              ? 'medium'
+              : cleaned[cleaned.length - 1]
+            : 'off'
+    return { reasoning, thinkingLevels: cleaned, defaultThinkingLevel }
+  }
+
+  const supportedParams: string[] = Array.isArray(item?.supported_parameters)
+    ? item.supported_parameters.map((p: any) => String(p).toLowerCase())
+    : []
+  const metaReasoning =
+    Boolean(item?.reasoning) ||
+    Boolean(item?.thinking) ||
+    Boolean(item?.capabilities?.reasoning) ||
+    Boolean(item?.capabilities?.thinking) ||
+    supportedParams.includes('reasoning') ||
+    supportedParams.includes('reasoning_effort') ||
+    supportedParams.includes('include_reasoning') ||
+    supportedParams.includes('thinking')
+
+  const isOSeries = /(^|\/|-)o[134](-|$)/.test(lower)
+  const isGpt5 = lower.includes('gpt-5')
+  const isClaudeThinking =
+    lower.includes('claude-3-7') ||
+    lower.includes('claude-3.7') ||
+    lower.includes('sonnet-3-7') ||
+    lower.includes('claude-sonnet-4') ||
+    lower.includes('claude-opus-4') ||
+    lower.includes('claude-4')
+  const isGeminiThinking = lower.includes('gemini-2.5') || lower.includes('gemini-3')
+
+  const nameReasoning =
+    lower.includes('r1') ||
+    lower.includes('reasoner') ||
+    lower.includes('reasoning') ||
+    isOSeries ||
+    isGpt5 ||
+    isClaudeThinking ||
+    isGeminiThinking ||
+    lower.includes('qwq') ||
+    lower.includes('qwen3') ||
+    lower.includes('glm-z1') ||
+    lower.includes('glm-4.5') ||
+    lower.includes('kimi-k1') ||
+    lower.includes('kimi-k2') ||
+    lower.includes('thinking')
+
+  const reasoning = metaReasoning || nameReasoning
+  if (!reasoning) {
+    return {
+      reasoning: false,
+      thinkingLevels: ['off'],
+      defaultThinkingLevel: 'off'
+    }
+  }
+
+  const thinkingLevels = isGpt5
+    ? ['off', 'minimal', 'low', 'medium', 'high']
+    : ['off', 'low', 'medium', 'high']
+
+  const defaultThinkingLevel =
+    lower.includes('reasoner') || lower.includes('r1') ? 'high' : 'medium'
+
+  return {
+    reasoning: true,
+    thinkingLevels,
+    defaultThinkingLevel
+  }
+}
+
+async function probeModelThinkingLevels(params: {
+  api: string
+  baseUrl: string
+  apiKey?: string
+  modelId: string
+}): Promise<{
+  probed: boolean
+  reasoning: boolean
+  thinkingLevels: string[]
+  defaultThinkingLevel: string
+}> {
+  const baseUrl = params.baseUrl.trim().replace(/\/+$/, '')
+  const modelId = params.modelId.trim()
+  const apiKey = params.apiKey?.trim()
+  const isAnthropic =
+    params.api === 'anthropic-messages' || baseUrl.toLowerCase().includes('anthropic.com')
+  const isResponses = params.api === 'openai-responses'
+
+  if (isAnthropic) {
+    const url = baseUrl.endsWith('/messages')
+      ? baseUrl
+      : baseUrl.endsWith('/v1')
+        ? `${baseUrl}/messages`
+        : `${baseUrl}/v1/messages`
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'anthropic-version': '2023-06-01',
+      ...(apiKey ? { 'x-api-key': apiKey } : {})
+    }
+
+    try {
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 6000)
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          model: modelId,
+          max_tokens: 1025,
+          messages: [{ role: 'user', content: '1' }],
+          thinking: { type: 'enabled', budget_tokens: 1024 }
+        }),
+        signal: controller.signal
+      })
+      clearTimeout(timeoutId)
+      const body = await resp.text().catch(() => '')
+      const lower = body.toLowerCase()
+
+      if (resp.ok || lower.includes('budget_tokens')) {
+        return {
+          probed: true,
+          reasoning: true,
+          thinkingLevels: ['off', 'low', 'medium', 'high'],
+          defaultThinkingLevel: 'medium'
+        }
+      }
+      if (
+        lower.includes('thinking is not supported') ||
+        lower.includes('unrecognized field thinking') ||
+        lower.includes('extra inputs are not permitted')
+      ) {
+        return {
+          probed: true,
+          reasoning: false,
+          thinkingLevels: ['off'],
+          defaultThinkingLevel: 'off'
+        }
+      }
+    } catch {
+      // Fall through to inference
+    }
+  } else {
+    const url = isResponses
+      ? baseUrl.endsWith('/responses')
+        ? baseUrl
+        : baseUrl.endsWith('/v1')
+          ? `${baseUrl}/responses`
+          : `${baseUrl}/v1/responses`
+      : baseUrl.endsWith('/chat/completions')
+        ? baseUrl
+        : baseUrl.endsWith('/v1')
+          ? `${baseUrl}/chat/completions`
+          : `${baseUrl}/v1/chat/completions`
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
+    }
+
+    const probePayload = isResponses
+      ? {
+          model: modelId,
+          input: [{ role: 'user', content: [{ type: 'input_text', text: '1' }] }],
+          max_output_tokens: 1,
+          reasoning_effort: '__probe__'
+        }
+      : {
+          model: modelId,
+          messages: [{ role: 'user', content: '1' }],
+          max_tokens: 1,
+          reasoning_effort: '__probe__'
+        }
+
+    try {
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 6000)
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(probePayload),
+        signal: controller.signal
+      })
+      clearTimeout(timeoutId)
+      const body = await resp.text().catch(() => '')
+
+      if (resp.status >= 400 && resp.status < 500) {
+        const extracted = extractAllowedLevelsFromError(body)
+        if (extracted) {
+          const reasoning = extracted.some((lv) => lv !== 'off' && lv !== 'none')
+          const defaultThinkingLevel = !reasoning
+            ? extracted[0] || 'off'
+            : extracted.includes('medium')
+              ? 'medium'
+              : extracted.includes('high')
+                ? 'high'
+                : extracted[extracted.length - 1] || 'off'
+          return {
+            probed: true,
+            reasoning,
+            thinkingLevels: extracted,
+            defaultThinkingLevel
+          }
+        }
+      }
+
+      // Step 2: test with reasoning_effort = 'low'
+      const testPayload = isResponses
+        ? {
+            model: modelId,
+            input: [{ role: 'user', content: [{ type: 'input_text', text: '1' }] }],
+            max_output_tokens: 1,
+            reasoning_effort: 'low'
+          }
+        : {
+            model: modelId,
+            messages: [{ role: 'user', content: '1' }],
+            max_tokens: 1,
+            reasoning_effort: 'low'
+          }
+
+      const controller2 = new AbortController()
+      const timeoutId2 = setTimeout(() => controller2.abort(), 6000)
+      const testResp = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(testPayload),
+        signal: controller2.signal
+      })
+      clearTimeout(timeoutId2)
+
+      if (testResp.ok) {
+        return {
+          probed: true,
+          reasoning: true,
+          thinkingLevels: ['off', 'low', 'medium', 'high'],
+          defaultThinkingLevel: 'medium'
+        }
+      }
+    } catch {
+      // Fall through to inference
+    }
+  }
+
+  const inferred = inferThinkingSpec(modelId)
+  return {
+    probed: false,
+    ...inferred
+  }
+}
+
         const guessContextWindow = (id: string): number => {
           const lower = id.toLowerCase()
           if (lower.includes('1m') || lower.includes('gemini-1.5') || lower.includes('gemini-2')) return 1000000
-          if (lower.includes('200k') || lower.includes('claude-3') || lower.includes('claude-sonnet')) return 200000
-          if (lower.includes('128k') || lower.includes('gpt-4o') || lower.includes('qwen') || lower.includes('glm-4') || lower.includes('deepseek')) return 128000
+          if (lower.includes('200k') || lower.includes('claude-3') || lower.includes('claude-sonnet') || lower.includes('claude-opus') || lower.includes('claude-4')) return 200000
+          if (lower.includes('128k') || lower.includes('gpt-4o') || lower.includes('gpt-5') || lower.includes('qwen') || lower.includes('glm-4') || lower.includes('deepseek')) return 128000
           if (lower.includes('64k')) return 64000
           if (lower.includes('32k')) return 32000
           return 128000
@@ -620,23 +967,10 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
 
         const guessMaxTokens = (id: string): number => {
           const lower = id.toLowerCase()
-          if (lower.includes('o1') || lower.includes('o3')) return 65536
-          if (lower.includes('gpt-4o') || lower.includes('claude-3-7') || lower.includes('gemini-2')) return 16384
+          if (/(^|\/|-)o[134](-|$)/.test(lower) || lower.includes('gpt-5')) return 65536
+          if (lower.includes('gpt-4o') || lower.includes('claude-3-7') || lower.includes('claude-sonnet-4') || lower.includes('claude-opus-4') || lower.includes('gemini-2')) return 16384
           if (lower.includes('claude-3-5') || lower.includes('deepseek') || lower.includes('qwen')) return 8192
           return 4096
-        }
-
-        const guessReasoning = (id: string): boolean => {
-          const lower = id.toLowerCase()
-          return (
-            lower.includes('r1') ||
-            lower.includes('reasoner') ||
-            lower.includes('reasoning') ||
-            lower.includes('o1') ||
-            lower.includes('o3') ||
-            lower.includes('qwq') ||
-            lower.includes('thinking')
-          )
         }
 
         const guessMultimodal = (id: string, item?: any): boolean => {
@@ -645,9 +979,12 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
           if (item?.input?.includes('image')) return true
           return (
             lower.includes('4o') ||
+            lower.includes('gpt-5') ||
             lower.includes('vision') ||
             lower.includes('vl') ||
             lower.includes('claude-3') ||
+            lower.includes('claude-sonnet-4') ||
+            lower.includes('claude-opus-4') ||
             lower.includes('gemini') ||
             lower.includes('pixtral') ||
             lower.includes('omni')
@@ -658,7 +995,7 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
           .map((item: any) => {
             const id = String(item.id || item.name || item.model || '').trim()
             const name = String(item.name || item.display_name || item.id || id).trim()
-            const reasoning = guessReasoning(id)
+            const thinkingSpec = inferThinkingSpec(id, item)
             const supportsImages = guessMultimodal(id, item)
             const contextWindow =
               typeof item.context_length === 'number'
@@ -678,15 +1015,57 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
               name: name !== id ? name : '',
               contextWindow,
               maxTokens,
-              reasoning,
+              reasoning: thinkingSpec.reasoning,
               supportsImages,
-              thinkingLevels: reasoning ? ['off', 'low', 'medium', 'high'] : ['off'],
-              defaultThinkingLevel: reasoning ? 'medium' : 'off'
+              thinkingLevels: thinkingSpec.thinkingLevels,
+              defaultThinkingLevel: thinkingSpec.defaultThinkingLevel
             }
           })
           .filter((m: any) => Boolean(m.id))
 
         return { ok: true, models }
+      } catch (err: any) {
+        return { ok: false, error: err?.message || String(err) }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'agent:probe-thinking-levels',
+    async (
+      _,
+      input: { provider?: string; api?: string; baseUrl: string; apiKey?: string; modelId: string }
+    ) => {
+      try {
+        const baseUrl = (input?.baseUrl || '').trim().replace(/\/+$/, '')
+        const modelId = (input?.modelId || '').trim()
+        if (!baseUrl || !modelId) {
+          return { ok: false, error: 'Base URL 与模型 ID 不能为空' }
+        }
+
+        let apiKey = (input?.apiKey || '').trim()
+        if (!apiKey && input?.provider) {
+          apiKey = (await getApiKey(input.provider)) || ''
+        }
+        if (!apiKey && process.env.PROTOTYPE_AGENT_API_KEY) {
+          apiKey = process.env.PROTOTYPE_AGENT_API_KEY
+        }
+
+        const result = await probeModelThinkingLevels({
+          api: input.api || 'openai-completions',
+          baseUrl,
+          apiKey,
+          modelId
+        })
+
+        return {
+          ok: true,
+          probed: result.probed,
+          source: result.probed ? 'probed' : 'inferred',
+          reasoning: result.reasoning,
+          thinkingLevels: result.thinkingLevels,
+          defaultThinkingLevel: result.defaultThinkingLevel
+        }
       } catch (err: any) {
         return { ok: false, error: err?.message || String(err) }
       }

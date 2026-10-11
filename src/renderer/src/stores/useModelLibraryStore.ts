@@ -35,8 +35,8 @@ export function emptyDraft(
     supportsImages: false,
     contextWindow: defaults.contextWindow || undefined,
     maxTokens: defaults.maxTokens || undefined,
-    thinkingLevels: [...defaults.thinkingLevels],
-    defaultThinkingLevel: '',
+    thinkingLevels: ['off'],
+    defaultThinkingLevel: 'off',
     apiKey: '',
     clearApiKey: false
   }
