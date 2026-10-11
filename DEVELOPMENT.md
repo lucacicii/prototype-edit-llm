@@ -186,7 +186,7 @@ node scripts/fetch-thunder-binaries.mjs --from-release --arch linux-x64 --bless
 
 ---
 
-## 五、三个必须知道的坑
+## 五、四个必须知道的坑
 
 ### 1. 不要在 `src/main` 的字符串里写「静态 import」
 
@@ -210,6 +210,18 @@ electron-vite 的 `esmShimPlugin` 会在 bundle 命中 `__dirname` / `require(` 
 所以 `src/main/agent/thunder-model-config.ts` 会把 app 的模型库镜像写入 `~/.prototype-studio/thunder/models.json`（0600，含明文 key —— thunder 没有 keyring 接口，这也是它只能待在隔离数据根、绝不能落进项目目录的原因），并显式钉住 `utilityModel`。写入时机有两处：`index.ts` 启动时、以及 `agent-bridge` 拉起 daemon 之前（内容不变则跳过写入）。
 
 新增 provider 字段时，记得同时更新 `thunder-model-config.ts` 的映射，否则 thunder 侧会缺字段（例如 `thinkingLevels` 缺失会让它重新联网探测）。
+
+### 4. 停靠在输入框上方的卡片必须自带高度上限
+
+`.pc-chat-root` 是被祖先 `overflow: hidden` 裁掉的定高面板（App.tsx 的 `h-screen` + `overflow-hidden`），里面只有 `.pc-feed` 是滚动区。任何停靠在 `.pc-composer-zone` 里的卡片如果不自带上限，内容一多就会顶穿面板 —— 超出的部分被祖先默默裁掉，**没有任何滚动容器**，底部按钮直接点不到。
+
+`.pc-question-card` 就是这么踩的（5 个问题 × 4 个选项 ≈ 900px 高，而面板只有 ~600px）。两条规则：
+- 卡片自己带 `max-height` + `overflow: hidden`，把滚动交给内部列表（`.pc-question-list` 的 `flex: 1 1 auto; min-height: 0; overflow-y: auto`），让标题与操作行钉住；
+- `.pc-composer-zone` 要 `flex-shrink: 0`。一旦让它收缩，它就会小于内容高度，而输入框不肯让位，于是输入框溢出到面板外被裁掉。让出空间是卡片的 `max-height` 的事。
+
+注意 `max-height: min-content` 不能当“内容下限”用：作为滚动容器的列表仍按内容高度参与 `min-content` 计算，算出来比 `max-height` 还大，而 `min-height` 优先于 `max-height`，卡片反而不再封顶。需要下限就写明确的像素值（`.pc-question-card` 的 `min-height: 92px`）。
+
+验证这类布局不必靠眼睛：把真实的 `chat.css` 套进一份复刻的 DOM 骨架（`h-screen` + `overflow-hidden` 的祖先、`.pc-feed`、`.pc-composer-zone` + 问题卡 + 输入框），用 headless Chrome 的 `--dump-dom` 读回一个写进 `<pre>` 的 `getBoundingClientRect()` 结果，就能直接判定「确认按钮/输入框是否还在屏幕内、列表是否真的在滚」。同一份骨架把本次的修复逐条注释掉，即可得到“修复前”对照 —— 问题卡会从封顶值变成 1376px，按钮落到 y=1460，一眼就能看出因果。
 
 ---
 

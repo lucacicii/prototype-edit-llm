@@ -604,6 +604,13 @@
 
 /* ===== 输入区（Composer） ===== */
 .pc-composer-zone {
+  /* 列向 flex 容器，但自己绝不收缩（flex-shrink: 0）。这里要得很明白：
+     一旦允许它收缩，它就会小于内容高度，而输入框（flex-shrink: 0）不肯让位，
+     于是直接溢出到面板外被祖先的 overflow: hidden 默默裁掉 —— 实测 333px
+     高的窗口里输入框就这样消失了。让出空间是问题卡的事，由它的 max-height 负责。 */
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
   padding: 10px 12px 12px;
   border-top: 1px solid var(--pc-border-soft);
   background: #111a2e;
@@ -625,6 +632,8 @@
 
 .pc-composer {
   position: relative;
+  /* 任何情况下都保持输入框完整可见。 */
+  flex-shrink: 0;
   background: var(--pc-surface);
   border: 1px solid var(--pc-border);
   border-radius: 13px;
@@ -886,7 +895,32 @@
 }
 
 /* ===== 问题卡 ===== */
+/*
+ * 停靠卡位于 .pc-composer-zone 内，而整个 .pc-chat-root 是被祖先
+ * `overflow: hidden` 裁掉的定高面板 —— 所以这里必须自带上限：不加 max-height 时
+ * 问题一多（5 题 × 4 选项 ≈ 900px）卡片会顶穿面板，「确认」按钮被裁到屏幕外且无
+ * 处可滚。上限取参考实现（agent-resume-panel）的同一数值。
+ *
+ * 这里用 overflow: hidden 而不是参考实现的 auto：滚动交给内部的问题列表，
+ * 让标题与操作行始终钉住，确认按钮不会跟着内容滚走。
+ */
 .pc-question-card {
+  display: flex;
+  flex-direction: column;
+  /* 空间不够时先压这张卡（flex: 0 1 auto 才是真正的“可收缩”声明，光有
+     max-height 的话它依旧被 min-height: auto 卡住）。
+
+     上限 : 42vh（与参考实现一致）之外，还要减去卡以外的固定高度：
+         头部 56 + 输入区上下内边距 22 + 卡片下限 92 + 输入框 118 = 288px。
+       少了这一项，窗口矮时 42vh 仍会把输入框挤出屏幕（实测 333px 高差 24px）。
+     下限 : 92px ≈ 标题 + 操作行 + 内边距；再矮就是自己的 overflow: hidden
+       把「确认」按钮截掉了。
+     不能用 min-content：作为滚动容器的问题列表仍按内容高度参与 min-content
+     计算，结果比 max-height 还大，而 min-height 优先于 max-height，卡片反而不再封顶。 */
+  flex: 0 1 auto;
+  min-height: 92px;
+  max-height: min(42vh, 360px, calc(100vh - 288px));
+  overflow: hidden;
   background: linear-gradient(180deg, rgba(129, 140, 248, 0.12), rgba(30, 41, 59, 0.9));
   border: 1px solid rgba(129, 140, 248, 0.45);
   border-radius: 13px;
@@ -899,6 +933,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-shrink: 0;
   padding-bottom: 7px;
   margin-bottom: 8px;
   border-bottom: 1px solid rgba(129, 140, 248, 0.3);
@@ -918,6 +953,12 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+  /* 唯一可滚的区域。min-height: 0 是必需的：列向 flex 子项默认 min-height:
+     auto，不加这一条它同样不肯收缩到内容以下，卡片的上限就形同虚设。 */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
 }
 
 .pc-question-text {
@@ -1008,6 +1049,7 @@
 .pc-question-actions {
   display: flex;
   justify-content: flex-end;
+  flex-shrink: 0;
   gap: 7px;
   margin-top: 10px;
   padding-top: 8px;
