@@ -901,6 +901,30 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
     }
   )
 
+  /**
+   * 运行中插话：steer 在下一个工具边界进入（可续命），follow_up 只在
+   * 本轮跑完后进入。都不会打断正在执行的工具。
+   */
+  ipcMain.handle(
+    'agent:steer-task',
+    async (
+      _,
+      params: { taskId: string; message: string; behavior?: 'steer' | 'follow_up' }
+    ) => {
+      try {
+        if (!daemonClient) return { ok: false, error: 'daemon 未就绪' }
+        await daemonClient.steerTask({
+          taskId: params.taskId,
+          message: params.message,
+          behavior: params.behavior ?? 'steer'
+        })
+        return { ok: true }
+      } catch (err: any) {
+        return { ok: false, error: err?.message ?? String(err) }
+      }
+    }
+  )
+
   ipcMain.handle('agent:run', async (_, params: AgentRunParams) => {
     const resolved = await resolveAgentModel(options.workspaceDir)
     if (!resolved.model) {

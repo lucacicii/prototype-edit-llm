@@ -400,6 +400,11 @@ export interface IAgentAPI {
     answers?: Record<string, any> | any
     cancelled?: boolean
   }) => Promise<{ ok: boolean; error?: string }>
+  steerTask: (params: {
+    taskId: string
+    message: string
+    behavior?: 'steer' | 'follow_up'
+  }) => Promise<{ ok: boolean; error?: string }>
   cancel: (runId: string) => Promise<boolean>
   onStreamEvent: (callback: (frame: any) => void) => () => void
   onUserQuestion: (

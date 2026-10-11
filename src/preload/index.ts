@@ -101,6 +101,8 @@ const agentApi = {
     answers?: Record<string, any> | any
     cancelled?: boolean
   }) => ipcRenderer.invoke('agent:answer-question', params),
+  steerTask: (params: { taskId: string; message: string; behavior?: 'steer' | 'follow_up' }) =>
+    ipcRenderer.invoke('agent:steer-task', params),
   run: (params: any) => ipcRenderer.invoke('agent:run', params),
   cancel: (runId: string) => ipcRenderer.invoke('agent:cancel', runId),
   onStreamEvent: (callback: (frame: any) => void) => {

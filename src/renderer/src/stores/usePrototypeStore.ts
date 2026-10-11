@@ -123,6 +123,8 @@ interface PrototypeStoreState {
   ) => void
   addChatMessage: (prototypeId: string, message: PrototypeChatMessage) => void
   resetChat: (prototypeId: string) => void
+  /** 只保留前 keepCount 条消息，并重置 thunder 会话（重发/重新生成用）。 */
+  truncateChat: (prototypeId: string, keepCount: number) => PrototypeChatMessage[]
 }
 
 const initialPrototypes = seedPrototypes()
@@ -305,6 +307,21 @@ export const usePrototypeStore = create<PrototypeStoreState>((set, get) => ({
     if (nextMessages.length > 0) {
       window.prototypeApi?.saveChat({ id: prototypeId, messages: nextMessages }).catch(() => {})
     }
+  },
+
+  truncateChat: (prototypeId: string, keepCount: number) => {
+    const proto = get().prototypes.find((p) => p.id === prototypeId)
+    if (!proto) return []
+    const kept = proto.chatMessages.slice(0, Math.max(0, keepCount))
+    const updated = get().prototypes.map((p) =>
+      p.id === prototypeId ? { ...p, chatMessages: kept, updatedAt: Date.now() } : p
+    )
+    set({ prototypes: updated })
+    window.prototypeApi
+      ?.saveChat({ id: prototypeId, messages: kept, resetSession: true })
+      .then(() => get().loadFromDisk())
+      .catch(() => {})
+    return kept
   },
 
   resetChat: (prototypeId: string) => {
