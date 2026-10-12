@@ -112,6 +112,8 @@ interface ChatPanelProps {
     /** 产生这次代码更新的原型（run 期间用户可能已切走）。 */
     prototypeId?: string
   ) => void
+  /** 本轮原型 run 是否在跑；工作区那边靠它禁用「生成拓扑图」。 */
+  onStreamingChange?: (streaming: boolean) => void
 }
 
 function getProviderIcon(provider: string, size = 14) {
@@ -173,7 +175,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   onWidthChange,
   onResizeDragChange,
   sidebarCollapsed,
-  onToggleSidebar
+  onToggleSidebar,
+  onStreamingChange
 }) => {
   const currentPrototype = useCurrentPrototype()
   const {
@@ -262,6 +265,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   /** 正在跑的 run 属于当前项目才展示流式内容；别的项目在跑时只当作「忙」。 */
   const streamHere = stream.isStreaming && stream.runPrototypeId === runKey
   const runElsewhere = stream.isStreaming && !streamHere
+
+  // 主进程那边的串行守卫才是硬保证，这里只是让「生成拓扑图」在 run 期间看着就是不可点的。
+  useEffect(() => {
+    onStreamingChange?.(stream.isStreaming)
+  }, [stream.isStreaming, onStreamingChange])
 
   useEffect(() => {
     scrollToBottom()

@@ -16,6 +16,7 @@ import {
   type ProductScenario
 } from './agent/pm-persona'
 import { detectTechStack, type TechStack } from './agent/tech-stack'
+import type { TopologyGraph } from '../shared/topology'
 
 export interface RunStats {
   totalTurns: number
@@ -62,12 +63,41 @@ export interface PrototypeProjectItem extends ProjectMetaFile {
   vueCode: string
   chatMessages: PrototypeChatMessage[]
   files: string[]
+  /** 页面跳转流转图；没生成过就是 null。 */
+  topology?: TopologyGraph | null
 }
 
 const META_DIR = '.prototype-meta'
 const PROJECT_JSON = 'project.json'
 const CHAT_JSON = 'chat.json'
+const TOPOLOGY_JSON = 'topology.json'
+const TOPOLOGY_SHOTS_DIR = 'topology-shots'
+const TOPOLOGY_RAW = 'topology.raw.txt'
 const ACTIVE_ID_FILE = 'active-project.txt'
+
+/**
+ * 拓扑图相关文件的位置。
+ *
+ * 刻意放在 `.prototype-meta/` 里：`listProjectSourceFiles` 会跳过点目录，
+ * 所以它们既不会冒充源码出现在代码编辑器的文件页签里，
+ * 也不会被预览的静态服务当成一个页面。
+ *
+ * 没有 HTML 产物 —— 导出的是图片（一张 PNG），网页只是中间的渲染载体。
+ */
+export function topologyPathsFor(projectId: string): {
+  dir: string
+  json: string
+  shotsDir: string
+  raw: string
+} {
+  const metaDir = path.join(projectDirFor(projectId), META_DIR)
+  return {
+    dir: metaDir,
+    json: path.join(metaDir, TOPOLOGY_JSON),
+    shotsDir: path.join(metaDir, TOPOLOGY_SHOTS_DIR),
+    raw: path.join(metaDir, TOPOLOGY_RAW)
+  }
+}
 
 export function skeletonForStack(
   stack: TechStack,
@@ -316,12 +346,25 @@ export async function loadProjectItem(dir: string): Promise<PrototypeProjectItem
 
     const files = await listProjectSourceFiles(dir)
 
+    // 拓扑图跟 chat.json 一样挂在项目上一起返回：渲染层通过 `prototype:list`
+    // 白拿，不需要第二条加载路径。文件坏了就当没生成过，不能连累整个项目。
+    let topology: TopologyGraph | null = null
+    const topologyPath = path.join(dir, META_DIR, TOPOLOGY_JSON)
+    if (existsSync(topologyPath)) {
+      try {
+        topology = JSON.parse(await fs.readFile(topologyPath, 'utf-8')) as TopologyGraph
+      } catch {
+        topology = null
+      }
+    }
+
     return {
       ...meta,
       rootPath: dir,
       vueCode,
       chatMessages,
-      files
+      files,
+      topology
     }
   } catch (err) {
     console.warn('[project-store] failed to load project:', dir, err)

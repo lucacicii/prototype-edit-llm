@@ -140,6 +140,34 @@ export interface IPrototypeAPI {
   }>
 }
 
+export interface ITopologyAPI {
+  /** 分析项目源码生成页面跳转流转图，并落盘 topology.json / topology.html。 */
+  generate: (params: { prototypeId: string }) => Promise<{
+    ok: boolean
+    runId?: string
+    graph?: import('../shared/topology').TopologyGraph
+    error?: string
+    /** 模型没回 JSON 时，它实际回的那段原文。 */
+    rawExcerpt?: string
+    cancelled?: boolean
+  }>
+  /** 各页面截图的缩略图：nodeId → dataURL。 */
+  shots: (params: { prototypeId: string }) => Promise<{
+    ok: boolean
+    shots?: Record<string, string>
+    error?: string
+  }>
+  /** 把整张拓扑图导出成一张 PNG。 */
+  exportImage: (params: { prototypeId: string }) => Promise<{
+    ok: boolean
+    path?: string
+    error?: string
+    cancelled?: boolean
+  }>
+  /** 停掉正在生成的那一轮。 */
+  cancel: () => Promise<{ ok: boolean }>
+}
+
 export interface IHistoryAPI {
   /** 列出版本；带上 currentCode 才能标出「当前」是哪一版（回滚后它不是最新版）。 */
   list: (params: {
@@ -502,6 +530,7 @@ declare global {
     hostApi: IHostAPI
     historyApi: IHistoryAPI
     prototypeApi: IPrototypeAPI
+    topologyApi: ITopologyAPI
     browser: IBrowserAPI
     agent: IAgentAPI
   }

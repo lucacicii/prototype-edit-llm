@@ -7,7 +7,7 @@
  * needs to know how the other stores things.
  */
 
-import { BrowserWindow, ipcMain } from 'electron'
+import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { promises as fs } from 'fs'
 import * as path from 'path'
 import { BrowserViewManager } from '../browser-view-manager'
@@ -22,9 +22,17 @@ import { ProjectRunner } from '../project-runner'
 import {
   loadProjectItem,
   projectDirFor,
-  syncProjectEntryAndStack
+  syncProjectEntryAndStack,
+  topologyPathsFor
 } from '../project-store'
 import { ProjectWorkspaceManager } from '../project-workspace-manager'
+import {
+  buildTopologyPrompt,
+  parseTopologyReply,
+  rawExcerpt
+} from '../agent/topology'
+import { capturePreviewShots, loadShotThumbs, renderGraphPng } from '../topology-capture'
+import { djb2, normalizeTopology, type TopologyGraph } from '../../shared/topology'
 import {
   AgentConfigFile,
   loadLibrary,
@@ -560,6 +568,11 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
   let active: AgentRunParams | null = null
   let activeCode = ''
   let activeStack: TechStack = 'vue3-element'
+  // 拓扑图生成与原型 run 共用同一个 daemon 与同一个 workspaceDir，必须串行。
+  let topologyInFlight = false
+  // 当前那一轮拓扑任务的 daemon task id（重试会换一个），取消要打到具体的它。
+  let topologyTaskId: string | null = null
+  let topologyCancelRequested = false
 
   // Full-capability Thunder Daemon client (`read_file`, `write_file`, `bash`, `grep`, `find`, `ls`, `ask_user_question`)
   const daemonClient: ThunderClient = getSharedThunderClient({ workspaceDir: options.workspaceDir })
@@ -1207,6 +1220,226 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
     return true
   })
 
+  /**
+   * 生成拓扑图（页面跳转流转图）。
+   *
+   * 走的是与 `agent:run` 同一条 daemon 通路，但只让模型读、只让它回 JSON：
+   * - 独立 session：拓扑的提示词与 JSON 不该污染原型对话的上下文；
+   * - `headless: true`：关掉 `ask_user_question`，这一轮不需要跟用户交互；
+   * - 跑完比对入口文件内容与其它文件的 mtime —— 模型被要求不要写文件，
+   *   但 daemon 手里确实有 `write_file`/`bash`，这条约束得能真正强制。
+   */
+  ipcMain.handle('topology:generate', async (_, params: { prototypeId?: string }) => {
+    const prototypeId = params?.prototypeId
+    if (!prototypeId) return { ok: false, error: '缺少原型 id' }
+    if (topologyInFlight) return { ok: false, error: '正在生成拓扑图，请稍候' }
+    if (active) return { ok: false, error: '正在生成原型，等这一轮结束再生成拓扑图' }
+
+    const resolved = await resolveAgentModel(options.workspaceDir)
+    if (!resolved.model) {
+      return { ok: false, error: `尚未配置模型。${resolved.reason ?? ''}`.trim() }
+    }
+
+    const wsManager = ProjectWorkspaceManager.getInstance()
+    await wsManager.init()
+    const currentWs = wsManager.getCurrentWorkspace()
+    if (currentWs && currentWs.id !== 'default-host') {
+      // 外部业务工作区里「页面」是一整套工程的路由，跟原型的页面不是一回事。
+      // 硬套一张图只会误导，先明确拒绝，别给一张看着像模像样的假图。
+      return { ok: false, error: '外部业务工作区暂不支持生成拓扑图，请切回内置原型项目' }
+    }
+
+    const projectDir = projectDirFor(prototypeId)
+    const item = await loadProjectItem(projectDir)
+    if (!item) return { ok: false, error: '项目不存在' }
+
+    const paths = topologyPathsFor(prototypeId)
+    const runId = `topo_${Date.now().toString(36)}`
+    // 生成前的入口源码：既是「图是否过期」的指纹，也是还原的底稿。
+    const entryCode = item.vueCode
+    const knownFiles = item.files ?? []
+    const before = await fileMtimes(projectDir, knownFiles)
+
+    topologyInFlight = true
+    topologyCancelRequested = false
+    try {
+      const collected = await collectTopologySources(projectDir, item)
+      const prompt = buildTopologyPrompt({
+        projectName: item.name,
+        techStack: item.techStack,
+        entryFile: item.entryFile,
+        files: knownFiles.length ? knownFiles : [item.entryFile],
+        sources: collected.sources,
+        truncated: collected.truncated
+      })
+
+      await syncThunderModelConfig()
+      daemonClient.start()
+
+      let failureDetail = ''
+      let finalContent: string | null = null
+      // 模型偶尔会回一段散文或带围栏的块；只重试一次，够用了 ——
+      // 再失败就是模型不支持这个任务，多试只是烧钱。
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        // 记下这一轮的 daemon task id，取消要打到具体的它（重试会换个 id）。
+        topologyTaskId = `${runId}_a${attempt}`
+        const result = await daemonClient.runTask({
+          taskId: topologyTaskId,
+          prompt:
+            attempt === 1
+              ? prompt
+              : `${prompt}\n\n【上一次的回复无法解析】这一轮只输出那个 JSON 对象，不要解释、不要 markdown 围栏。`,
+          sessionId: `sess_topology_${prototypeId}`,
+          model: selectionId(resolved.model),
+          modelDescriptor: resolved.model as unknown as Record<string, any>,
+          // 抽页面与跳转不需要深思，压住延迟与成本。
+          thinkingLevel: 'low',
+          workspaceDir: projectDir,
+          headless: true,
+          onEvent: (observed: any) => {
+            const ev = observed?.event ?? observed
+            if (ev?.type === 'error' && typeof ev.message === 'string' && ev.message.trim()) {
+              failureDetail = ev.message.trim()
+            }
+          }
+        })
+        finalContent = result?.final_content ?? null
+        if (parseTopologyReply(finalContent)) break
+      }
+
+      const warnings = await restoreTouchedSources(projectDir, item.entryFile, entryCode, knownFiles, before)
+
+      const parsed = parseTopologyReply(finalContent)
+      if (!parsed) {
+        // 留一份原文，用户能自己看出模型到底回了什么。
+        await fs.mkdir(paths.dir, { recursive: true })
+        await fs.writeFile(paths.raw, rawExcerpt(finalContent, 8000), 'utf-8')
+        return {
+          ok: false,
+          runId,
+          error: failureDetail
+            ? `模型未返回可解析的 JSON：${failureDetail}`
+            : '模型未返回可解析的 JSON（原文已存到 .prototype-meta/topology.raw.txt）',
+          rawExcerpt: rawExcerpt(finalContent)
+        }
+      }
+
+      const normalized = normalizeTopology(parsed, djb2(entryCode))
+      if (!normalized.graph) {
+        return { ok: false, runId, error: normalized.error ?? '模型没有给出可用的页面节点' }
+      }
+
+      const allWarnings = [...(normalized.graph.warnings ?? []), ...warnings]
+      const graph: TopologyGraph = {
+        ...normalized.graph,
+        generatedAt: Date.now(),
+        ...(allWarnings.length ? { warnings: allWarnings } : {})
+      }
+
+      // 接下来要真的去预览里点着截图，这会把带 selectors 的整张图跑一遍，
+      // 所以放在写完 JSON 之前：截到的图要一起进 JSON。
+      await fs.mkdir(paths.dir, { recursive: true })
+      try {
+        const preview = await ProjectRunner.getInstance().syncAndResolvePreviewUrl({
+          projectId: prototypeId
+        })
+        const captured = await capturePreviewShots({
+          graph,
+          previewUrl: preview.previewUrl,
+          entryFile: preview.entryFile,
+          shotDir: paths.shotsDir
+        })
+        for (const node of graph.nodes) {
+          const shot = captured.shots[node.id]
+          if (shot) node.shot = shot
+        }
+        if (captured.warnings.length) {
+          graph.warnings = [...(graph.warnings ?? []), ...captured.warnings]
+        }
+      } catch (err: any) {
+        // 截图是加分项：拿不到图仍然要交出这张图（纯文字卡片）。
+        graph.warnings = [
+          ...(graph.warnings ?? []),
+          `截图失败：${err?.message ?? String(err)}，本次只有页面名称`
+        ]
+      }
+
+      await fs.writeFile(paths.json, JSON.stringify(graph, null, 2), 'utf-8')
+
+      return { ok: true, runId, graph }
+    } catch (err: any) {
+      const message = err?.message ?? String(err)
+      // daemon 自己的失败文案常常是泛泛一句，取消请求这个标志更可靠。
+      if (topologyCancelRequested || /cancel/i.test(message)) {
+        return { ok: false, runId, cancelled: true, error: '已取消' }
+      }
+      return { ok: false, runId, error: message }
+    } finally {
+      topologyInFlight = false
+      topologyTaskId = null
+    }
+  })
+
+  ipcMain.handle('topology:cancel', async () => {
+    if (!topologyTaskId) return { ok: false }
+    topologyCancelRequested = true
+    try {
+      await daemonClient.cancelTask(topologyTaskId)
+    } catch {
+      // 已经结束了就算了：cancel 的目的是让那一轮停下，不是保证打中。
+    }
+    return { ok: true }
+  })
+
+  /** 面板要的缩略图。单独取，不塞进 `prototype:list` —— 那边每次列项目都会跑。 */
+  ipcMain.handle('topology:shots', async (_, params: { prototypeId?: string }) => {
+    const prototypeId = params?.prototypeId
+    if (!prototypeId) return { ok: false, error: '缺少原型 id' }
+    const item = await loadProjectItem(projectDirFor(prototypeId))
+    const thumbs = await loadShotThumbs(item?.topology ?? null, topologyPathsFor(prototypeId).dir)
+    return { ok: true, shots: Object.fromEntries(thumbs) }
+  })
+
+  /**
+   * 导出成一张图片。
+   *
+   * 没有一个「截图服务」能截出这张图 —— 它得由浏览器把 HTML 画出来。所以
+   * 走一个隐藏窗口：渲染 → 量出内容尺寸 → 调窗口大小 → 抓成 PNG。用户在
+   * 应用里看到的（以及别人收到的）就是这一张图，不再是 HTML。
+   */
+  ipcMain.handle('topology:export-image', async (_, params: { prototypeId?: string }) => {
+    const prototypeId = params?.prototypeId
+    if (!prototypeId) return { ok: false, error: '缺少原型 id' }
+
+    const paths = topologyPathsFor(prototypeId)
+    const raw = await fs.readFile(paths.json, 'utf-8').catch(() => null)
+    if (raw === null) return { ok: false, error: '还没有生成过拓扑图' }
+
+    let graph: TopologyGraph
+    try {
+      graph = JSON.parse(raw) as TopologyGraph
+    } catch {
+      return { ok: false, error: '拓扑图数据损坏，请重新生成' }
+    }
+
+    const item = await loadProjectItem(projectDirFor(prototypeId))
+    const thumbs = await loadShotThumbs(graph, paths.dir)
+    const png = await renderGraphPng(graph, thumbs)
+    if (!png) return { ok: false, error: '图片渲染失败，请重试' }
+
+    const options = {
+      title: '导出拓扑图图片',
+      defaultPath: `${item?.name || prototypeId}-页面拓扑图.png`,
+      filters: [{ name: 'PNG 图片', extensions: ['png'] }]
+    }
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+    const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
+    if (result.canceled || !result.filePath) return { ok: false, cancelled: true }
+
+    await fs.writeFile(result.filePath, png)
+    return { ok: true, path: result.filePath }
+  })
+
   ipcMain.handle(
     'agent:fetch-remote-models',
     async (
@@ -1427,4 +1660,117 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
   )
 
   return client
+}
+
+/** 图片/字体/压缩包之类不该塞进提示词的文件。 */
+const TOPOLOGY_BINARY_EXT = new Set([
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'bmp', 'avif', 'tiff',
+  'woff', 'woff2', 'ttf', 'otf', 'eot',
+  'zip', 'gz', 'tar', 'pdf', 'mp4', 'mov', 'webm', 'mp3', 'wav'
+])
+
+// 原型体量都不大，但一个注入了大段数据的 HTML 能轻松上兆 —— 给总量封顶，
+// 否则一次拓扑生成的输入就可能顶到模型上下文上限。
+const TOPOLOGY_MAX_FILE_CHARS = 60_000
+const TOPOLOGY_MAX_TOTAL_CHARS = 120_000
+
+/**
+ * 读出可以喂给模型的源码。入口排第一（它是页面的主要线索），
+ * 二进制与超预算的跳过，并在 `truncated` 里如实告诉模型「有文件没看全」——
+ * 让它别为没读到的文件编页面。
+ */
+async function collectTopologySources(
+  dir: string,
+  item: { entryFile: string; files?: string[] }
+): Promise<{ sources: { file: string; code: string }[]; truncated: boolean }> {
+  const listed = item.files ?? []
+  const ordered = [item.entryFile, ...listed.filter((f) => f !== item.entryFile)]
+  const sources: { file: string; code: string }[] = []
+  const seen = new Set<string>()
+  let total = 0
+  let truncated = false
+
+  for (const rel of ordered) {
+    if (!rel || seen.has(rel)) continue
+    seen.add(rel)
+    if (TOPOLOGY_BINARY_EXT.has(path.extname(rel).slice(1).toLowerCase())) {
+      truncated = true
+      continue
+    }
+    if (total >= TOPOLOGY_MAX_TOTAL_CHARS) {
+      truncated = true
+      continue
+    }
+    const buf = await fs.readFile(path.join(dir, rel)).catch(() => null)
+    if (!buf) continue
+    // 空字节 = 二进制，扩展名骗人也拦得住
+    if (buf.includes(0)) {
+      truncated = true
+      continue
+    }
+    let code = buf.toString('utf-8')
+    if (code.length > TOPOLOGY_MAX_FILE_CHARS) {
+      code = `${code.slice(0, TOPOLOGY_MAX_FILE_CHARS)}\n…（文件过长，已截断）`
+      truncated = true
+    }
+    total += code.length
+    sources.push({ file: rel, code })
+  }
+
+  return { sources, truncated }
+}
+
+/** 生成前的文件 mtime 快照，用来看模型有没有偷动别的文件。 */
+async function fileMtimes(dir: string, files: string[]): Promise<Map<string, number>> {
+  const map = new Map<string, number>()
+  for (const rel of files) {
+    const stat = await fs.stat(path.join(dir, rel)).catch(() => null)
+    map.set(rel, stat?.isFile() ? stat.mtimeMs : -1)
+  }
+  return map
+}
+
+/**
+ * 还原守卫。
+ *
+ * 提示词里写了「不要修改任何文件」，但 daemon 手里确实有 `write_file`/`bash`，
+ * 而这一轮用的就是项目目录本身作为 workspace。入口文件我们有完整底稿，
+ * 被改了就直接还原；其它文件只能按 mtime 报出来让用户自己看 ——
+ * 读给模型的那些是截断过的，拿截断内容去「还原」反而会毁文件。
+ */
+async function restoreTouchedSources(
+  dir: string,
+  entryFile: string,
+  entryCode: string,
+  knownFiles: string[],
+  before: Map<string, number>
+): Promise<string[]> {
+  const warnings: string[] = []
+
+  const entryNow = await fs.readFile(path.join(dir, entryFile), 'utf-8').catch(() => null)
+  if (entryNow !== null && entryNow !== entryCode) {
+    await fs.writeFile(path.join(dir, entryFile), entryCode, 'utf-8').catch(() => {})
+    warnings.push(`模型改动了入口文件 ${entryFile}，已还原为生成前的版本`)
+  }
+
+  const touched: string[] = []
+  const after = await fileMtimes(dir, knownFiles)
+  for (const [rel, mtime] of after) {
+    if (rel === entryFile) continue
+    if (before.get(rel) !== mtime) touched.push(rel)
+  }
+
+  // 新冒出来的文件也算「动了」
+  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => [])
+  const known = new Set(knownFiles)
+  for (const entry of entries) {
+    if (entry.name.startsWith('.') || entry.name === 'node_modules' || entry.name === 'AGENTS.md') continue
+    if (!known.has(entry.name)) touched.push(entry.name)
+  }
+
+  if (touched.length) {
+    warnings.push(`模型改动了 ${touched.slice(0, 5).join('、')}，请检查这些文件`)
+  }
+
+  return warnings
 }

@@ -136,6 +136,16 @@ const agentApi = {
   }
 }
 
+const topologyApi = {
+  // 原型页面拓扑图（生成 → 截各页图 → 导出成一张图片）
+  generate: (params: { prototypeId: string }) => ipcRenderer.invoke('topology:generate', params),
+  cancel: () => ipcRenderer.invoke('topology:cancel'),
+  // 节点缩略图（nodeId → dataURL）。单独取，避免把整页长图塞进 prototype:list。
+  shots: (params: { prototypeId: string }) => ipcRenderer.invoke('topology:shots', params),
+  exportImage: (params: { prototypeId: string }) =>
+    ipcRenderer.invoke('topology:export-image', params)
+}
+
 const projectApi = {
   // 本地业务工程与共享工作区交互
   selectDirectory: () => ipcRenderer.invoke('project:select-directory'),
@@ -247,6 +257,7 @@ if (process.contextIsolated) {
     contextBridge.exposeInMainWorld('hostApi', hostApi)
     contextBridge.exposeInMainWorld('historyApi', historyApi)
     contextBridge.exposeInMainWorld('prototypeApi', prototypeApi)
+    contextBridge.exposeInMainWorld('topologyApi', topologyApi)
     contextBridge.exposeInMainWorld('browser', browserApi)
     contextBridge.exposeInMainWorld('agent', agentApi)
   } catch (error) {
@@ -265,6 +276,8 @@ if (process.contextIsolated) {
   window.historyApi = historyApi
   // @ts-ignore
   window.prototypeApi = prototypeApi
+  // @ts-ignore
+  window.topologyApi = topologyApi
   // @ts-ignore
   window.browser = browserApi
   // @ts-ignore

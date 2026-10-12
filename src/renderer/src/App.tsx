@@ -6,12 +6,14 @@ import {
   Clock,
   FolderOutput,
   PanelLeftOpen,
-  PanelLeftClose
+  PanelLeftClose,
+  Share2
 } from 'lucide-react'
 import { PrototypeSidebar } from './components/PrototypeSidebar'
 import { ChatPanel, type PointedTarget, type MarkupAnnotation } from './components/chat/ChatPanel'
 import { EmbeddedBrowserViewer, type EmbeddedBrowserViewerRef } from './components/browser/EmbeddedBrowserViewer'
 import { CodeEditorPane } from './components/editor/CodeEditorPane'
+import { TopologyPanel } from './components/topology/TopologyPanel'
 import { SettingsModal } from './components/settings/SettingsModal'
 import { ExportModal } from './components/modals/ExportModal'
 import { VersionHistoryModal } from './components/modals/VersionHistoryModal'
@@ -40,7 +42,9 @@ export const App: React.FC = () => {
   const [isResizing, setIsResizing] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [chatCollapsed, setChatCollapsed] = useState(false)
-  const [activeTab, setActiveTab] = useState<'preview' | 'code'>('preview')
+  const [activeTab, setActiveTab] = useState<'preview' | 'code' | 'topology'>('preview')
+  // 原型 run 是否在跑：拓扑图生成与它共用同一个 daemon 会话目录，不能同时开工。
+  const [isChatStreaming, setIsChatStreaming] = useState(false)
   const [currentWorkspace, setCurrentWorkspace] = useState<any>(null)
   const currentWorkspaceRef = useRef<any>(null)
   currentWorkspaceRef.current = currentWorkspace
@@ -149,6 +153,24 @@ export const App: React.FC = () => {
         if (res?.ok && typeof res.version === 'number') {
           setCurrentVersionNo(res.version)
         }
+      })
+      .catch(() => {})
+  }
+
+  /** 从拓扑图节点跳到源码：切到源码页签，并把那个文件读出来。 */
+  const handleOpenTopologySource = (file: string) => {
+    if (!currentPrototype) return
+    setActiveTab('code')
+    if (file === currentPrototype.entryFile) {
+      setSelectedFile('')
+      setSelectedFileContent(null)
+      return
+    }
+    setSelectedFile(file)
+    window.prototypeApi
+      ?.readFile({ id: currentPrototype.id, filePath: file })
+      .then((res) => {
+        if (res?.ok && typeof res.content === 'string') setSelectedFileContent(res.content)
       })
       .catch(() => {})
   }
@@ -343,6 +365,7 @@ export const App: React.FC = () => {
         markupAnnotations={markupAnnotations}
         onRemoveMarkupAnnotation={handleRemoveMarkupAnnotation}
         onClearSelectionState={clearSelectionState}
+        onStreamingChange={setIsChatStreaming}
         onCodeUpdated={(newCode, label, techStack, previewUrl, _entryFile, ownerId) => {
           // run 期间用户可能已切到别的项目：代码要写回发起 run 的那个原型，
           // 预览也只在它仍是当前项目时才跳转。
@@ -411,6 +434,16 @@ export const App: React.FC = () => {
               >
                 <Code2 size={13} />
                 <span className="wh-tab-label whitespace-nowrap">源码视图</span>
+              </button>
+              <button
+                title="页面拓扑图"
+                className={`wh-tab px-3 py-1 rounded-md transition flex items-center gap-1.5 cursor-pointer ${
+                  activeTab === 'topology' ? 'bg-sky-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
+                }`}
+                onClick={() => setActiveTab('topology')}
+              >
+                <Share2 size={13} />
+                <span className="wh-tab-label whitespace-nowrap">拓扑图</span>
               </button>
             </div>
 
@@ -494,6 +527,16 @@ export const App: React.FC = () => {
                     }
                   }
                 }}
+              />
+            </div>
+          )}
+
+          {activeTab === 'topology' && (
+            <div className="absolute inset-0 z-20">
+              <TopologyPanel
+                prototype={currentPrototype}
+                chatStreaming={isChatStreaming}
+                onOpenSource={handleOpenTopologySource}
               />
             </div>
           )}

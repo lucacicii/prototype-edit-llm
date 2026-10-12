@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { TopologyGraph } from '../../../shared/topology'
 
 const LEGACY_STORAGE_KEY = 'wb_prototype_store_v1'
 const MIGRATED_FLAG_KEY = 'wb_prototype_store_migrated_to_disk_v1'
@@ -57,6 +58,8 @@ export interface PrototypeItem {
   files?: string[]
   vueCode: string
   chatMessages: PrototypeChatMessage[]
+  /** 页面跳转流转图；没生成过就是 null。跟着 prototype:list 一起从主进程回来。 */
+  topology?: TopologyGraph | null
   updatedAt: number
 }
 
@@ -124,6 +127,8 @@ interface PrototypeStoreState {
   addChatMessage: (prototypeId: string, message: PrototypeChatMessage) => void
   /** 只保留前 keepCount 条消息，并重置 thunder 会话（重发/重新生成用）。 */
   truncateChat: (prototypeId: string, keepCount: number) => PrototypeChatMessage[]
+  /** 记下新生成的拓扑图。落盘是主进程做的，这里只同步内存。 */
+  setTopology: (id: string, graph: TopologyGraph | null) => void
 }
 
 const initialPrototypes = seedPrototypes()
@@ -321,6 +326,14 @@ export const usePrototypeStore = create<PrototypeStoreState>((set, get) => ({
       .then(() => get().loadFromDisk())
       .catch(() => {})
     return kept
+  },
+
+  setTopology: (id: string, graph: TopologyGraph | null) => {
+    set({
+      prototypes: get().prototypes.map((p) =>
+        p.id === id ? { ...p, topology: graph, updatedAt: Date.now() } : p
+      )
+    })
   }
 }))
 
