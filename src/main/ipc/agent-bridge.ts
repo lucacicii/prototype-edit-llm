@@ -11,7 +11,8 @@ import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { promises as fs } from 'fs'
 import * as path from 'path'
 import { BrowserViewManager } from '../browser-view-manager'
-import { activePrototypeFile, prototypeStackMarker, providerStorePath } from '../app-paths'
+import { activePrototypeFile, materialsFilesDir, prototypeStackMarker, providerStorePath } from '../app-paths'
+import { listMaterials } from '../material-store'
 import { agentReadiness } from '../runtime-env'
 import { resolveRuntimeBinary, RuntimeClient } from '../agent/runtime-client'
 import { PointedTarget, PrototypeAgent } from '../agent/prototype-agent'
@@ -1012,16 +1013,19 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
     const projectDir = isExternalWorkspace && currentWs
       ? currentWs.sharedDir || currentWs.rootPath || projectDirFor(params.prototypeId || 'blank-prototype')
       : projectDirFor(params.prototypeId || 'blank-prototype')
-    const extraWorkspaceDirs = isExternalWorkspace && currentWs
-      ? Array.from(
-          new Set(
-            [
-              ...(currentWs.repos?.map((r) => r.path) ?? []),
-              ...(currentWs.rootPath ? [currentWs.rootPath] : [])
-            ].filter(Boolean)
-          )
-        )
-      : []
+    const extraWorkspaceDirs = Array.from(
+      new Set(
+        [
+          ...(isExternalWorkspace && currentWs
+            ? [
+                ...(currentWs.repos?.map((r) => r.path) ?? []),
+                ...(currentWs.rootPath ? [currentWs.rootPath] : [])
+              ]
+            : []),
+          materialsFilesDir()
+        ].filter(Boolean)
+      )
+    )
 
     await fs.mkdir(projectDir, { recursive: true })
     const projectItem = !isExternalWorkspace ? await loadProjectItem(projectDir) : null
@@ -1029,8 +1033,27 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
       activeStack = projectItem.techStack
     }
 
-    // Build enriched prompt with browser probe inspect/markup targets & runtime diagnostics
+    // Build enriched prompt with browser probe inspect/markup targets, materials & runtime diagnostics
     const contextSections: string[] = []
+
+    const allMaterials = await listMaterials()
+    const enabledMaterials = allMaterials.filter((m) => m.enabled !== false)
+    if (enabledMaterials.length > 0) {
+      const matLines = [
+        '【原型物料库依赖 (Materials)】',
+        '用户已在「物料库」上传并启用了以下物料作为原型依赖：',
+        '- 若为图片素材（category=image），请在原型代码中直接使用其 HTTP 预览地址 `<img src="...url..." />` 渲染；',
+        '- 若为文档/规范/JSON/CSV数据/代码样本，可使用 `read_file` 工具直接读取其本地文件路径（或 `./materials/<fileName>`）以遵循规范或填充真实数据。'
+      ]
+      enabledMaterials.forEach((m, idx) => {
+        const descPart = m.description ? ` | 用途说明: "${m.description}"` : ''
+        const urlPart = m.category === 'image' && m.url ? ` | 图片引用 URL: ${m.url}` : m.url ? ` | 访问 URL: ${m.url}` : ''
+        matLines.push(
+          `${idx + 1}. [${m.category}] ${m.name} (${m.fileName})${descPart}${urlPart} | 本地路径: ${m.filePath || `./materials/${m.fileName}`}`
+        )
+      })
+      contextSections.push(matLines.join('\n'))
+    }
     if (params.inspectTarget?.tagName) {
       const t = params.inspectTarget
       const loc = t.sourceFile

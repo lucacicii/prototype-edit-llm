@@ -9,6 +9,7 @@ import * as electron from 'electron'
 import { promises as fs, existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import * as path from 'path'
 import { projectsRootDir } from './app-paths'
+import { ensureProjectMaterialsLink } from './material-store'
 import {
   buildProjectAgentsMd,
   getScenarioPreset,
@@ -210,6 +211,7 @@ async function listProjectSourceFiles(dir: string, prefix = ''): Promise<string[
         entry.name.startsWith('.') ||
         entry.name === 'node_modules' ||
         entry.name === 'dist' ||
+        entry.name === 'materials' ||
         entry.name === 'AGENTS.md'
       ) {
         continue
@@ -317,6 +319,7 @@ export async function loadProjectItem(dir: string): Promise<PrototypeProjectItem
   if (!existsSync(metaPath)) return null
 
   try {
+    await ensureProjectMaterialsLink(dir)
     const meta = JSON.parse(await fs.readFile(metaPath, 'utf-8')) as ProjectMetaFile
     const chatPath = path.join(dir, META_DIR, CHAT_JSON)
     let chatMessages: PrototypeChatMessage[] = []
@@ -386,6 +389,7 @@ export async function createProjectOnDisk(params: {
   const dir = projectDirFor(id)
   const metaDir = path.join(dir, META_DIR)
   await fs.mkdir(metaDir, { recursive: true })
+  await ensureProjectMaterialsLink(dir)
 
   const scenario: ProductScenario = params.scenario || 'auto'
   const preferredStack: PreferredStack = params.preferredStack || 'auto'

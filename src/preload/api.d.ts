@@ -4,6 +4,7 @@ import { ElectronAPI } from '@electron-toolkit/preload'
 import type { PointedTarget } from '../main/agent/prototype-agent'
 // 版本元数据的权威定义在主进程那侧（同 PointedTarget 的口径，不在这儿抄一份）
 import type { VersionKind, VersionMeta } from '../main/ipc/history-bridge'
+import type { MaterialCategory, MaterialItem } from '../main/material-store'
 
 export interface WorkspaceRepo {
   path: string
@@ -524,6 +525,40 @@ export interface IAgentAPI {
   ) => () => void
 }
 
+export interface IMaterialAPI {
+  list: () => Promise<{ ok: boolean; items: MaterialItem[] }>
+  uploadDialog: (options?: {
+    category?: MaterialCategory
+    description?: string
+  }) => Promise<{ ok: boolean; added?: MaterialItem[]; items?: MaterialItem[]; error?: string }>
+  uploadFiles: (params: {
+    files: Array<{
+      name: string
+      dataBase64: string
+      mimeType?: string
+      description?: string
+      category?: MaterialCategory
+    }>
+  }) => Promise<{ ok: boolean; added?: MaterialItem[]; items?: MaterialItem[]; error?: string }>
+  update: (params: {
+    id: string
+    name?: string
+    description?: string
+    category?: MaterialCategory
+    tags?: string[]
+    enabled?: boolean
+  }) => Promise<{ ok: boolean; item?: MaterialItem; items?: MaterialItem[]; error?: string }>
+  delete: (id: string) => Promise<{ ok: boolean; items?: MaterialItem[]; error?: string }>
+  readContent: (idOrFileName: string) => Promise<{
+    ok: boolean
+    item?: MaterialItem
+    isText?: boolean
+    content?: string
+    truncated?: boolean
+    error?: string
+  }>
+}
+
 declare global {
   interface Window {
     electron: ElectronAPI
@@ -532,6 +567,7 @@ declare global {
     hostApi: IHostAPI
     historyApi: IHistoryAPI
     prototypeApi: IPrototypeAPI
+    materialApi: IMaterialAPI
     topologyApi: ITopologyAPI
     browser: IBrowserAPI
     agent: IAgentAPI

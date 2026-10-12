@@ -10,6 +10,8 @@ import {
   Share2
 } from 'lucide-react'
 import { PrototypeSidebar } from './components/PrototypeSidebar'
+import { LeftActivityBar, type PrimaryMenuKey } from './components/LeftActivityBar'
+import { MaterialLibraryView } from './components/materials/MaterialLibraryView'
 import { ChatPanel, type PointedTarget, type MarkupAnnotation } from './components/chat/ChatPanel'
 import { EmbeddedBrowserViewer, type EmbeddedBrowserViewerRef } from './components/browser/EmbeddedBrowserViewer'
 import { CodeEditorPane } from './components/editor/CodeEditorPane'
@@ -25,6 +27,7 @@ import {
   type PreferredStack
 } from './stores/usePrototypeStore'
 import { useAgentModelConfigStore } from './stores/useAgentModelConfigStore'
+import { useMaterialStore } from './stores/useMaterialStore'
 import { locateCodeSnippet } from './utils/inspector'
 
 function loadWidth(key: string, fallback: number): number {
@@ -36,7 +39,9 @@ export const App: React.FC = () => {
   const prototypeStore = usePrototypeStore()
   const currentPrototype = useCurrentPrototype()
   const { refresh: refreshModelConfig } = useAgentModelConfigStore()
+  const { materials, loadMaterials } = useMaterialStore()
 
+  const [activePrimaryMenu, setActivePrimaryMenu] = useState<PrimaryMenuKey>('prototype')
   const [sidebarWidth, setSidebarWidth] = useState(() => loadWidth('sidebar', 256))
   const [chatWidth, setChatWidth] = useState(() => loadWidth('chat', 384))
   const [isResizing, setIsResizing] = useState(false)
@@ -55,8 +60,13 @@ export const App: React.FC = () => {
   const [isExportDialogOpen, setIsExportDialogOpen] = useState(false)
   const [isHistoryOpen, setIsHistoryOpen] = useState(false)
 
-  // Suspension of native browser view when modals are open
-  const browserSuspended = isSettingsOpen || isExportDialogOpen || isHistoryOpen || isResizing
+  // Suspension of native browser view when modals are open or when in Material Library menu
+  const browserSuspended =
+    activePrimaryMenu !== 'prototype' ||
+    isSettingsOpen ||
+    isExportDialogOpen ||
+    isHistoryOpen ||
+    isResizing
 
   // Selection states
   const [inspectTarget, setInspectTarget] = useState<PointedTarget | null>(null)
@@ -81,6 +91,7 @@ export const App: React.FC = () => {
         }
       }
       await prototypeStore.loadFromDisk()
+      await loadMaterials()
       await refreshModelConfig()
       await refreshVersionNo()
       await syncActivePrototypeToFile()
@@ -332,228 +343,251 @@ export const App: React.FC = () => {
     message.info('已移除原型项目')
   }
 
+  const enabledMaterialCount = materials.filter((m) => m.enabled !== false).length
+
   return (
     <div className="flex h-screen w-screen bg-slate-950 text-slate-100 overflow-hidden font-sans select-none">
-      {/* 栏目 1：左侧工作区与方案侧边栏 */}
-      <PrototypeSidebar
-        prototypes={prototypeStore.prototypes}
-        activeId={prototypeStore.activeId}
-        onSelect={(id) => {
-          prototypeStore.setActive(id)
-          clearSelectionState()
-        }}
-        onCreate={handleCreatePrototype}
-        onClone={handleClonePrototype}
-        onDelete={handleDeletePrototype}
-        onWorkspaceChanged={(ws) => {
-          setCurrentWorkspace(ws)
-          clearSelectionState()
-        }}
-        onOpenSettings={() => setIsSettingsOpen(true)}
-        collapsed={sidebarCollapsed}
-        width={sidebarWidth}
-        onWidthChange={(w) => {
-          setSidebarWidth(w)
-          localStorage.setItem('layout.width.sidebar', String(w))
-        }}
-        onResizeDragChange={setIsResizing}
-      />
-
-      {/* 栏目 2：AI 原型对话迭代区 */}
-      <ChatPanel
-        currentWorkspace={currentWorkspace}
-        onOpenSettings={() => setIsSettingsOpen(true)}
-        collapsed={chatCollapsed}
-        width={chatWidth}
-        onWidthChange={(w) => {
-          setChatWidth(w)
-          localStorage.setItem('layout.width.chat', String(w))
-        }}
-        onResizeDragChange={setIsResizing}
-        sidebarCollapsed={sidebarCollapsed}
-        onToggleSidebar={() => setSidebarCollapsed((v) => !v)}
-        inspectTarget={inspectTarget}
-        onClearInspectTarget={() => setInspectTarget(null)}
-        markupAnnotations={markupAnnotations}
-        onRemoveMarkupAnnotation={handleRemoveMarkupAnnotation}
-        onClearSelectionState={clearSelectionState}
-        onStreamingChange={setIsChatStreaming}
-        onCodeUpdated={(newCode, label, techStack, previewUrl, _entryFile, ownerId) => {
-          // run 期间用户可能已切到别的项目：代码要写回发起 run 的那个原型，
-          // 预览也只在它仍是当前项目时才跳转。
-          const targetId = ownerId || currentPrototype?.id
-          if (targetId) {
-            const prevActive = usePrototypeStore.getState().activeId
-            const stillActive = targetId === prevActive
-            applyCodeChange(targetId, newCode, label)
-            if (!stillActive) return
-            if (previewUrl && (!currentWorkspace || currentWorkspace.id === 'default-host')) {
-              embeddedBrowserRef.current?.navigateToUrl(previewUrl)
-            } else {
-              syncActivePrototypeToFile(newCode, techStack)
-            }
+      {/* 最左侧：固定宽度主菜单栏（原型 / 物料库，设置位于菜单栏右下角） */}
+      <LeftActivityBar
+        activeMenu={activePrimaryMenu}
+        onSelectMenu={(menu) => {
+          setActivePrimaryMenu(menu)
+          if (menu === 'prototype') {
+            requestAnimationFrame(() => {
+              embeddedBrowserRef.current?.syncBounds()
+            })
           }
         }}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+        materialCount={materials.length}
+        enabledMaterialCount={enabledMaterialCount}
       />
 
-      {/* 栏目 3：核心工作区（内置工程浏览器 / Monaco 代码编辑器） */}
-      <main className="flex-1 flex flex-col min-w-0 bg-slate-950 overflow-hidden relative">
-        {/* 顶部主工作区 Header */}
-        <header
-          className={`workspace-header app-drag h-14 gap-3 border-b border-slate-800 px-4 flex items-center justify-between bg-slate-900 select-none z-10 flex-shrink-0 ${
-            sidebarCollapsed && chatCollapsed ? 'traffic-light-inset' : ''
-          }`}
-        >
-          <div className="flex items-center space-x-3 min-w-0 flex-1">
-            <button
-              onClick={() => setChatCollapsed((v) => !v)}
-              className="text-slate-400 hover:text-slate-200 transition p-1 rounded hover:bg-slate-800 cursor-pointer flex-shrink-0"
-              title={chatCollapsed ? '展开 AI 原型对话' : '折叠 AI 原型对话'}
-            >
-              {chatCollapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
-            </button>
-            <span className="text-sm font-semibold text-slate-200 truncate min-w-0">
-              {currentWorkspace && currentWorkspace.id !== 'default-host'
-                ? currentWorkspace.name
-                : currentPrototype?.name || '空白原型'}
-            </span>
-            <span className="wh-id text-[11px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400 truncate min-w-0 max-w-[220px]">
-              {currentWorkspace && currentWorkspace.id !== 'default-host'
-                ? currentWorkspace.url
-                : `ID: ${currentPrototype?.id || ''}`}
-            </span>
-          </div>
+      {/* 物料库主视图 */}
+      {activePrimaryMenu === 'materials' && <MaterialLibraryView />}
 
-          <div className="flex items-center space-x-3 flex-shrink-0">
-            {/* 标签切换 */}
-            <div className="flex bg-slate-950 border border-slate-800 rounded-lg p-0.5 text-xs font-medium">
-              <button
-                title="内置浏览器 (CDP)"
-                className={`wh-tab px-3 py-1 rounded-md transition flex items-center gap-1.5 cursor-pointer ${
-                  activeTab === 'preview' ? 'bg-sky-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
-                }`}
-                onClick={() => setActiveTab('preview')}
-              >
-                <Globe size={13} />
-                <span className="wh-tab-label whitespace-nowrap">内置浏览器 (CDP)</span>
-              </button>
-              <button
-                title="源码视图"
-                className={`wh-tab px-3 py-1 rounded-md transition flex items-center gap-1.5 cursor-pointer ${
-                  activeTab === 'code' ? 'bg-sky-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
-                }`}
-                onClick={() => setActiveTab('code')}
-              >
-                <Code2 size={13} />
-                <span className="wh-tab-label whitespace-nowrap">源码视图</span>
-              </button>
-              <button
-                title="页面拓扑图"
-                className={`wh-tab px-3 py-1 rounded-md transition flex items-center gap-1.5 cursor-pointer ${
-                  activeTab === 'topology' ? 'bg-sky-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
-                }`}
-                onClick={() => setActiveTab('topology')}
-              >
-                <Share2 size={13} />
-                <span className="wh-tab-label whitespace-nowrap">拓扑图</span>
-              </button>
-            </div>
+      {/* 原型开发工作台（保持挂载，切换菜单时不丢失流式对话与 BrowserView 状态） */}
+      <div
+        className={`flex-1 min-w-0 h-full ${
+          activePrimaryMenu === 'prototype' ? 'flex' : 'hidden'
+        } overflow-hidden`}
+      >
+        {/* 栏目 1：左侧工作区与方案侧边栏 */}
+        <PrototypeSidebar
+          prototypes={prototypeStore.prototypes}
+          activeId={prototypeStore.activeId}
+          onSelect={(id) => {
+            prototypeStore.setActive(id)
+            clearSelectionState()
+          }}
+          onCreate={handleCreatePrototype}
+          onClone={handleClonePrototype}
+          onDelete={handleDeletePrototype}
+          onWorkspaceChanged={(ws) => {
+            setCurrentWorkspace(ws)
+            clearSelectionState()
+          }}
+          collapsed={sidebarCollapsed}
+          width={sidebarWidth}
+          onWidthChange={(w) => {
+            setSidebarWidth(w)
+            localStorage.setItem('layout.width.sidebar', String(w))
+          }}
+          onResizeDragChange={setIsResizing}
+        />
 
-            {/* 版本历史按钮 */}
-            <button
-              onClick={() => setIsHistoryOpen(true)}
-              className="wh-action px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-100 text-xs font-medium rounded-lg shadow transition flex items-center gap-1.5 cursor-pointer border border-slate-700"
-              title="查看历史版本与快照回滚"
-            >
-              <Clock size={13} />
-              <span className="wh-action-label whitespace-nowrap">版本{currentVersionNo ? ` v${currentVersionNo}` : ''}</span>
-            </button>
-
-            {/* 导出按钮 */}
-            <button
-              onClick={() => setIsExportDialogOpen(true)}
-              title="导出至业务工程"
-              className="wh-action px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg shadow transition flex items-center gap-1.5 cursor-pointer"
-            >
-              <FolderOutput size={13} />
-              <span className="wh-action-label whitespace-nowrap">导出至业务工程</span>
-            </button>
-          </div>
-        </header>
-
-        {/* 视口展示区 */}
-        <div className="flex-1 min-h-0 relative overflow-hidden">
-          <EmbeddedBrowserViewer
-            ref={embeddedBrowserRef}
-            activePrototypeId={prototypeStore.activeId}
-            currentCode={currentPrototype?.vueCode || ''}
-            currentWorkspace={currentWorkspace}
-            isVisible={activeTab === 'preview'}
-            suspended={browserSuspended}
-            markupCount={markupAnnotations.length}
-            onInspectSelected={handleInspectElementSelected}
-            onMarkupSaved={handleMarkupSaved}
-            onSelectionCleared={clearSelectionState}
-            onCodeUpdated={(newCode) => {
-              if (currentPrototype) {
-                applyCodeChange(currentPrototype.id, newCode, '自闭环自测自愈')
-                syncActivePrototypeToFile()
+        {/* 栏目 2：AI 原型对话迭代区 */}
+        <ChatPanel
+          currentWorkspace={currentWorkspace}
+          onOpenSettings={() => setIsSettingsOpen(true)}
+          collapsed={chatCollapsed}
+          width={chatWidth}
+          onWidthChange={(w) => {
+            setChatWidth(w)
+            localStorage.setItem('layout.width.chat', String(w))
+          }}
+          onResizeDragChange={setIsResizing}
+          sidebarCollapsed={sidebarCollapsed}
+          onToggleSidebar={() => setSidebarCollapsed((v) => !v)}
+          inspectTarget={inspectTarget}
+          onClearInspectTarget={() => setInspectTarget(null)}
+          markupAnnotations={markupAnnotations}
+          onRemoveMarkupAnnotation={handleRemoveMarkupAnnotation}
+          onClearSelectionState={clearSelectionState}
+          onStreamingChange={setIsChatStreaming}
+          onCodeUpdated={(newCode, label, techStack, previewUrl, _entryFile, ownerId) => {
+            // run 期间用户可能已切到别的项目：代码要写回发起 run 的那个原型，
+            // 预览也只在它仍是当前项目时才跳转。
+            const targetId = ownerId || currentPrototype?.id
+            if (targetId) {
+              const prevActive = usePrototypeStore.getState().activeId
+              const stillActive = targetId === prevActive
+              applyCodeChange(targetId, newCode, label)
+              if (!stillActive) return
+              if (previewUrl && (!currentWorkspace || currentWorkspace.id === 'default-host')) {
+                embeddedBrowserRef.current?.navigateToUrl(previewUrl)
+              } else {
+                syncActivePrototypeToFile(newCode, techStack)
               }
-            }}
-            onTriggerChatFix={(_prompt) => {
-              message.info('已将修复诉求推送到输入区')
-            }}
-          />
+            }
+          }}
+        />
 
-          {activeTab === 'code' && (
-            <div className="absolute inset-0 z-20">
-              <CodeEditorPane
-                code={selectedFileContent !== null ? selectedFileContent : currentPrototype?.vueCode || ''}
-                techStack={currentPrototype?.techStack}
-                entryFile={currentPrototype?.entryFile}
-                files={currentPrototype?.files}
-                selectedFile={selectedFile || currentPrototype?.entryFile}
-                onSelectFile={async (filePath) => {
-                  setSelectedFile(filePath)
-                  if (!currentPrototype || filePath === currentPrototype.entryFile) {
-                    setSelectedFileContent(null)
-                    return
-                  }
-                  const res = await window.prototypeApi?.readFile({
-                    id: currentPrototype.id,
-                    filePath
-                  })
-                  if (res?.ok && typeof res.content === 'string') {
-                    setSelectedFileContent(res.content)
-                  }
-                }}
-                onChange={(newCode) => {
-                  if (currentPrototype) {
-                    const targetFile = selectedFile || currentPrototype.entryFile
-                    if (selectedFileContent !== null && targetFile !== currentPrototype.entryFile) {
-                      setSelectedFileContent(newCode)
-                      prototypeStore.updateCode(currentPrototype.id, newCode, targetFile)
-                    } else {
-                      prototypeStore.updateCode(currentPrototype.id, newCode)
-                      syncActivePrototypeToFile(newCode, currentPrototype.techStack)
+        {/* 栏目 3：核心工作区（内置工程浏览器 / Monaco 代码编辑器） */}
+        <main className="flex-1 flex flex-col min-w-0 bg-slate-950 overflow-hidden relative">
+          {/* 顶部主工作区 Header */}
+          <header className="workspace-header app-drag h-14 gap-3 border-b border-slate-800 px-4 flex items-center justify-between bg-slate-900 select-none z-10 flex-shrink-0">
+            <div className="flex items-center space-x-3 min-w-0 flex-1">
+              <button
+                onClick={() => setChatCollapsed((v) => !v)}
+                className="text-slate-400 hover:text-slate-200 transition p-1 rounded hover:bg-slate-800 cursor-pointer flex-shrink-0"
+                title={chatCollapsed ? '展开 AI 原型对话' : '折叠 AI 原型对话'}
+              >
+                {chatCollapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
+              </button>
+              <span className="text-sm font-semibold text-slate-200 truncate min-w-0">
+                {currentWorkspace && currentWorkspace.id !== 'default-host'
+                  ? currentWorkspace.name
+                  : currentPrototype?.name || '空白原型'}
+              </span>
+              <span className="wh-id text-[11px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400 truncate min-w-0 max-w-[220px]">
+                {currentWorkspace && currentWorkspace.id !== 'default-host'
+                  ? currentWorkspace.url
+                  : `ID: ${currentPrototype?.id || ''}`}
+              </span>
+            </div>
+
+            <div className="flex items-center space-x-3 flex-shrink-0">
+              {/* 标签切换 */}
+              <div className="flex bg-slate-950 border border-slate-800 rounded-lg p-0.5 text-xs font-medium">
+                <button
+                  title="内置浏览器 (CDP)"
+                  className={`wh-tab px-3 py-1 rounded-md transition flex items-center gap-1.5 cursor-pointer ${
+                    activeTab === 'preview' ? 'bg-sky-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                  onClick={() => setActiveTab('preview')}
+                >
+                  <Globe size={13} />
+                  <span className="wh-tab-label whitespace-nowrap">内置浏览器 (CDP)</span>
+                </button>
+                <button
+                  title="源码视图"
+                  className={`wh-tab px-3 py-1 rounded-md transition flex items-center gap-1.5 cursor-pointer ${
+                    activeTab === 'code' ? 'bg-sky-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                  onClick={() => setActiveTab('code')}
+                >
+                  <Code2 size={13} />
+                  <span className="wh-tab-label whitespace-nowrap">源码视图</span>
+                </button>
+                <button
+                  title="页面拓扑图"
+                  className={`wh-tab px-3 py-1 rounded-md transition flex items-center gap-1.5 cursor-pointer ${
+                    activeTab === 'topology' ? 'bg-sky-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                  onClick={() => setActiveTab('topology')}
+                >
+                  <Share2 size={13} />
+                  <span className="wh-tab-label whitespace-nowrap">拓扑图</span>
+                </button>
+              </div>
+
+              {/* 版本历史按钮 */}
+              <button
+                onClick={() => setIsHistoryOpen(true)}
+                className="wh-action px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-100 text-xs font-medium rounded-lg shadow transition flex items-center gap-1.5 cursor-pointer border border-slate-700"
+                title="查看历史版本与快照回滚"
+              >
+                <Clock size={13} />
+                <span className="wh-action-label whitespace-nowrap">版本{currentVersionNo ? ` v${currentVersionNo}` : ''}</span>
+              </button>
+
+              {/* 导出按钮 */}
+              <button
+                onClick={() => setIsExportDialogOpen(true)}
+                title="导出至业务工程"
+                className="wh-action px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg shadow transition flex items-center gap-1.5 cursor-pointer"
+              >
+                <FolderOutput size={13} />
+                <span className="wh-action-label whitespace-nowrap">导出至业务工程</span>
+              </button>
+            </div>
+          </header>
+
+          {/* 视口展示区 */}
+          <div className="flex-1 min-h-0 relative overflow-hidden">
+            <EmbeddedBrowserViewer
+              ref={embeddedBrowserRef}
+              activePrototypeId={prototypeStore.activeId}
+              currentCode={currentPrototype?.vueCode || ''}
+              currentWorkspace={currentWorkspace}
+              isVisible={activeTab === 'preview' && activePrimaryMenu === 'prototype'}
+              suspended={browserSuspended}
+              markupCount={markupAnnotations.length}
+              onInspectSelected={handleInspectElementSelected}
+              onMarkupSaved={handleMarkupSaved}
+              onSelectionCleared={clearSelectionState}
+              onCodeUpdated={(newCode) => {
+                if (currentPrototype) {
+                  applyCodeChange(currentPrototype.id, newCode, '自闭环自测自愈')
+                  syncActivePrototypeToFile()
+                }
+              }}
+              onTriggerChatFix={(_prompt) => {
+                message.info('已将修复诉求推送到输入区')
+              }}
+            />
+
+            {activeTab === 'code' && (
+              <div className="absolute inset-0 z-20">
+                <CodeEditorPane
+                  code={selectedFileContent !== null ? selectedFileContent : currentPrototype?.vueCode || ''}
+                  techStack={currentPrototype?.techStack}
+                  entryFile={currentPrototype?.entryFile}
+                  files={currentPrototype?.files}
+                  selectedFile={selectedFile || currentPrototype?.entryFile}
+                  onSelectFile={async (filePath) => {
+                    setSelectedFile(filePath)
+                    if (!currentPrototype || filePath === currentPrototype.entryFile) {
+                      setSelectedFileContent(null)
+                      return
                     }
-                  }
-                }}
-              />
-            </div>
-          )}
+                    const res = await window.prototypeApi?.readFile({
+                      id: currentPrototype.id,
+                      filePath
+                    })
+                    if (res?.ok && typeof res.content === 'string') {
+                      setSelectedFileContent(res.content)
+                    }
+                  }}
+                  onChange={(newCode) => {
+                    if (currentPrototype) {
+                      const targetFile = selectedFile || currentPrototype.entryFile
+                      if (selectedFileContent !== null && targetFile !== currentPrototype.entryFile) {
+                        setSelectedFileContent(newCode)
+                        prototypeStore.updateCode(currentPrototype.id, newCode, targetFile)
+                      } else {
+                        prototypeStore.updateCode(currentPrototype.id, newCode)
+                        syncActivePrototypeToFile(newCode, currentPrototype.techStack)
+                      }
+                    }
+                  }}
+                />
+              </div>
+            )}
 
-          {activeTab === 'topology' && (
-            <div className="absolute inset-0 z-20">
-              <TopologyPanel
-                prototype={currentPrototype}
-                chatStreaming={isChatStreaming}
-                onOpenSource={handleOpenTopologySource}
-              />
-            </div>
-          )}
-        </div>
-      </main>
+            {activeTab === 'topology' && (
+              <div className="absolute inset-0 z-20">
+                <TopologyPanel
+                  prototype={currentPrototype}
+                  chatStreaming={isChatStreaming}
+                  onOpenSource={handleOpenTopologySource}
+                />
+              </div>
+            )}
+          </div>
+        </main>
+      </div>
 
       {/* 弹窗系统 */}
       <SettingsModal open={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />

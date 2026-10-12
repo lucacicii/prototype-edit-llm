@@ -9,7 +9,6 @@ import {
   FolderOpen,
   Link as LinkIcon,
   ChevronDown,
-  Settings,
   Star,
   FileText,
   FolderPlus,
@@ -36,7 +35,6 @@ interface PrototypeSidebarProps {
   onClone: (item: PrototypeItem) => void
   onDelete: (id: string) => void
   onWorkspaceChanged: (ws: any) => void
-  onOpenSettings: () => void
   collapsed: boolean
   width: number
   onWidthChange: (w: number) => void
@@ -96,7 +94,6 @@ export const PrototypeSidebar: React.FC<PrototypeSidebarProps> = ({
   onClone,
   onDelete,
   onWorkspaceChanged,
-  onOpenSettings,
   collapsed,
   width,
   onWidthChange,
@@ -349,7 +346,7 @@ export const PrototypeSidebar: React.FC<PrototypeSidebarProps> = ({
       />
       {/* 1. 工作区切换与项目导入顶栏 */}
       <div className="p-2.5 border-b border-slate-800 bg-slate-900/60 flex flex-col gap-2 shrink-0">
-        <div className="app-drag traffic-light-inset flex items-center justify-between">
+        <div className="app-drag flex items-center justify-between">
           <span className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
             <Folder size={14} className="text-sky-400" />
             <span>工作空间</span>
@@ -632,18 +629,6 @@ export const PrototypeSidebar: React.FC<PrototypeSidebarProps> = ({
           </div>
         </div>
       )}
-
-      {/* 4. 底部：模型与 Agent 设置 */}
-      <div className="mt-auto p-2.5 border-t border-slate-800 bg-slate-900/60 shrink-0">
-        <button
-          onClick={onOpenSettings}
-          className="w-full px-2.5 py-1.5 rounded text-xs text-slate-300 hover:text-white hover:bg-slate-800 transition flex items-center gap-2 cursor-pointer"
-          title="模型与 Agent 设置"
-        >
-          <Settings size={14} />
-          <span>模型与 Agent 设置</span>
-        </button>
-      </div>
 
       {/* 共享工作区地址表与 .ps/ 产物管理弹窗 */}
       <SharedWorkspaceModal

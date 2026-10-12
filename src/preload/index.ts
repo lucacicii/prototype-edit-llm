@@ -249,6 +249,31 @@ const browserApi = {
   }
 }
 
+const materialApi = {
+  list: () => ipcRenderer.invoke('material:list'),
+  uploadDialog: (options?: { category?: string; description?: string }) =>
+    ipcRenderer.invoke('material:upload-dialog', options),
+  uploadFiles: (params: {
+    files: Array<{
+      name: string
+      dataBase64: string
+      mimeType?: string
+      description?: string
+      category?: string
+    }>
+  }) => ipcRenderer.invoke('material:upload-files', params),
+  update: (params: {
+    id: string
+    name?: string
+    description?: string
+    category?: string
+    tags?: string[]
+    enabled?: boolean
+  }) => ipcRenderer.invoke('material:update', params),
+  delete: (id: string) => ipcRenderer.invoke('material:delete', id),
+  readContent: (idOrFileName: string) => ipcRenderer.invoke('material:read-content', idOrFileName)
+}
+
 if (process.contextIsolated) {
   try {
     contextBridge.exposeInMainWorld('electron', electronAPI)
@@ -257,6 +282,7 @@ if (process.contextIsolated) {
     contextBridge.exposeInMainWorld('hostApi', hostApi)
     contextBridge.exposeInMainWorld('historyApi', historyApi)
     contextBridge.exposeInMainWorld('prototypeApi', prototypeApi)
+    contextBridge.exposeInMainWorld('materialApi', materialApi)
     contextBridge.exposeInMainWorld('topologyApi', topologyApi)
     contextBridge.exposeInMainWorld('browser', browserApi)
     contextBridge.exposeInMainWorld('agent', agentApi)
@@ -276,6 +302,8 @@ if (process.contextIsolated) {
   window.historyApi = historyApi
   // @ts-ignore
   window.prototypeApi = prototypeApi
+  // @ts-ignore
+  window.materialApi = materialApi
   // @ts-ignore
   window.topologyApi = topologyApi
   // @ts-ignore

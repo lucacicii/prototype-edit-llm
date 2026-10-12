@@ -15,7 +15,7 @@ import { promises as fs, existsSync } from 'fs'
 import * as path from 'path'
 import { BrowserViewManager } from './browser-view-manager'
 import { HostServerManager } from './host-server-manager'
-import { activePrototypeFile, prototypeStackMarker } from './app-paths'
+import { activePrototypeFile, materialsFilesDir, prototypeStackMarker } from './app-paths'
 import { projectDirFor, syncProjectEntryAndStack, entryFileForStack, ENTRY_CANDIDATES } from './project-store'
 import { ProjectWorkspaceManager } from './project-workspace-manager'
 import { type TechStack } from './agent/tech-stack'
@@ -26,13 +26,26 @@ const MIME_TYPES: Record<string, string> = {
   '.js': 'application/javascript; charset=utf-8',
   '.mjs': 'application/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.txt': 'text/plain; charset=utf-8',
+  '.md': 'text/markdown; charset=utf-8',
+  '.csv': 'text/csv; charset=utf-8',
+  '.xml': 'application/xml; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
   '.gif': 'image/gif',
   '.webp': 'image/webp',
-  '.ico': 'image/x-icon'
+  '.avif': 'image/avif',
+  '.ico': 'image/x-icon',
+  '.pdf': 'application/pdf',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav'
 }
 
 export class ProjectRunner {
@@ -56,11 +69,12 @@ export class ProjectRunner {
           const parsedUrl = new URL(req.url || '/', `http://127.0.0.1:${this.staticPort}`)
           const pathname = decodeURIComponent(parsedUrl.pathname)
 
-          // Route: /projects/<projectId>/<relPath> OR /workspaces/<workspaceId>/<relPath>
-          const projectMatch = /^\/projects\/([^/]+)(?:\/(.*))?$/.exec(pathname)
-          const wsMatch = !projectMatch ? /^\/workspaces\/([^/]+)(?:\/(.*))?$/.exec(pathname) : null
+          // Route: /materials/<relPath> OR /projects/<projectId>/<relPath> OR /workspaces/<workspaceId>/<relPath>
+          const materialMatch = /^\/materials\/(.+)$/.exec(pathname)
+          const projectMatch = !materialMatch ? /^\/projects\/([^/]+)(?:\/(.*))?$/.exec(pathname) : null
+          const wsMatch = !materialMatch && !projectMatch ? /^\/workspaces\/([^/]+)(?:\/(.*))?$/.exec(pathname) : null
 
-          if (!projectMatch && !wsMatch) {
+          if (!materialMatch && !projectMatch && !wsMatch) {
             res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
             res.end('Not Found')
             return
@@ -69,7 +83,10 @@ export class ProjectRunner {
           let projectRoot: string | undefined
           let relPath: string
 
-          if (projectMatch) {
+          if (materialMatch) {
+            relPath = materialMatch[1]
+            projectRoot = materialsFilesDir()
+          } else if (projectMatch) {
             const projectId = projectMatch[1]
             relPath = projectMatch[2] || 'index.html'
             projectRoot = projectDirFor(projectId)
@@ -144,6 +161,10 @@ export class ProjectRunner {
 
   public getStaticWorkspaceUrl(workspaceId: string, entryFile = 'index.html'): string {
     return `http://127.0.0.1:${this.staticPort}/workspaces/${encodeURIComponent(workspaceId)}/${entryFile}`
+  }
+
+  public getStaticMaterialUrl(fileName: string): string {
+    return `http://127.0.0.1:${this.staticPort}/materials/${encodeURIComponent(fileName)}`
   }
 
   public getStaticPort(): number {

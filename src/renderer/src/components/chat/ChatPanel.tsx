@@ -47,6 +47,7 @@ import {
   useGroupedModels,
   useSelectedModel
 } from '../../stores/useAgentModelConfigStore'
+import { useMaterialStore } from '../../stores/useMaterialStore'
 import { useAgentChatStream } from './useAgentChatStream'
 import { ChatMessageItem } from './ChatMessageItem'
 import { ChatQuestionBubble } from './ChatQuestionBubble'
@@ -156,7 +157,7 @@ function formatDuration(ms: number): string {
 /** 取光标处的 `#路径` token（含起始偏移），没有则返回 null。 */
 function hashTokenAtCursor(text: string, cursor: number): { start: number; query: string } | null {
   const before = text.slice(0, cursor)
-  const match = /#([a-zA-Z0-9_\-./]*)$/.exec(before)
+  const match = /#([a-zA-Z0-9_\-./\u4e00-\u9fa5]*)$/.exec(before)
   if (!match) return null
   return { start: match.index, query: match[1] || '' }
 }
@@ -218,6 +219,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
   const groupedModels = useGroupedModels()
   const selectedModel = useSelectedModel()
+  const materials = useMaterialStore((s) => s.materials)
 
   const [promptInput, setPromptInput] = useState('')
   const [cursorPos, setCursorPos] = useState(0)
@@ -383,11 +385,13 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const fileSuggestions = useMemo(() => {
     if (!hashToken) return []
     const q = hashToken.query.toLowerCase()
-    const files = externalWs ? [] : currentPrototype?.files || []
-    return files
+    const projFiles = externalWs ? [] : currentPrototype?.files || []
+    const matFiles = materials.map((m) => `materials/${m.fileName}`)
+    const combined = Array.from(new Set([...projFiles, ...matFiles]))
+    return combined
       .filter((f) => !q || f.toLowerCase().includes(q))
       .slice(0, 12)
-  }, [hashToken, currentPrototype?.files, externalWs])
+  }, [hashToken, currentPrototype?.files, externalWs, materials])
 
   const fileSuggestOpen =
     Boolean(hashToken) && !fileSuggestDismissed && fileSuggestions.length > 0 && !stream.isStreaming
@@ -474,16 +478,34 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     return lines.join('\n')
   }
 
-  /** 读取 #引用 的项目文件，编译成 [Referenced File] 上下文块。 */
+  /** 读取 #引用 的项目文件或物料库文件，编译成 [Referenced File] 上下文块。 */
   const compileReferencedFiles = async (rawText: string): Promise<string[]> => {
-    if (!currentPrototype || externalWs || !window.prototypeApi?.readFile) return []
     const paths = new Set<string>()
-    for (const m of rawText.matchAll(/(?:^|\s)#([a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+)/g)) {
+    for (const m of rawText.matchAll(/(?:^|\s)#([a-zA-Z0-9_\-./\u4e00-\u9fa5]+\.[a-zA-Z0-9]+)/g)) {
       if (m[1]) paths.add(m[1])
     }
     const blocks: string[] = []
     for (const filePath of paths) {
       try {
+        if (filePath.startsWith('materials/') && window.materialApi?.readContent) {
+          const matRes = await window.materialApi.readContent(filePath)
+          if (matRes?.ok && matRes.item) {
+            const item = matRes.item
+            if (matRes.isText && typeof matRes.content === 'string') {
+              const body = matRes.content.slice(0, MAX_TEXT_BYTES).trim()
+              const fence = body.includes('```') ? '````' : '```'
+              blocks.push(
+                `[Referenced Material: ${filePath}${item.description ? ` (${item.description})` : ''}${matRes.truncated ? ' (truncated)' : ''}]\n${fence}\n${body}\n${fence}\n[End Referenced Material]`
+              )
+            } else {
+              blocks.push(
+                `[Referenced Material: ${filePath}] 名称: ${item.name} | 类型: ${item.category} | 访问 URL: ${item.url || ''}${item.description ? ` | 说明: ${item.description}` : ''} | 本地路径: ${item.filePath || filePath}`
+              )
+            }
+            continue
+          }
+        }
+        if (!currentPrototype || externalWs || !window.prototypeApi?.readFile) continue
         const res = await window.prototypeApi.readFile({
           id: currentPrototype.id,
           filePath
@@ -808,9 +830,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       />
       {/* 顶部 Header */}
       <header
-        className={`app-drag h-14 border-b border-slate-800 px-4 flex items-center justify-between bg-slate-900 flex-shrink-0 ${
-          sidebarCollapsed ? 'traffic-light-inset' : ''
-        }`}
+        className="app-drag h-14 border-b border-slate-800 px-4 flex items-center justify-between bg-slate-900 flex-shrink-0"
       >
         <div className="flex items-center gap-2 min-w-0">
           <button

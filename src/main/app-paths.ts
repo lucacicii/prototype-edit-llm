@@ -108,6 +108,38 @@ export function projectsRootDir(): string {
 }
 
 /**
+ * Root directory where prototype material library lives:
+ * `~/.prototype-studio/materials/`
+ */
+export function materialsRootDir(): string {
+  const dir = join(workspaceDir(), 'materials')
+  if (!existsSync(dir)) {
+    try {
+      mkdirSync(dir, { recursive: true })
+    } catch {
+      // ignore
+    }
+  }
+  return dir
+}
+
+/**
+ * Directory where uploaded material files are stored:
+ * `~/.prototype-studio/materials/files/`
+ */
+export function materialsFilesDir(): string {
+  const dir = join(materialsRootDir(), 'files')
+  if (!existsSync(dir)) {
+    try {
+      mkdirSync(dir, { recursive: true })
+    } catch {
+      // ignore
+    }
+  }
+  return dir
+}
+
+/**
  * The model library: which gateways this app talks to and which models it
  * knows. No secrets — those live in `providerSecretsPath()`.
  */

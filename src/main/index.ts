@@ -12,6 +12,7 @@ import { BrowserViewManager } from './browser-view-manager'
 import { HostServerManager } from './host-server-manager'
 import { ProjectRunner } from './project-runner'
 import { setupPrototypeStoreIpc } from './project-store'
+import { setupMaterialStoreIpc } from './material-store'
 import { workspaceDir } from './app-paths'
 import { applyPackagedRuntimeEnv } from './runtime-env'
 import { syncThunderModelConfig } from './agent/thunder-model-config'
@@ -152,6 +153,7 @@ app.whenReady().then(async () => {
   )
 
   setupPrototypeStoreIpc()
+  setupMaterialStoreIpc()
   setupThunderIpc()
   setupProjectIpc()
   setupAgentIpc({ workspaceDir: workspaceDir() })
