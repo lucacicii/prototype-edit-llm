@@ -5,7 +5,7 @@
  * completely decoupled from the `prototype-edit-llm` source repository.
  */
 
-import { ipcMain } from 'electron'
+import * as electron from 'electron'
 import { promises as fs, existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import * as path from 'path'
 import { projectsRootDir } from './app-paths'
@@ -456,12 +456,14 @@ export function setActiveProjectId(id: string): void {
 }
 
 export function setupPrototypeStoreIpc(): void {
+  const ipcMain = (electron as any).ipcMain
+  if (!ipcMain) return
   ipcMain.handle('prototype:list', async () => {
     const res = await listAllProjects()
     return { ok: true, ...res }
   })
 
-  ipcMain.handle('prototype:set-active', async (_, id: string) => {
+  ipcMain.handle('prototype:set-active', async (_: any, id: string) => {
     setActiveProjectId(id)
     return { ok: true }
   })
@@ -469,7 +471,7 @@ export function setupPrototypeStoreIpc(): void {
   ipcMain.handle(
     'prototype:create',
     async (
-      _,
+      _: any,
       params: {
         name: string
         description?: string
@@ -483,7 +485,7 @@ export function setupPrototypeStoreIpc(): void {
     }
   )
 
-  ipcMain.handle('prototype:clone', async (_, sourceId: string) => {
+  ipcMain.handle('prototype:clone', async (_: any, sourceId: string) => {
     const srcDir = projectDirFor(sourceId)
     const src = await loadProjectItem(srcDir)
     if (!src) return { ok: false, error: '源项目不存在' }
@@ -512,7 +514,7 @@ export function setupPrototypeStoreIpc(): void {
     return { ok: true, item }
   })
 
-  ipcMain.handle('prototype:delete', async (_, id: string) => {
+  ipcMain.handle('prototype:delete', async (_: any, id: string) => {
     const dir = projectDirFor(id)
     await fs.rm(dir, { recursive: true, force: true })
     const res = await listAllProjects()
@@ -523,7 +525,7 @@ export function setupPrototypeStoreIpc(): void {
   ipcMain.handle(
     'prototype:update-code',
     async (
-      _,
+      _: any,
       params: { id: string; code: string; filePath?: string; techStack?: TechStack }
     ) => {
       const dir = projectDirFor(params.id)
@@ -567,7 +569,7 @@ export function setupPrototypeStoreIpc(): void {
 
   ipcMain.handle(
     'prototype:save-chat',
-    async (_, params: { id: string; messages: PrototypeChatMessage[]; resetSession?: boolean }) => {
+    async (_: any, params: { id: string; messages: PrototypeChatMessage[]; resetSession?: boolean }) => {
       const dir = projectDirFor(params.id)
       const metaDir = path.join(dir, META_DIR)
       if (!existsSync(metaDir)) return { ok: false, error: '项目不存在' }
@@ -594,7 +596,7 @@ export function setupPrototypeStoreIpc(): void {
 
   ipcMain.handle(
     'prototype:read-file',
-    async (_, params: { id: string; filePath: string }) => {
+    async (_: any, params: { id: string; filePath: string }) => {
       const dir = projectDirFor(params.id)
       const full = path.resolve(dir, params.filePath)
       if (!full.startsWith(path.resolve(dir))) {
@@ -611,7 +613,7 @@ export function setupPrototypeStoreIpc(): void {
 
   ipcMain.handle(
     'prototype:migrate-localstorage',
-    async (_, items: Array<any>) => {
+    async (_: any, items: Array<any>) => {
       if (!Array.isArray(items) || items.length === 0) return { ok: true, migrated: 0 }
       let count = 0
       for (const raw of items) {

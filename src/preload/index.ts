@@ -137,13 +137,37 @@ const agentApi = {
 }
 
 const projectApi = {
-  // 本地业务工程与工作区交互
+  // 本地业务工程与共享工作区交互
   selectDirectory: () => ipcRenderer.invoke('project:select-directory'),
   importDirectory: (portOrUrl?: string) => ipcRenderer.invoke('project:import-directory', portOrUrl),
   importUrl: (params: { url: string; name?: string }) => ipcRenderer.invoke('project:import-url', params),
   listWorkspaces: () => ipcRenderer.invoke('project:list-workspaces'),
   getCurrentWorkspace: () => ipcRenderer.invoke('project:get-current-workspace'),
   switchWorkspace: (id: string) => ipcRenderer.invoke('project:switch-workspace', id),
+  addRepo: (params: {
+    workspaceId: string
+    dirPath?: string
+    dirPaths?: string[]
+    role?: 'primary' | 'reference'
+  }) => ipcRenderer.invoke('project:add-repo', params),
+  removeRepo: (params: { workspaceId: string; repoPath: string }) =>
+    ipcRenderer.invoke('project:remove-repo', params),
+  setPrimaryRepo: (params: { workspaceId: string; repoPath: string }) =>
+    ipcRenderer.invoke('project:set-primary-repo', params),
+  updateWorkspaceMeta: (params: { workspaceId: string; name?: string; url?: string }) =>
+    ipcRenderer.invoke('project:update-workspace-meta', params),
+  removeWorkspace: (workspaceId: string) =>
+    ipcRenderer.invoke('project:remove-workspace', workspaceId),
+  listSharedFiles: (workspaceId: string) =>
+    ipcRenderer.invoke('project:list-shared-files', workspaceId),
+  readSharedFile: (params: { workspaceId: string; relPath: string }) =>
+    ipcRenderer.invoke('project:read-shared-file', params),
+  writeSharedFile: (params: { workspaceId: string; relPath: string; content: string }) =>
+    ipcRenderer.invoke('project:write-shared-file', params),
+  deleteSharedFile: (params: { workspaceId: string; relPath: string }) =>
+    ipcRenderer.invoke('project:delete-shared-file', params),
+  refreshSharedWorkspace: (workspaceId: string) =>
+    ipcRenderer.invoke('project:refresh-shared-workspace', workspaceId),
   findSourceFile: (target: string, prototypeId?: string) =>
     ipcRenderer.invoke('project:find-source-file', target, prototypeId),
   saveCode: (params: { filePath: string; content: string }) =>

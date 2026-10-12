@@ -12,13 +12,14 @@
  * a dev-only assumption.
  */
 
-import { app } from 'electron'
+import * as electron from 'electron'
 import { copyFileSync, existsSync, mkdirSync } from 'fs'
 import { homedir } from 'os'
 import { join, resolve } from 'path'
 
 export function isPackaged(): boolean {
-  return typeof app !== 'undefined' && !!app && app.isPackaged
+  const app = (electron as any)?.app
+  return typeof app !== 'undefined' && !!app && Boolean(app.isPackaged)
 }
 
 /**

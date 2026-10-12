@@ -983,12 +983,25 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
 
     // Resolve the target independent project workspace directory
     const wsManager = ProjectWorkspaceManager.getInstance()
+    await wsManager.init()
     const currentWs = wsManager.getCurrentWorkspace()
-    const isExternalWorkspace =
-      currentWs && currentWs.id !== 'default-host' && currentWs.rootPath
-    const projectDir = isExternalWorkspace
-      ? currentWs.rootPath!
+    const isExternalWorkspace = Boolean(currentWs && currentWs.id !== 'default-host')
+    if (isExternalWorkspace && currentWs) {
+      await wsManager.refreshSharedWorkspace(currentWs.id)
+    }
+    const projectDir = isExternalWorkspace && currentWs
+      ? currentWs.sharedDir || currentWs.rootPath || projectDirFor(params.prototypeId || 'blank-prototype')
       : projectDirFor(params.prototypeId || 'blank-prototype')
+    const extraWorkspaceDirs = isExternalWorkspace && currentWs
+      ? Array.from(
+          new Set(
+            [
+              ...(currentWs.repos?.map((r) => r.path) ?? []),
+              ...(currentWs.rootPath ? [currentWs.rootPath] : [])
+            ].filter(Boolean)
+          )
+        )
+      : []
 
     await fs.mkdir(projectDir, { recursive: true })
     const projectItem = !isExternalWorkspace ? await loadProjectItem(projectDir) : null
@@ -1092,6 +1105,7 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
         modelDescriptor: resolved.model as unknown as Record<string, any>,
         thinkingLevel: resolved.config.thinkingLevel,
         workspaceDir: projectDir,
+        extraWorkspaceDirs: extraWorkspaceDirs.length ? extraWorkspaceDirs : undefined,
         headless: false,
         attachments: params.attachments?.map((a) => ({
           data: a.data,

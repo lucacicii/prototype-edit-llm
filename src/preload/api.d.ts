@@ -5,12 +5,24 @@ import type { PointedTarget } from '../main/agent/prototype-agent'
 // 版本元数据的权威定义在主进程那侧（同 PointedTarget 的口径，不在这儿抄一份）
 import type { VersionKind, VersionMeta } from '../main/ipc/history-bridge'
 
+export interface WorkspaceRepo {
+  path: string
+  label: string
+  role: 'primary' | 'reference'
+  framework: 'vue3' | 'vue2' | 'react' | 'native-dom' | 'unknown'
+  uiLibrary?: string
+  devTool?: 'vite' | 'webpack' | 'other'
+  dependencies?: Record<string, string>
+}
+
 export interface ProjectWorkspace {
   id: string
   name: string
-  type: 'local-directory' | 'remote-url'
+  type: 'local-directory' | 'remote-url' | 'shared'
   url: string
   rootPath?: string
+  repos?: WorkspaceRepo[]
+  sharedDir?: string
   framework: 'vue3' | 'vue2' | 'react' | 'native-dom' | 'unknown'
   uiLibrary?: string
   devTool?: 'vite' | 'webpack' | 'other'
@@ -178,6 +190,56 @@ export interface IProjectAPI {
   listWorkspaces: () => Promise<ProjectWorkspace[]>
   getCurrentWorkspace: () => Promise<ProjectWorkspace | null>
   switchWorkspace: (id: string) => Promise<ProjectWorkspace | null>
+  addRepo: (params: {
+    workspaceId: string
+    dirPath?: string
+    dirPaths?: string[]
+    role?: 'primary' | 'reference'
+  }) => Promise<ProjectWorkspace | null>
+  removeRepo: (params: {
+    workspaceId: string
+    repoPath: string
+  }) => Promise<{ ok: boolean; workspace?: ProjectWorkspace | null; error?: string }>
+  setPrimaryRepo: (params: {
+    workspaceId: string
+    repoPath: string
+  }) => Promise<{ ok: boolean; workspace?: ProjectWorkspace | null }>
+  updateWorkspaceMeta: (params: {
+    workspaceId: string
+    name?: string
+    url?: string
+  }) => Promise<{ ok: boolean; workspace?: ProjectWorkspace | null }>
+  removeWorkspace: (workspaceId: string) => Promise<{
+    ok: boolean
+    workspaces?: ProjectWorkspace[]
+    currentWorkspace?: ProjectWorkspace | null
+    error?: string
+  }>
+  listSharedFiles: (workspaceId: string) => Promise<{
+    ok: boolean
+    files: string[]
+    sharedDir?: string
+    agentsDisabled?: boolean
+    error?: string
+  }>
+  readSharedFile: (params: {
+    workspaceId: string
+    relPath: string
+  }) => Promise<{ ok: boolean; content?: string; agentsDisabled?: boolean; error?: string }>
+  writeSharedFile: (params: {
+    workspaceId: string
+    relPath: string
+    content: string
+  }) => Promise<{ ok: boolean; files?: string[]; agentsDisabled?: boolean; error?: string }>
+  deleteSharedFile: (params: {
+    workspaceId: string
+    relPath: string
+  }) => Promise<{ ok: boolean; files?: string[]; error?: string }>
+  refreshSharedWorkspace: (workspaceId: string) => Promise<{
+    ok: boolean
+    workspace?: ProjectWorkspace | null
+    agentsDisabled?: boolean
+  }>
   findSourceFile: (target: string, prototypeId?: string) => Promise<{ filePath: string; content: string } | null>
   saveCode: (params: { filePath: string; content: string }) => Promise<{ success: boolean; savedPath?: string; error?: string }>
   checkFileExists: (filePath: string) => Promise<{ exists: boolean }>
