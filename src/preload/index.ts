@@ -137,13 +137,13 @@ const agentApi = {
 }
 
 const topologyApi = {
-  // 原型页面拓扑图（生成 → 截各页图 → 导出成一张图片）
+  // 原型页面拓扑图（生成 → 截各页图 → 导出成一份自包含 HTML）
   generate: (params: { prototypeId: string }) => ipcRenderer.invoke('topology:generate', params),
   cancel: () => ipcRenderer.invoke('topology:cancel'),
   // 节点缩略图（nodeId → dataURL）。单独取，避免把整页长图塞进 prototype:list。
   shots: (params: { prototypeId: string }) => ipcRenderer.invoke('topology:shots', params),
-  exportImage: (params: { prototypeId: string }) =>
-    ipcRenderer.invoke('topology:export-image', params)
+  exportHtml: (params: { prototypeId: string }) =>
+    ipcRenderer.invoke('topology:export-html', params)
 }
 
 const projectApi = {

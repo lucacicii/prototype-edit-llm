@@ -31,7 +31,11 @@ import {
   parseTopologyReply,
   rawExcerpt
 } from '../agent/topology'
-import { capturePreviewShots, loadShotThumbs, renderGraphPng } from '../topology-capture'
+import {
+  capturePreviewShots,
+  loadShotThumbs,
+  renderTopologyDocumentFile
+} from '../topology-capture'
 import { djb2, normalizeTopology, type TopologyGraph } from '../../shared/topology'
 import {
   AgentConfigFile,
@@ -1401,13 +1405,17 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
   })
 
   /**
-   * 导出成一张图片。
+   * 导出成一份自包含的 HTML 文档。
    *
-   * 没有一个「截图服务」能截出这张图 —— 它得由浏览器把 HTML 画出来。所以
-   * 走一个隐藏窗口：渲染 → 量出内容尺寸 → 调窗口大小 → 抓成 PNG。用户在
-   * 应用里看到的（以及别人收到的）就是这一张图，不再是 HTML。
+   * 每个节点的**完整整页截图**都以 data URL 内联在里面，双击就能看、可以
+   * 直接发给别人，不依赖任何外部文件。不打成一个文件（HTML 里内联了所有
+   * 截图，天然就是单文件）。
+   *
+   * 曾经导出成 PNG：那条路要先在离屏窗口里画出版面再抓屏，抓屏取景依赖量
+   * 出来的 DOM 尺寸，反复被视口继承、窗口大小、纹理上限咬到 —— 表现就是
+   * 图右边整层节点被裁掉。HTML 没有这个环节。
    */
-  ipcMain.handle('topology:export-image', async (_, params: { prototypeId?: string }) => {
+  ipcMain.handle('topology:export-html', async (_, params: { prototypeId?: string }) => {
     const prototypeId = params?.prototypeId
     if (!prototypeId) return { ok: false, error: '缺少原型 id' }
 
@@ -1423,21 +1431,19 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
     }
 
     const item = await loadProjectItem(projectDirFor(prototypeId))
-    const thumbs = await loadShotThumbs(graph, paths.dir)
-    const png = await renderGraphPng(graph, thumbs)
-    if (!png) return { ok: false, error: '图片渲染失败，请重试' }
+    const { html, shotCount } = await renderTopologyDocumentFile(graph, paths.dir)
 
     const options = {
-      title: '导出拓扑图图片',
-      defaultPath: `${item?.name || prototypeId}-页面拓扑图.png`,
-      filters: [{ name: 'PNG 图片', extensions: ['png'] }]
+      title: '导出拓扑图',
+      defaultPath: `${item?.name || prototypeId}-页面拓扑图.html`,
+      filters: [{ name: 'HTML 网页', extensions: ['html'] }]
     }
     const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
     const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
     if (result.canceled || !result.filePath) return { ok: false, cancelled: true }
 
-    await fs.writeFile(result.filePath, png)
-    return { ok: true, path: result.filePath }
+    await fs.writeFile(result.filePath, html, 'utf-8')
+    return { ok: true, path: result.filePath, shots: shotCount }
   })
 
   ipcMain.handle(

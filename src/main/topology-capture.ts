@@ -16,16 +16,18 @@
  * —— 宿主全程隐藏，留着它的代价只是一个隐藏渲染进程。主进程那边的
  * `BrowserViewManager.destroy()` 也是同一个路数：只摘 view，不销毁窗口。
  *
+ * 这个模块**只负责截图**。导出产物是 HTML 文档（见 loadShotImages /
+ * renderTopologyDocumentFile），不再走「画出版面再抓屏」那条路。
+ *
  * 截图为什么要「走路径」：单文件原型里「详情页」只是同一份 DOM 的另一个状态，
  * 光导航过去是截不到的。所以按模型给出的选择器一路点进去，到了再截。
  */
 
 import { BrowserView, BrowserWindow, WebContents, nativeImage } from 'electron'
 import { promises as fs } from 'fs'
-import * as os from 'os'
 import * as path from 'path'
 import { capturePath, type TopologyGraph } from '../shared/topology'
-import { renderTopologyHtml } from './agent/topology'
+import { renderTopologyDocument } from './agent/topology'
 
 /** 截图用的视口宽度；固定下来缩略图才一致，不受用户把预览拉多宽影响。 */
 const CAPTURE_WIDTH = 440
@@ -411,94 +413,46 @@ export async function loadShotThumbs(
 }
 
 /**
- * 量出渲染页的「内容」尺寸。
+ * 读回落盘的**完整**截图（不裁不缩），内联成 data URL。
  *
- * 同样不能读 `scrollWidth/Height`：宿主 view 有多大，文档就撑多大 —— 那样
- * 导出的图会是「窗口大小」而不是「这张图的大小」，右边和下边全是留白。
- * 取 body 各子元素（标题、图、脚注）的外接框，再加上 body 自己的内边距。
+ * 与 `loadShotThumbs` 的区别就是要「完整」：导出文档里每张截图都是整页原图，
+ * 所以这里不做 `cropToCard`，只用 `toDataURL` 重新编码一遍保证内联合法。
+ * 代价是导出的 HTML 会比较大（每张长图几百 KB 到 1 MB 量级），换来的是
+ * 一个双击就能看、不依赖任何外部文件的文件。
  */
-async function measureDocumentSize(wc: WebContents): Promise<{ w: number; h: number } | null> {
-  const expression = `(() => {
-    const body = document.body;
-    if (!body) return null;
-    const cs = getComputedStyle(body);
-    let right = 0, bottom = 0;
-    for (const child of body.children) {
-      const rect = child.getBoundingClientRect();
-      if (rect.width > 0) right = Math.max(right, rect.right + window.scrollX);
-      if (rect.height > 0) bottom = Math.max(bottom, rect.bottom + window.scrollY);
+export async function loadShotImages(
+  graph: TopologyGraph | null,
+  metaDir: string
+): Promise<Map<string, string>> {
+  const images = new Map<string, string>()
+  if (!graph) return images
+
+  for (const node of graph.nodes) {
+    if (!node.shot?.file) continue
+    try {
+      const buf = await fs.readFile(path.join(metaDir, node.shot.file))
+      const image = nativeImage.createFromBuffer(buf)
+      if (image.isEmpty()) continue
+      images.set(node.id, image.toDataURL())
+    } catch {
+      // 图没了就画占位框，不影响其余节点
     }
-    return {
-      w: Math.ceil(right + (parseFloat(cs.paddingRight) || 0)),
-      h: Math.ceil(bottom + (parseFloat(cs.paddingBottom) || 0))
-    };
-  })()`
-  try {
-    const dims = await wc.executeJavaScript(expression)
-    if (!dims || !Number(dims.w) || !Number(dims.h)) return null
-    return { w: Number(dims.w), h: Number(dims.h) }
-  } catch {
-    return null
   }
+  return images
 }
 
 /**
- * 把整张图渲染成一张 PNG。
+ * 生成可导出的自包含 HTML 文档，写盘由调用方负责。
  *
- * 没有一个「截图服务」能截出这张图 —— 它得由浏览器把 HTML 画出来。所以同样
- * 走隐藏宿主 + BrowserView：渲染 → 量出内容尺寸 → 把 view 与宿主都调成内容
- * 大小 → 抓。视口变大前要先把宿主窗口放大，否则 view 超出的部分不会绘制
- * （截出来就是图的右边/下边被砍掉）。
+ * 导出改成 HTML 而不是图片，是因为图片那条路本质上要「在离屏窗口里画出
+ * 版面再抓屏」，抓屏取景依赖量出来的 DOM 尺寸，实测反复被视口继承和纹理
+ * 上限咬到（右边整层节点被裁）。HTML 里截图按原始比例完整内联、长短卡片
+ * 各自排开，画布多大只由内容决定，不由任何窗口决定。
  */
-export async function renderGraphPng(
+export async function renderTopologyDocumentFile(
   graph: TopologyGraph,
-  thumbs: Map<string, string>
-): Promise<Buffer | null> {
-  const html = renderTopologyHtml(graph, thumbs)
-  const tmpFile = path.join(os.tmpdir(), `prototype-topology-${Date.now().toString(36)}.html`)
-
-  const capture = getCaptureHost(1600, 1200)
-  const { wc } = capture
-  try {
-    await fs.writeFile(tmpFile, html, 'utf-8')
-
-    // 先导航再 attach —— 见文件头的约束 2
-    if (!(await loadAndWait(wc, `file://${tmpFile}`))) return null
-    await ensureDebugger(wc)
-
-    // 截图是内联的 dataURL，等它们解码完，免得抓出一片空白
-    await wc
-      .executeJavaScript(
-        `Promise.all(Array.from(document.images).map((i) => (i.complete ? null : i.decode().catch(() => null))))`
-      )
-      .catch(() => null)
-
-    const dims = await measureDocumentSize(wc)
-    if (!dims) return null
-    const width = Math.min(Math.max(dims.w, 320), 6_000)
-    const height = Math.min(Math.max(dims.h, 240), MAX_CONTENT_HEIGHT)
-
-    // 先放大宿主再调 view：view 超出宿主的部分不会绘制
-    fitCaptureHost(capture, width, height)
-    await wc.debugger.sendCommand('Emulation.setDeviceMetricsOverride', {
-      width,
-      height,
-      deviceScaleFactor: CAPTURE_SCALE,
-      mobile: false
-    })
-    await delay(300)
-
-    const shot = await wc.debugger.sendCommand('Page.captureScreenshot', {
-      format: 'png',
-      fromSurface: true,
-      captureBeyondViewport: true
-    })
-    if (!shot?.data) return null
-    return Buffer.from(shot.data, 'base64')
-  } catch (err) {
-    console.warn('[topology] render graph image failed:', err)
-    return null
-  } finally {
-    await fs.rm(tmpFile, { force: true })
-  }
+  metaDir: string
+): Promise<{ html: string; shotCount: number }> {
+  const images = await loadShotImages(graph, metaDir)
+  return { html: renderTopologyDocument(graph, images), shotCount: images.size }
 }

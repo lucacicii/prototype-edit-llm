@@ -240,18 +240,20 @@ function unwrap(raw: unknown): Record<string, any> | null {
 }
 
 /**
- * 从入口做 BFS 分层，层号即横向位置。
+ * 从入口做 BFS，返回每个节点所在的层号（层号即横向位置）。
  *
  * 不可达的节点（模型没说它们从哪进来）并到最后一层之后，
  * 而不是丢掉 —— 一张「有个孤岛页面」的图比一张缺页的图有用。
+ *
+ * 面板的等尺寸布局与导出文档的变高布局都要它，所以单独抽出来。
  */
-export function layeredLayout(
+export function layerDepths(
   nodes: TopologyNode[],
   edges: TopologyEdge[],
   entry?: string
-): Map<string, { x: number; y: number }> {
-  const positions = new Map<string, { x: number; y: number }>()
-  if (!nodes.length) return positions
+): Map<string, number> {
+  const depth = new Map<string, number>()
+  if (!nodes.length) return depth
 
   const adjacency = new Map<string, string[]>()
   for (const node of nodes) adjacency.set(node.id, [])
@@ -259,7 +261,6 @@ export function layeredLayout(
     adjacency.get(edge.from)?.push(edge.to)
   }
 
-  const depth = new Map<string, number>()
   const start = entry && adjacency.has(entry) ? entry : nodes[0].id
   depth.set(start, 0)
   const queue = [start]
@@ -279,6 +280,24 @@ export function layeredLayout(
   for (const node of nodes) {
     if (!depth.has(node.id)) depth.set(node.id, orphanLayer)
   }
+  return depth
+}
+
+/**
+ * 面板用的等尺寸分层布局：层号定 x，层内按序居中。
+ *
+ * 卡片尺寸是固定的（截图按固定高度裁过），所以这里不需要知道图片比例。
+ * 导出文档要展示完整截图、卡片高度不一，那边另外算（见 renderTopologyDocument）。
+ */
+export function layeredLayout(
+  nodes: TopologyNode[],
+  edges: TopologyEdge[],
+  entry?: string
+): Map<string, { x: number; y: number }> {
+  const positions = new Map<string, { x: number; y: number }>()
+  if (!nodes.length) return positions
+
+  const depth = layerDepths(nodes, edges, entry)
 
   const layers = new Map<number, string[]>()
   for (const node of nodes) {

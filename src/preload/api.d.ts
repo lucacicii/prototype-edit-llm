@@ -157,10 +157,12 @@ export interface ITopologyAPI {
     shots?: Record<string, string>
     error?: string
   }>
-  /** 把整张拓扑图导出成一张 PNG。 */
-  exportImage: (params: { prototypeId: string }) => Promise<{
+  /** 把整张拓扑图导出成一份自包含的 HTML（每页完整截图内联在里面）。 */
+  exportHtml: (params: { prototypeId: string }) => Promise<{
     ok: boolean
     path?: string
+    /** 实际内联进去的截图张数。 */
+    shots?: number
     error?: string
     cancelled?: boolean
   }>

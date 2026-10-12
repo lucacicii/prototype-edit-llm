@@ -260,9 +260,10 @@ export const TopologyPanel: React.FC<TopologyPanelProps> = ({
 
   const handleExport = useCallback(async () => {
     try {
-      const res = await window.topologyApi?.exportImage?.({ prototypeId: prototype.id })
-      if (res?.ok && res.path) message.success(`已导出图片到 ${res.path}`)
-      else if (res?.error) message.error(res.error)
+      const res = await window.topologyApi?.exportHtml?.({ prototypeId: prototype.id })
+      if (res?.ok && res.path) {
+        message.success(`已导出到 ${res.path}${res.shots ? `（内联 ${res.shots} 张完整截图）` : ''}`)
+      } else if (res?.error) message.error(res.error)
     } catch (e: any) {
       message.error(e?.message || '导出失败')
     }
@@ -293,10 +294,10 @@ export const TopologyPanel: React.FC<TopologyPanelProps> = ({
             <button
               onClick={handleExport}
               className="text-xs hover:text-slate-200 transition flex items-center gap-1 bg-slate-800 hover:bg-slate-700 px-2 py-0.5 rounded cursor-pointer"
-              title="导出成一张 PNG 图片"
+              title="导出一份自包含的 HTML，每个节点内联该页面的完整截图"
             >
               <Download size={11} />
-              <span>导出图片</span>
+              <span>导出 HTML</span>
             </button>
           )}
           <button
