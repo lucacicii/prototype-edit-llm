@@ -1,14 +1,15 @@
-import { promises as fs } from 'fs'
+import { promises as fs, existsSync } from 'fs'
 import * as path from 'path'
 import { projectsRootDir, workspaceDir } from './app-paths'
 import { projectDirFor } from './project-store'
+import { ProjectRunner } from './project-runner'
 import {
   ensureSharedWorkspace,
   sharedWorkspaceDir,
   type RepoRole,
   type SharedRepo
 } from './shared-workspace'
-import { loadWorkspaceList, saveWorkspaceList } from './workspace-store'
+import { loadActiveWorkspaceId, loadWorkspaceList, saveWorkspaceList } from './workspace-store'
 
 /** 默认工作区 id：用户自己的独立原型项目（~/.prototype-studio/projects/<id>/）。 */
 export const DEFAULT_WORKSPACE_ID = 'default-host'
@@ -82,6 +83,11 @@ export async function inspectRepoDirectory(dirPath: string): Promise<{
     // 非 node 工程或没有 package.json
   }
 
+  // 若未检测到前端框架且没有构建工具，但目录下存在 index.html，则识别为静态 Web 目录
+  if (framework === 'unknown' && devTool === 'other' && existsSync(path.join(dirPath, 'index.html'))) {
+    framework = 'native-dom'
+  }
+
   return {
     label,
     framework,
@@ -89,6 +95,13 @@ export async function inspectRepoDirectory(dirPath: string): Promise<{
     devTool,
     dependencies: pkg.dependencies
   }
+}
+
+function isStaticHtmlRepo(repo?: { path: string; framework?: WorkspaceFramework; devTool?: WorkspaceDevTool }): boolean {
+  if (!repo?.path) return false
+  if (repo.devTool && repo.devTool !== 'other') return false
+  if (repo.framework === 'vue3' || repo.framework === 'vue2' || repo.framework === 'react') return false
+  return existsSync(path.join(repo.path, 'index.html'))
 }
 
 export class ProjectWorkspaceManager {
@@ -136,17 +149,31 @@ export class ProjectWorkspaceManager {
     if (this.loaded) return
     this.loaded = true
     const saved = await loadWorkspaceList<ProjectWorkspace>(this.studioDir)
+    const savedActiveId = await loadActiveWorkspaceId(this.studioDir)
     const defaultWs = this.workspaces.find((w) => w.id === DEFAULT_WORKSPACE_ID)!
     const hydrated: ProjectWorkspace[] = []
+    let upgraded = false
     for (const raw of saved) {
       if (!raw || !raw.id || raw.id === DEFAULT_WORKSPACE_ID) continue
       const normalized = this.normalizeWorkspace(raw)
+      if (normalized.url !== raw.url || normalized.framework !== raw.framework) {
+        upgraded = true
+      }
       await this.syncSharedDir(normalized)
       hydrated.push(normalized)
     }
     this.workspaces = [...hydrated, defaultWs]
+    if (savedActiveId) {
+      const matched = this.workspaces.find((w) => w.id === savedActiveId)
+      if (matched) {
+        this.currentWorkspace = matched
+      }
+    }
     if (!this.currentWorkspace || !this.workspaces.some((w) => w.id === this.currentWorkspace!.id)) {
       this.currentWorkspace = defaultWs
+    }
+    if (upgraded) {
+      await this.persist()
     }
   }
 
@@ -176,11 +203,22 @@ export class ProjectWorkspaceManager {
       }
       const primary = repos.find((r) => r.role === 'primary')
       if (primary) {
+        if (primary.framework === 'unknown' && isStaticHtmlRepo(primary)) {
+          primary.framework = 'native-dom'
+        }
         copy.rootPath = primary.path
         copy.framework = primary.framework ?? copy.framework ?? 'unknown'
         copy.uiLibrary = primary.uiLibrary
         copy.devTool = primary.devTool
         copy.dependencies = primary.dependencies
+        if (
+          isStaticHtmlRepo(primary) &&
+          (!copy.url ||
+            copy.url === 'http://localhost:3000' ||
+            /^http:\/\/127\.0\.0\.1:\d+\/workspaces\//.test(copy.url))
+        ) {
+          copy.url = ProjectRunner.getInstance().getStaticWorkspaceUrl(copy.id, 'index.html')
+        }
       }
       copy.repos = repos
       copy.sharedDir = sharedWorkspaceDir(this.studioDir, copy.id)
@@ -211,7 +249,7 @@ export class ProjectWorkspaceManager {
   private async persist(): Promise<void> {
     const external = this.workspaces.filter((w) => w.id !== DEFAULT_WORKSPACE_ID)
     try {
-      await saveWorkspaceList(this.studioDir, external)
+      await saveWorkspaceList(this.studioDir, external, this.currentWorkspace?.id)
     } catch (err) {
       console.warn('[ProjectWorkspaceManager] saveWorkspaceList failed:', err)
     }
@@ -262,7 +300,11 @@ export class ProjectWorkspaceManager {
 
     const primaryRepo = repos[0]
     const id = `ws_${Date.now().toString(36)}`
-    const defaultUrl = portOrUrl || 'http://localhost:3000'
+    const defaultUrl =
+      portOrUrl ||
+      (isStaticHtmlRepo(primaryRepo)
+        ? ProjectRunner.getInstance().getStaticWorkspaceUrl(id, 'index.html')
+        : 'http://localhost:3000')
     const name = workspaceName?.trim() || primaryRepo.label
 
     const ws: ProjectWorkspace = this.normalizeWorkspace({
@@ -510,6 +552,7 @@ export class ProjectWorkspaceManager {
     const ws = this.workspaces.find((w) => w.id === id)
     if (ws) {
       this.currentWorkspace = ws
+      void this.persist()
       return ws
     }
     return null

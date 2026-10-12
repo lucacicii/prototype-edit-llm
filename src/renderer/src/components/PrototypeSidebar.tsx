@@ -127,7 +127,10 @@ export const PrototypeSidebar: React.FC<PrototypeSidebarProps> = ({
         const list = await window.project.listWorkspaces()
         setWorkspaces(list || [])
         const cur = await window.project.getCurrentWorkspace()
-        if (cur) setActiveWorkspaceId(cur.id)
+        if (cur) {
+          setActiveWorkspaceId(cur.id)
+          onWorkspaceChanged(cur)
+        }
       } catch (e) {
         console.error('Failed to load workspaces:', e)
       }

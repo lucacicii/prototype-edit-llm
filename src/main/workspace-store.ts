@@ -15,11 +15,24 @@ const STORE_VERSION = 1
 
 interface StoreFile<T> {
   version: number
+  activeWorkspaceId?: string
   workspaces: T[]
 }
 
 export function workspaceStorePath(studioDir: string): string {
   return path.join(studioDir, 'workspaces.json')
+}
+
+export async function loadActiveWorkspaceId(studioDir: string): Promise<string | null> {
+  try {
+    const parsed = JSON.parse(await fs.readFile(workspaceStorePath(studioDir), 'utf8')) as StoreFile<unknown>
+    if (!parsed || parsed.version !== STORE_VERSION) return null
+    return typeof parsed.activeWorkspaceId === 'string' && parsed.activeWorkspaceId.trim()
+      ? parsed.activeWorkspaceId.trim()
+      : null
+  } catch {
+    return null
+  }
 }
 
 /** 读失败（不存在 / 损坏 / 版本不认识）一律当作空列表，不能挡住启动。 */
@@ -34,9 +47,17 @@ export async function loadWorkspaceList<T>(studioDir: string): Promise<T[]> {
 }
 
 /** 先写临时文件再 rename，避免崩在半截留下损坏的 JSON。 */
-export async function saveWorkspaceList<T>(studioDir: string, workspaces: readonly T[]): Promise<void> {
+export async function saveWorkspaceList<T>(
+  studioDir: string,
+  workspaces: readonly T[],
+  activeWorkspaceId?: string
+): Promise<void> {
   const file = workspaceStorePath(studioDir)
-  const body: StoreFile<T> = { version: STORE_VERSION, workspaces: [...workspaces] }
+  const body: StoreFile<T> = {
+    version: STORE_VERSION,
+    ...(activeWorkspaceId ? { activeWorkspaceId } : {}),
+    workspaces: [...workspaces]
+  }
   await fs.mkdir(path.dirname(file), { recursive: true })
   const tmp = `${file}.${process.pid}.tmp`
   await fs.writeFile(tmp, JSON.stringify(body, null, 2), 'utf8')

@@ -435,8 +435,13 @@ export const BROWSER_PROBE_SCRIPT = `
 
     // 无框架元数据但有文本的，留给消费方做文本推断：这里只把
     // 通道标成 text（sourceFile 由调用方按文本匹配填），
-    // 纯 DOM 元素（外部 URL）保持 none。
+    // 若当前页面在 /workspaces/<id>/<relPath> 或 /projects/<id>/<relPath> 下，
+    // 直接提取页面自身的相对文件路径作为 sourceFile，让多页静态 HTML 也能精确定位到对应文件。
     if (!sourceFile) {
+      const m = /^\\/(?:workspaces|projects)\\/[^/]+\\/(.+)$/.exec(window.location.pathname || '');
+      if (m && m[1]) {
+        sourceFile = decodeURIComponent(m[1]);
+      }
       locateMode = (el.innerText || el.textContent || '').trim() ? 'text' : 'none';
     }
 

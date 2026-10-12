@@ -2,12 +2,14 @@ import { resolve } from 'path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   main: {
-    plugins: [externalizeDepsPlugin()]
+    plugins: [externalizeDepsPlugin()],
+    ...(command === 'serve' ? { build: { watch: {} } } : {})
   },
   preload: {
-    plugins: [externalizeDepsPlugin()]
+    plugins: [externalizeDepsPlugin()],
+    ...(command === 'serve' ? { build: { watch: {} } } : {})
   },
   renderer: {
     resolve: {
@@ -40,4 +42,4 @@ export default defineConfig({
     },
     plugins: [react()]
   }
-})
+}))

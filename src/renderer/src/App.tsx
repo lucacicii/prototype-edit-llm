@@ -69,6 +69,17 @@ export const App: React.FC = () => {
   // Initial load
   useEffect(() => {
     async function init() {
+      if (window.project?.getCurrentWorkspace) {
+        try {
+          const curWs = await window.project.getCurrentWorkspace()
+          if (curWs) {
+            setCurrentWorkspace(curWs)
+            currentWorkspaceRef.current = curWs
+          }
+        } catch {
+          // ignore
+        }
+      }
       await prototypeStore.loadFromDisk()
       await refreshModelConfig()
       await refreshVersionNo()
@@ -215,6 +226,7 @@ export const App: React.FC = () => {
 
     setInspectTarget({
       ...target,
+      sourceLine: lineNumber || calculatedLine,
       codeSnippet: snippet,
       lineNumber: lineNumber || calculatedLine
     })

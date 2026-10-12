@@ -1,9 +1,10 @@
 /**
  * Unified Prototype Project Runner:
  *
- * 1. Static HTTP Server (`http://127.0.0.1:4322/projects/<id>/...`):
- *    Serves any project directory directly when it uses `native-html` (or has an `index.html`
- *    without needing a bundler). Zero compile overhead, instant reload on file change.
+ * 1. Static HTTP Server (`http://127.0.0.1:4322/projects/<id>/...` & `/workspaces/<id>/...`):
+ *    Serves any project directory or imported workspace primary repo directly when it uses
+ *    `native-html` (or has an `index.html` without needing a bundler). Zero compile overhead,
+ *    instant reload on file change.
  * 2. Vite Compile Host (`http://127.0.0.1:4321/prototypes/<id>`):
  *    Runs inside `~/.prototype-studio/runtime-host` for Vue 3 (`index.vue`) and React (`index.tsx`)
  *    prototypes without touching the git repository.
@@ -16,6 +17,7 @@ import { BrowserViewManager } from './browser-view-manager'
 import { HostServerManager } from './host-server-manager'
 import { activePrototypeFile, prototypeStackMarker } from './app-paths'
 import { projectDirFor, syncProjectEntryAndStack, entryFileForStack, ENTRY_CANDIDATES } from './project-store'
+import { ProjectWorkspaceManager } from './project-workspace-manager'
 import { type TechStack } from './agent/tech-stack'
 
 const MIME_TYPES: Record<string, string> = {
@@ -54,17 +56,39 @@ export class ProjectRunner {
           const parsedUrl = new URL(req.url || '/', `http://127.0.0.1:${this.staticPort}`)
           const pathname = decodeURIComponent(parsedUrl.pathname)
 
-          // Route: /projects/<projectId>/<relPath>
-          const match = /^\/projects\/([^/]+)(?:\/(.*))?$/.exec(pathname)
-          if (!match) {
+          // Route: /projects/<projectId>/<relPath> OR /workspaces/<workspaceId>/<relPath>
+          const projectMatch = /^\/projects\/([^/]+)(?:\/(.*))?$/.exec(pathname)
+          const wsMatch = !projectMatch ? /^\/workspaces\/([^/]+)(?:\/(.*))?$/.exec(pathname) : null
+
+          if (!projectMatch && !wsMatch) {
             res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
             res.end('Not Found')
             return
           }
 
-          const projectId = match[1]
-          const relPath = match[2] || 'index.html'
-          const projectRoot = projectDirFor(projectId)
+          let projectRoot: string | undefined
+          let relPath: string
+
+          if (projectMatch) {
+            const projectId = projectMatch[1]
+            relPath = projectMatch[2] || 'index.html'
+            projectRoot = projectDirFor(projectId)
+          } else {
+            const workspaceId = wsMatch![1]
+            relPath = wsMatch![2] || 'index.html'
+            const wsManager = ProjectWorkspaceManager.getInstance()
+            await wsManager.init()
+            const ws = wsManager.getWorkspaceById(workspaceId)
+            projectRoot =
+              ws?.repos?.find((r) => r.role === 'primary')?.path ?? ws?.rootPath
+          }
+
+          if (!projectRoot) {
+            res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
+            res.end('Workspace root not found')
+            return
+          }
+
           const targetPath = path.resolve(projectRoot, relPath)
 
           if (!targetPath.startsWith(path.resolve(projectRoot))) {
@@ -116,6 +140,14 @@ export class ProjectRunner {
 
   public getStaticProjectUrl(projectId: string, entryFile = 'index.html'): string {
     return `http://127.0.0.1:${this.staticPort}/projects/${encodeURIComponent(projectId)}/${entryFile}`
+  }
+
+  public getStaticWorkspaceUrl(workspaceId: string, entryFile = 'index.html'): string {
+    return `http://127.0.0.1:${this.staticPort}/workspaces/${encodeURIComponent(workspaceId)}/${entryFile}`
+  }
+
+  public getStaticPort(): number {
+    return this.staticPort
   }
 
   /**
