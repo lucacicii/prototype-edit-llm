@@ -438,12 +438,12 @@ export interface IAgentAPI {
     history?: Array<{ role: string; content: string | null }>
     /** 圈选点中的元素（富字段：选择器/组件/源码位置）。 */
     inspectTarget?: PointedTarget
-    /** 圈改框住的每一块：框里认出来的元素 + 框的范围（视口坐标）+ 该框的批注。 */
+    /** 圈改框住的每一块：框里认出来的元素（探针 payload 与渲染层都叫 target，别改名） + 框的范围（视口坐标）+ 该框的批注。 */
     markupTargets?: Array<{
       id?: string
       note: string
       rect: { left: number; top: number; width: number; height: number }
-      element?: PointedTarget
+      target?: PointedTarget
     }>
     /** 图片附件；`data` 是 base64，不含 `data:` 前缀。 */
     attachments?: Array<{ name: string; mimeType: string; data: string }>

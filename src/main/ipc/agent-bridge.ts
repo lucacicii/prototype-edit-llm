@@ -80,7 +80,10 @@ export interface AgentRunParams {
     id?: string
     note: string
     rect: { left: number; top: number; width: number; height: number }
-    element?: PointedTarget
+    // 名字必须和探针 payload / 渲染层 MarkupAnnotation 一致，都是 target。
+    // 这里曾写成 element（旧 Vue 渲染层有个 toPlainMarkupTarget 会改名），
+    // React 重构删掉那个映射后就一直读到 undefined —— 圈改的定位整条链路是断的。
+    target?: PointedTarget
   }[]
   /** 图片附件：透传给 prototype-agent，落到本轮那条 user 消息的 parts 上。 */
   attachments?: { name: string; mimeType: string; data: string }[]
@@ -645,7 +648,7 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
       const list: PointedTarget[] = []
       if (active?.inspectTarget) list.push(active.inspectTarget)
       for (const m of active?.markupTargets ?? []) {
-        if (m.element) list.push({ ...m.element, note: m.note })
+        if (m.target) list.push({ ...m.target, note: m.note })
       }
       return list.filter((t) => t.tagName)
     },
@@ -1036,12 +1039,16 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
     if (params.markupTargets?.length) {
       const mLines = ['【浏览器探针圈改区域】']
       params.markupTargets.forEach((m, idx) => {
-        const el = m.element
+        const el = m.target
+        // 定位不到就直说：以前这里退到 entryFile（index.html），模型会当真位置用，
+        // 比不给还糟 —— 它会去改入口文件而不是框住的那块。
         const loc = el?.sourceFile
-          ? `${el.sourceFile}${el.sourceLine ? ':' + el.sourceLine : ''}`
-          : projectItem?.entryFile || 'index.html'
+          ? `${el.sourceFile}${el.sourceLine ? ':' + el.sourceLine : ''}${
+              el.sourceLocated === false ? ' (文本推断位置)' : ' (探针精确位置)'
+            }`
+          : '未在框内定位到元素（以批注与选择器为准，不要猜行号）'
         mLines.push(
-          `${idx + 1}. 批注要求: "${m.note}" | 目标元素: <${el?.tagName || 'div'}> | 源码位置: ${loc}${
+          `${idx + 1}. 批注要求: "${m.note}" | 目标元素: <${el?.tagName || '未定位'}> | 源码位置: ${loc}${
             el?.selector ? ` | 选择器: ${el.selector}` : ''
           }`
         )
