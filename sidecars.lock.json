@@ -14,7 +14,7 @@
   ],
   "thunder": {
     "version": "0.5.0",
-    "commit": "3132343",
+    "commit": "e212f37",
     "source": null,
     "artifacts": {
       "darwin-arm64": {
@@ -22,7 +22,7 @@
           "sha256": "5b5ec53f3891b12dc4be49182c4caf31eabfac58e41eb07f7aa8604ee3a7879c"
         },
         "thunder-daemon": {
-          "sha256": "bd4eb5b1baa5e588cb19197cd9c7f391a1eb087ae133aa51647fbc8770ef5e9c"
+          "sha256": "c5e44b38cd2eba0eeace98ec143c7c7ff3ec3542bbea062ad955def01a911bb0"
         }
       }
     }
