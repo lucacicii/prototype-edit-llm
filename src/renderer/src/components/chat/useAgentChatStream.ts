@@ -37,6 +37,96 @@ export interface ChatRunMetrics {
   durationMs?: number
 }
 
+/**
+ * thunder `MetricsPlugin` 推送的权威遥测快照（`metrics_update` 自定义事件的 payload）。
+ *
+ * 0.4 起 daemon 在每条与指标相关的事件后随流下发它；字段名与 thunder 的
+ * `MetricsSnapshot` 一致。旧版 daemon 不发，此时退回本地估算。
+ */
+export interface AgentMetricsSnapshot {
+  session_id?: string
+  task_id?: string
+  model?: string
+  thinking_level?: string
+  is_running: boolean
+  turn: number
+  live_tps: number
+  avg_tps?: number
+  live_tokens: number
+  live_reasoning_tokens: number
+  prompt_tokens?: number
+  completion_tokens?: number
+  reasoning_tokens?: number
+  total_tokens?: number
+  cached_tokens: number
+  cache_write_tokens?: number
+  cache_hit_percent?: number
+  context_tokens: number
+  context_window_limit?: number
+  context_usage_percent?: number
+  session_total_tokens: number
+  generation_duration_ms: number
+  tool_duration_ms: number
+  duration_ms?: number
+  wall_duration_ms?: number
+}
+
+/**
+ * 快速 token 估算，与 thunder 内核 `core::token_estimator` 同一口径：
+ * CJK/假名/谚文约 1.5 token/字，ASCII（空白半权）约 3.7 字符/token，标点 +0.2。
+ *
+ * 只用于**降级路径**——没收到 `metrics_update`（旧版 daemon）时的流式计数。
+ * 权威数值一律以快照为准。
+ */
+function estimateTokens(text: string): number {
+  if (!text) return 0
+  let cjk = 0
+  let space = 0
+  let punct = 0
+  let total = 0
+  for (const ch of text) {
+    total += 1
+    const u = ch.codePointAt(0) ?? 0
+    if (
+      (u >= 0x4e00 && u <= 0x9fff) ||
+      (u >= 0x3400 && u <= 0x4dbf) ||
+      (u >= 0x3040 && u <= 0x30ff) ||
+      (u >= 0xac00 && u <= 0xd7af)
+    ) {
+      cjk += 1
+    } else if (u === 0x20 || u === 0x09 || u === 0x0a || u === 0x0d) {
+      space += 1
+    } else if (
+      (u >= 0x21 && u <= 0x2f) ||
+      (u >= 0x3a && u <= 0x40) ||
+      (u >= 0x5b && u <= 0x60) ||
+      (u >= 0x7b && u <= 0x7e) ||
+      (u >= 0x3000 && u <= 0x303f) ||
+      (u >= 0xff00 && u <= 0xffef)
+    ) {
+      punct += 1
+    } else if (/\s/.test(ch)) {
+      space += 1
+    }
+  }
+  const ascii = Math.max(0, total - cjk)
+  const effAscii = Math.max(0, ascii - Math.floor(space / 2))
+  return Math.max(1, Math.ceil((cjk * 15) / 10) + Math.ceil((effAscii * 10) / 37) + Math.ceil((punct * 2) / 10))
+}
+
+/** 快照 → 本轮指标（面板的 `ChatRunMetrics`）。 */
+function metricsFromSnapshot(snap: AgentMetricsSnapshot): ChatRunMetrics {
+  return {
+    tps: snap.avg_tps ?? (snap.live_tps > 0 ? snap.live_tps : undefined),
+    promptTokens: snap.prompt_tokens,
+    completionTokens: snap.completion_tokens,
+    cachedTokens: snap.cached_tokens,
+    reasoningTokens: snap.reasoning_tokens,
+    totalTokens: snap.total_tokens,
+    durationMs: snap.wall_duration_ms ?? snap.duration_ms
+  }
+}
+
 export interface PendingQuestion {
   questionId: string
   taskId: string
@@ -160,6 +250,8 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
   const [lastRunMetrics, setLastRunMetrics] = useState<ChatRunMetrics | null>(null)
   const [streamTokensCount, setStreamTokensCount] = useState(0)
   const [streamReasoningCount, setStreamReasoningCount] = useState(0)
+  /** 权威实时速率（来自 `metrics_update`）；本地降级估算不写这里。 */
+  const [snapshotLiveTps, setSnapshotLiveTps] = useState(0)
   const [sessionTotalTokens, setSessionTotalTokens] = useState(0)
   const [currentContextTokens, setCurrentContextTokens] = useState(0)
 
@@ -173,6 +265,11 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
   const errorDetailRef = useRef<Map<string, string>>(new Map())
   /** 同步镜像：await 边界后的闭包读不到新 state，只能读 ref。 */
   const lastRunMetricsRef = useRef<ChatRunMetrics | null>(null)
+  /** 本轮是否收到过权威快照。收到后本地估算即停用，避免两边互相覆盖。 */
+  const hasSnapshotRef = useRef(false)
+  /** 降级路径的累计正文/思考文本（快照缺席时按文本估算 token）。 */
+  const textBufRef = useRef('')
+  const reasoningBufRef = useRef('')
   const onCodeUpdatedRef = useRef(options.onCodeUpdated)
   onCodeUpdatedRef.current = options.onCodeUpdated
 
@@ -198,9 +295,13 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
     setLiveSegments([])
     setStreamTokensCount(0)
     setStreamReasoningCount(0)
+    setSnapshotLiveTps(0)
     setElapsedMs(0)
     setPendingQuestion(null)
     setQueuedMessages([])
+    hasSnapshotRef.current = false
+    textBufRef.current = ''
+    reasoningBufRef.current = ''
     stopTimer()
   }, [stopTimer])
 
@@ -210,15 +311,28 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
       if (!ev || typeof ev !== 'object') return
       switch (ev.type) {
         case 'token_delta': {
-          appendDelta(segmentsRef.current, 'text', ev.delta || '')
-          setStreamTokensCount((prev) => prev + 1)
+          const delta = typeof ev.delta === 'string' ? ev.delta : ''
+          appendDelta(segmentsRef.current, 'text', delta)
+          textBufRef.current += delta
+          // 快照在跑就交给它：权威值随后会覆盖同一位置。
+          if (!hasSnapshotRef.current) {
+            setStreamTokensCount(
+              estimateTokens(textBufRef.current) + estimateTokens(reasoningBufRef.current)
+            )
+          }
           publishSegments()
           break
         }
         case 'reasoning_delta': {
-          appendDelta(segmentsRef.current, 'reasoning', ev.delta || '')
-          setStreamTokensCount((prev) => prev + 1)
-          setStreamReasoningCount((prev) => prev + 1)
+          const delta = typeof ev.delta === 'string' ? ev.delta : ''
+          appendDelta(segmentsRef.current, 'reasoning', delta)
+          reasoningBufRef.current += delta
+          if (!hasSnapshotRef.current) {
+            setStreamReasoningCount(estimateTokens(reasoningBufRef.current))
+            setStreamTokensCount(
+              estimateTokens(textBufRef.current) + estimateTokens(reasoningBufRef.current)
+            )
+          }
           publishSegments()
           break
         }
@@ -245,6 +359,26 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
             isError: Boolean(ev.result?.is_error)
           }))
           publishSegments()
+          break
+        }
+        case 'custom': {
+          // thunder 0.4+ 的权威遥测：token 数、速率、上下文占用全部以它为准。
+          if (ev.kind !== 'metrics_update' || !ev.payload || typeof ev.payload !== 'object') break
+          const snap = ev.payload as AgentMetricsSnapshot
+          hasSnapshotRef.current = true
+          if (typeof snap.live_tokens === 'number') setStreamTokensCount(snap.live_tokens)
+          if (typeof snap.live_reasoning_tokens === 'number') {
+            setStreamReasoningCount(snap.live_reasoning_tokens)
+          }
+          setSnapshotLiveTps(typeof snap.live_tps === 'number' ? snap.live_tps : 0)
+          if (typeof snap.context_tokens === 'number' && snap.context_tokens > 0) {
+            setCurrentContextTokens(snap.context_tokens)
+          }
+          // 有整轮/整 run 的数字就一并落到本轮指标：它是权威值，会覆盖
+          // 紧随其前的 `turn_end` / `loop_complete` 估算。
+          if (snap.avg_tps !== undefined || snap.prompt_tokens !== undefined) {
+            applyMetrics(metricsFromSnapshot(snap))
+          }
           break
         }
         case 'turn_end': {
@@ -322,7 +456,7 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
           break
       }
     },
-    [publishSegments]
+    [applyMetrics, publishSegments]
   )
 
   /** 发起一轮 run，并在结束时归还结果。调用方负责追加聊天消息。 */
@@ -511,9 +645,12 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
   useEffect(() => stopTimer, [stopTimer])
 
   const liveTps = useMemo(() => {
-    if (!isStreaming || elapsedMs <= 200 || streamTokensCount === 0) return 0
+    if (!isStreaming) return 0
+    // 权威速率优先；没有快照（旧版 daemon）才退回本地估算。
+    if (snapshotLiveTps > 0) return snapshotLiveTps
+    if (elapsedMs <= 200 || streamTokensCount === 0) return 0
     return streamTokensCount / (elapsedMs / 1000)
-  }, [isStreaming, elapsedMs, streamTokensCount])
+  }, [isStreaming, snapshotLiveTps, elapsedMs, streamTokensCount])
 
   return {
     isStreaming,
