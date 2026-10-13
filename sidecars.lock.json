@@ -13,32 +13,16 @@
     "requires $THUNDER_RUNTIME_BIN / $THUNDER_DAEMON_BIN to be set explicitly."
   ],
   "thunder": {
-    "version": "0.4.0",
-    "commit": "76353a6",
+    "version": "0.5.0",
+    "commit": "ae2aebe",
     "source": null,
     "artifacts": {
       "darwin-arm64": {
         "thunder-runtime": {
-          "sha256": "be47fc411dfd860a31117137754ee573bc248a75200d916f349b1eff2cf20696"
+          "sha256": "4df47a965ffd47ae5dee3f44c9302d1a321e3dcc4fdbe6ac909e43af1cae387f"
         },
         "thunder-daemon": {
-          "sha256": "bab503cb50b626c5b8a9729f34203ad5b29d721e9571cadba95e0d780505b24a"
-        }
-      },
-      "darwin-x64": {
-        "thunder-runtime": {
-          "sha256": "34eb1d3dcc8bf6ab4309d30f86387be9e0569bbcc8fd44fb5eb82acbc683eace"
-        },
-        "thunder-daemon": {
-          "sha256": "1d6c30a047813f2a2699dba696a1a68fd7e38e9c2ad7cedf641809b4fe9597cd"
-        }
-      },
-      "linux-x64": {
-        "thunder-runtime": {
-          "sha256": "aaf3a42c89b0ea0fbcbb8eacf00a0a92dd28f4ffb3f4cb81ef8f244fa00a40ab"
-        },
-        "thunder-daemon": {
-          "sha256": "4fea34d5ff45943fbe810fb322f81b073363b4687cad5edf1560872a98d66073"
+          "sha256": "a1ce566e5712bc38faf8a3af0c7e1bf2331a301ec1386c8ba4ab3d16df412335"
         }
       }
     }
