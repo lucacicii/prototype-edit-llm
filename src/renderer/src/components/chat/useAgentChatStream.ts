@@ -302,8 +302,11 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
     hasSnapshotRef.current = false
     textBufRef.current = ''
     reasoningBufRef.current = ''
+    // 「本轮」的数字随新消息重算：不清掉的话，上一次 run 的总耗时/瞬时值会
+    // 一直挂到新 run 的第一轮结束。快照会在第一帧把它填回来。
+    applyMetrics(null)
     stopTimer()
-  }, [stopTimer])
+  }, [applyMetrics, stopTimer])
 
   /** 单个 observation 事件 → segments / 指标。 */
   const applyEvent = useCallback(
@@ -374,11 +377,15 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
           if (typeof snap.context_tokens === 'number' && snap.context_tokens > 0) {
             setCurrentContextTokens(snap.context_tokens)
           }
-          // 有整轮/整 run 的数字就一并落到本轮指标：它是权威值，会覆盖
-          // 紧随其前的 `turn_end` / `loop_complete` 估算。
-          if (snap.avg_tps !== undefined || snap.prompt_tokens !== undefined) {
-            applyMetrics(metricsFromSnapshot(snap))
+          // 总消耗 是计数器：以快照的绝对值为准，而不是只靠本地累加 ——
+          // 本地那份只看得到自己收到的轮次，与 daemon 的累计值会漂移。
+          if (typeof snap.session_total_tokens === 'number' && snap.session_total_tokens > 0) {
+            setSessionTotalTokens(snap.session_total_tokens)
           }
+          // 整 run 的数字（含实时 wall clock、本轮 token 明细）也一并落到「本轮」：
+          // 它是权威值，会覆盖紧随其前的 `turn_end` / `loop_complete` 估算。
+          // 第一帧（turn_start）就带 wall clock，所以总耗时从 run 一开始就能显示。
+          applyMetrics(metricsFromSnapshot(snap))
           break
         }
         case 'turn_end': {

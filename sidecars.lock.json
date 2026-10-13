@@ -14,15 +14,15 @@
   ],
   "thunder": {
     "version": "0.5.0",
-    "commit": "ae2aebe",
+    "commit": "3132343",
     "source": null,
     "artifacts": {
       "darwin-arm64": {
         "thunder-runtime": {
-          "sha256": "4df47a965ffd47ae5dee3f44c9302d1a321e3dcc4fdbe6ac909e43af1cae387f"
+          "sha256": "5b5ec53f3891b12dc4be49182c4caf31eabfac58e41eb07f7aa8604ee3a7879c"
         },
         "thunder-daemon": {
-          "sha256": "a1ce566e5712bc38faf8a3af0c7e1bf2331a301ec1386c8ba4ab3d16df412335"
+          "sha256": "bd4eb5b1baa5e588cb19197cd9c7f391a1eb087ae133aa51647fbc8770ef5e9c"
         }
       }
     }
