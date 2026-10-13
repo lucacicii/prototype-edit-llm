@@ -58,7 +58,7 @@
 
 ## 三、如何与 `thunder` 仓库协同开发
 
-`thunder` 是一个独立的 Rust 仓库（如本地位于 `/Users/lucas/wz/ag/thunder`，远端发布于 GitHub Releases）。
+`thunder` 是一个独立的 Rust 仓库（如本地位于 `/Users/lucas/wz/GitHub/thunder`，远端发布于 GitHub Releases）。
 `prototype-edit-llm` **不将 `thunder` 源码硬编码进仓库**，而是通过 **`sidecars.lock.json` + `build/thunder-bin/<arch>/` 缓存 + 环境变量覆盖** 三级机制协同。
 
 ### 1. 二进制侧车的查找优先级
@@ -94,40 +94,40 @@ npm run dev
 
 ### 3. 场景 B：同时修改 `thunder`（Rust）与 `prototype-edit-llm` 本地联调
 
-当你在 `/Users/lucas/wz/ag/thunder` 中修改了协议、工具或 Loop 逻辑，需要在 `prototype-edit-llm` 中立刻验证时，有两种方式：
+当你在 `/Users/lucas/wz/GitHub/thunder` 中修改了协议、工具或 Loop 逻辑，需要在 `prototype-edit-llm` 中立刻验证时，有两种方式：
 
 #### 方式 1：环境变量直连（免拷贝，改完 Rust 编译即生效）
 
-在 `/Users/lucas/wz/ag/thunder` 编译后：
+在 `/Users/lucas/wz/GitHub/thunder` 编译后：
 ```bash
-cd /Users/lucas/wz/ag/thunder
+cd /Users/lucas/wz/GitHub/thunder
 cargo build --release -p thunder-agent-daemon -p thunder-agent-runtime
 ```
 
 然后在启动 `prototype-edit-llm` 时指定环境变量指向 `target/release`：
 ```bash
-cd /Users/lucas/wz/ag/prototype-edit-llm
-THUNDER_DAEMON_BIN=/Users/lucas/wz/ag/thunder/target/release/thunder-daemon \
-THUNDER_RUNTIME_BIN=/Users/lucas/wz/ag/thunder/target/release/thunder-runtime \
+cd /Users/lucas/wz/GitHub/prototype-edit-llm
+THUNDER_DAEMON_BIN=/Users/lucas/wz/GitHub/thunder/target/release/thunder-daemon \
+THUNDER_RUNTIME_BIN=/Users/lucas/wz/GitHub/thunder/target/release/thunder-runtime \
 npm run dev
 ```
 
 #### 方式 2：使用快捷脚本一键从本地 `thunder` 仓库同步并更新锁文件
 
-`package.json` 已内置指向 `/Users/lucas/wz/ag/thunder` 的同步脚本：
+`package.json` 已内置指向 `/Users/lucas/wz/GitHub/thunder` 的同步脚本：
 
 ```bash
 # 1. 在 thunder 仓库构建 release 产物
-cd /Users/lucas/wz/ag/thunder
+cd /Users/lucas/wz/GitHub/thunder
 cargo build --release -p thunder-agent-daemon -p thunder-agent-runtime
 
 # 2. 回到 prototype-edit-llm，一键拷贝二进制到 build/thunder-bin 并更新 sidecars.lock.json
-cd /Users/lucas/wz/ag/prototype-edit-llm
+cd /Users/lucas/wz/GitHub/prototype-edit-llm
 npm run sync:thunder:local
 ```
 
 > 说明：
-> - `npm run fetch:thunder:local`：只将 `/Users/lucas/wz/ag/thunder/target/release/` 下的二进制复制到 `build/thunder-bin/<arch>/`，不改写 `sidecars.lock.json`。
+> - `npm run fetch:thunder:local`：只将 `/Users/lucas/wz/GitHub/thunder/target/release/` 下的二进制复制到 `build/thunder-bin/<arch>/`，不改写 `sidecars.lock.json`。
 > - `npm run sync:thunder:local`：复制二进制的同时带上 `--bless`，自动将当前 `thunder` 的版本号、git commit 短哈希和二进制 SHA256 写入 `sidecars.lock.json`。
 > - 如果你的 `thunder` 仓库在其他路径，可手动执行：
 >   ```bash
@@ -138,13 +138,13 @@ npm run sync:thunder:local
 
 ### 4. 场景 C：`thunder` 发布新 GitHub Release 后正式升级版本
 
-当 `thunder` 仓库修改完毕、推送到 GitHub 并发布了新的 Release Tag（例如 `v0.3.1`）后，在 `prototype-edit-llm` 中执行：
+当 `thunder` 仓库修改完毕、推送到 GitHub 并发布了新的 Release Tag（例如 `v0.5.0`）后，在 `prototype-edit-llm` 中执行：
 
 ```bash
 node scripts/fetch-thunder-binaries.mjs \
   --from-release \
-  --version 0.3.1 \
-  --source https://github.com/lucacicii/thunder/releases/download/v0.3.1 \
+  --version 0.5.0 \
+  --source https://github.com/lucacicii/thunder/releases/download/v0.5.0 \
   --bless
 ```
 
@@ -240,7 +240,7 @@ npm run build
 # 从 GitHub Release 拉取锁定的 thunder 二进制
 npm run fetch:thunder
 
-# 从本地 /Users/lucas/wz/ag/thunder 同步最新编译的二进制并更新 sidecars.lock.json
+# 从本地 /Users/lucas/wz/GitHub/thunder 同步最新编译的二进制并更新 sidecars.lock.json
 npm run sync:thunder:local
 
 # 校验本地 thunder 二进制缓存与 sidecars.lock.json 的 SHA256 是否一致
