@@ -1171,3 +1171,264 @@
   margin-top: 2px;
   line-height: 1.5;
 }
+
+/* ===== 轮次圆点条 ===== */
+.pc-turn-dots {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--pc-border-soft);
+  background: rgba(15, 23, 42, 0.75);
+  flex-shrink: 0;
+}
+
+.pc-turn-dots-label {
+  font-size: 10px;
+  color: var(--pc-text-3);
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.pc-turn-dots-track {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 2px 0;
+  scrollbar-width: none;
+}
+
+.pc-turn-dots-track::-webkit-scrollbar {
+  display: none;
+}
+
+.pc-turn-dot {
+  position: relative;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--pc-border);
+  background: var(--pc-surface);
+  color: var(--pc-text-2);
+  font-size: 10px;
+  font-family: var(--pc-mono);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.pc-turn-dot:hover {
+  border-color: var(--pc-accent);
+  color: var(--pc-text);
+}
+
+.pc-turn-dot.is-done {
+  border-color: rgba(52, 211, 153, 0.45);
+  background: rgba(52, 211, 153, 0.12);
+  color: var(--pc-emerald);
+}
+
+.pc-turn-dot.is-error {
+  border-color: rgba(251, 113, 133, 0.5);
+  background: rgba(251, 113, 133, 0.12);
+  color: var(--pc-rose);
+}
+
+.pc-turn-dot.is-running {
+  border-color: var(--pc-accent);
+  background: rgba(56, 189, 248, 0.16);
+  color: var(--pc-accent);
+}
+
+.pc-turn-dot.is-open {
+  border-color: var(--pc-accent);
+  color: var(--pc-text);
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
+}
+
+.pc-turn-dot-num {
+  line-height: 1;
+}
+
+/* 正在跑的那一轮：外扩呼吸环 */
+.pc-turn-dot-ring {
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 1px solid rgba(56, 189, 248, 0.55);
+  animation: pcTurnRing 1.6s infinite ease-in-out;
+}
+
+@keyframes pcTurnRing {
+  0%, 100% { opacity: 0.25; transform: scale(0.94); }
+  50% { opacity: 0.9; transform: scale(1); }
+}
+
+/* ===== 单轮详情抽屉 ===== */
+.pc-turn-overlay-mask {
+  position: absolute;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.55);
+  z-index: 20;
+  animation: pcFadeIn 0.15s ease;
+}
+
+@keyframes pcFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.pc-turn-overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  top: 40%;
+  z-index: 21;
+  display: flex;
+  flex-direction: column;
+  background: var(--pc-bg);
+  border-top: 1px solid var(--pc-border);
+  border-radius: 12px 12px 0 0;
+  box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.45);
+  animation: pcTurnSlideUp 0.2s ease;
+}
+
+@keyframes pcTurnSlideUp {
+  from { transform: translateY(14px); opacity: 0.5; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.pc-turn-overlay-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--pc-border-soft);
+  flex-shrink: 0;
+}
+
+.pc-turn-overlay-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--pc-text);
+  flex-shrink: 0;
+}
+
+.pc-turn-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 0 6px;
+  height: 16px;
+  border-radius: 8px;
+}
+
+.pc-turn-badge.is-running {
+  color: var(--pc-accent);
+  background: rgba(56, 189, 248, 0.14);
+}
+
+.pc-turn-badge.is-done {
+  color: var(--pc-emerald);
+  background: rgba(52, 211, 153, 0.14);
+}
+
+.pc-turn-badge.is-error {
+  color: var(--pc-rose);
+  background: rgba(251, 113, 133, 0.14);
+}
+
+.pc-turn-overlay-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.pc-turn-meta-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  font-family: var(--pc-mono);
+  color: var(--pc-text-3);
+  background: var(--pc-surface);
+  padding: 0 5px;
+  height: 16px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.pc-turn-overlay-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.pc-turn-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  border: none;
+  background: transparent;
+  color: var(--pc-text-3);
+  cursor: pointer;
+  padding: 0;
+}
+
+.pc-turn-nav:hover:not(:disabled) {
+  background: var(--pc-surface);
+  color: var(--pc-text);
+}
+
+.pc-turn-nav:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.pc-turn-nav-pos {
+  font-size: 10px;
+  font-family: var(--pc-mono);
+  color: var(--pc-text-3);
+  padding: 0 2px;
+}
+
+.pc-turn-overlay-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 9px 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.pc-turn-text {
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--pc-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.pc-turn-empty {
+  font-size: 11px;
+  color: var(--pc-text-3);
+  padding: 8px 2px;
+}

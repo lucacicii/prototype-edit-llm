@@ -52,6 +52,7 @@ import { useAgentChatStream } from './useAgentChatStream'
 import { ChatMessageItem } from './ChatMessageItem'
 import { ChatQuestionBubble } from './ChatQuestionBubble'
 import { ChatEmptyState } from './ChatEmptyState'
+import { TurnDots, TurnDetailOverlay } from './TurnDots'
 import './chat.css'
 
 export interface PointedTarget {
@@ -222,6 +223,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const materials = useMaterialStore((s) => s.materials)
 
   const [promptInput, setPromptInput] = useState('')
+  /** 打开的是第几轮（`stream.turns` 的下标）；null = 抽屉关着。 */
+  const [openTurnIndex, setOpenTurnIndex] = useState<number | null>(null)
   const [cursorPos, setCursorPos] = useState(0)
   const [fileSuggestActive, setFileSuggestActive] = useState(0)
   const [fileSuggestDismissed, setFileSuggestDismissed] = useState(false)
@@ -267,6 +270,27 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   /** 正在跑的 run 属于当前项目才展示流式内容；别的项目在跑时只当作「忙」。 */
   const streamHere = stream.isStreaming && stream.runPrototypeId === runKey
   const runElsewhere = stream.isStreaming && !streamHere
+
+  /**
+   * 圆点条覆盖**跑完仍在看**的那一次 run：跑完不立刻消失，切走项目才隐藏。
+   * 换原型时 `lastRunPrototypeId` 与新 run 的归属一起变，所以不会串台。
+   */
+  const turnsHere = stream.turns.length > 0 && stream.lastRunPrototypeId === runKey
+
+  /**
+   * 切项目、或新 run 开始时把抽屉收起来，避免它指向另一批轮次。
+   * 注意**不**在 run 结束时关：那时轮刚冻结，用户往往正开着抽屉看它收尾。
+   */
+  const lastActiveRunIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    const nextRunId = stream.activeRunId
+    if (nextRunId && nextRunId !== lastActiveRunIdRef.current) setOpenTurnIndex(null)
+    lastActiveRunIdRef.current = nextRunId
+  }, [stream.activeRunId])
+
+  useEffect(() => {
+    setOpenTurnIndex(null)
+  }, [convId])
 
   // 主进程那边的串行守卫才是硬保证，这里只是让「生成拓扑图」在 run 期间看着就是不可点的。
   useEffect(() => {
@@ -952,6 +976,16 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         </div>
       )}
 
+      {/* 轮次圆点条：当前这个 run 的第 1、2、3... 轮；点开回看该轮思考与工具 */}
+      {turnsHere && (
+        <TurnDots
+          turns={stream.turns}
+          openIndex={openTurnIndex}
+          onOpen={setOpenTurnIndex}
+          onClose={() => setOpenTurnIndex(null)}
+        />
+      )}
+
       {/* 消息流 / 空状态 */}
       <div className="pc-feed" ref={chatScrollEl} onScroll={handleScroll}>
         {isEmptyConversation && !streamHere ? (
@@ -1248,6 +1282,34 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           </div>
         )}
       </div>
+
+      {/* 单轮详情抽屉：浮在面板之上，不挤压消息流 */}
+      {turnsHere &&
+        openTurnIndex !== null &&
+        stream.turns[openTurnIndex] &&
+        (() => {
+          const turn = stream.turns[openTurnIndex]
+          // 正在跑的那一轮给实时切片（`liveSegments` 就是它），已完成的轮给冻结的那份。
+          // run 的 finally 会把未收口的轮落成 done，所以 running 一定意味着还在跑。
+          const isCurrentTurn = turn.status === 'running'
+          return (
+            <TurnDetailOverlay
+              turn={turn}
+              segments={isCurrentTurn ? stream.liveSegments : turn.segments}
+              isStreaming={isCurrentTurn}
+              index={openTurnIndex}
+              total={stream.turns.length}
+              onPrev={() => setOpenTurnIndex((prev) => (prev === null ? prev : Math.max(0, prev - 1)))}
+              onNext={() =>
+                setOpenTurnIndex((prev) =>
+                  prev === null ? prev : Math.min(stream.turns.length - 1, prev + 1)
+                )
+              }
+              onClose={() => setOpenTurnIndex(null)}
+              liveElapsedMs={stream.elapsedMs}
+            />
+          )
+        })()}
     </section>
   )
 }

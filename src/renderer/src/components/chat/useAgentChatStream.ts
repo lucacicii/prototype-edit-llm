@@ -27,6 +27,29 @@ export type LiveSegment =
   | { kind: 'text'; text: string }
   | { kind: 'tools'; tools: ActiveToolInfo[] }
 
+/**
+ * 一次 run 里的一轮（turn）。
+ *
+ * thunder 的每个 observation 事件都带 `turn`，所以轮次可以就地切分：换轮时
+ * 换一条新的 segments 数组，上一轮整体冻住。界面上这些轮由一排圆点索引 ——
+ * 主体区只直播当前轮，跑完的轮折叠回圆点，点开可回看该轮全部思考与工具。
+ *
+ * 只活在内存里（不做持久化）：下一次 run 开始时清空。
+ */
+export interface LiveTurn {
+  turn: number
+  /** 该轮的时序切片；正在跑时这个数组就是实时 segments。 */
+  segments: LiveSegment[]
+  status: 'running' | 'done' | 'error'
+  toolCount: number
+  /** 相对 run 起点的毫秒偏移，用于给正在跑的那一轮做实时计时。 */
+  startedAtOffset: number
+  durationMs?: number
+  promptTokens?: number
+  completionTokens?: number
+  finishReason?: string
+}
+
 export interface ChatRunMetrics {
   tps?: number
   promptTokens?: number
@@ -213,12 +236,22 @@ function updateTool(
   return false
 }
 
-/** 从流式 segments 里抽出正文（给取消时补一条“部分生成”的消息用）。 */
+/** 从一组切片里抽出正文。 */
 export function liveTextOf(segments: LiveSegment[]): string {
   return segments
     .filter((s): s is Extract<LiveSegment, { kind: 'text' }> => s.kind === 'text')
     .map((s) => s.text)
     .join('')
+}
+
+/**
+ * 整轮 run 的正文（按轮序拼接）。
+ *
+ * 分轮之后 `segmentsRef` 只指向**当前轮**，所以「中断前已生成的部分内容」
+ * 必须从 turns 里取 —— 否则取消时只会带上最后那一轮的文字。
+ */
+function runTextOf(turns: LiveTurn[]): string {
+  return turns.map((t) => liveTextOf(t.segments)).join('')
 }
 
 /** 非 done 的结束原因没有得到回答，要在转写里说明为什么。 */
@@ -244,6 +277,10 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
   const [runPrototypeId, setRunPrototypeId] = useState<string | null>(null)
   const runPrototypeIdRef = useRef<string | null>(null)
   const [liveSegments, setLiveSegments] = useState<LiveSegment[]>([])
+  /** 本次 run 的轮次（含已完成的）；只在内存里，下一次 run 开始时清空。 */
+  const [turns, setTurns] = useState<LiveTurn[]>([])
+  /** 上一次 run 属于哪个原型 —— 跑完后圆点条还留着，靠它判断该不该显示。 */
+  const [lastRunPrototypeId, setLastRunPrototypeId] = useState<string | null>(null)
   const [elapsedMs, setElapsedMs] = useState(0)
 
   // 指标
@@ -259,7 +296,12 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
   const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null)
   const [queuedMessages, setQueuedMessages] = useState<string[]>([])
 
+  /** 当前轮的切片数组（`liveSegments` 是它的快照）；换轮时整体换新。 */
   const segmentsRef = useRef<LiveSegment[]>([])
+  const turnsRef = useRef<LiveTurn[]>([])
+  const currentTurnRef = useRef<LiveTurn | null>(null)
+  /** run 起点，给每轮算相对偏移（正在跑的那一轮的实时时长）。 */
+  const runStartRef = useRef(0)
   const activeRunIdRef = useRef<string | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const errorDetailRef = useRef<Map<string, string>>(new Map())
@@ -283,6 +325,38 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
     setLiveSegments([...segmentsRef.current])
   }, [])
 
+  /** 轮次数组浅拷贝一版推给 React（segments 数组本身是共享引用）。 */
+  const publishTurns = useCallback(() => {
+    setTurns(turnsRef.current.map((t) => ({ ...t })))
+  }, [])
+
+  /**
+   * 把「当前轮」推进到事件里带的那个 turn 号。
+   *
+   * 事件流里 `turn_start` 一定会先到，但这里不依赖它：任何带 turn 的事件都会
+   * 触发推进，所以即使中间漏了一帧，轮次边界也不会错位。
+   */
+  const ensureTurn = useCallback((turn: number): LiveTurn => {
+    const current = currentTurnRef.current
+    const no = Number.isFinite(turn) && turn > 0 ? turn : (current?.turn ?? 1)
+    if (current && current.turn === no) return current
+    if (current) current.status = 'done'
+    const next: LiveTurn = {
+      turn: no,
+      segments: [],
+      status: 'running',
+      toolCount: 0,
+      startedAtOffset: Math.max(0, Date.now() - runStartRef.current)
+    }
+    turnsRef.current.push(next)
+    currentTurnRef.current = next
+    // 关键：把实时写入目标切到新轮的数组上，上一轮就此冻住。
+    segmentsRef.current = next.segments
+    // 新轮立刻就露面：`turn_start` 万一缺席，圆点也不会漏。
+    publishTurns()
+    return next
+  }, [publishTurns])
+
   const stopTimer = useCallback(() => {
     if (timerRef.current) {
       clearInterval(timerRef.current)
@@ -292,6 +366,10 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
 
   const resetStreamState = useCallback(() => {
     segmentsRef.current = []
+    turnsRef.current = []
+    currentTurnRef.current = null
+    runStartRef.current = Date.now()
+    setTurns([])
     setLiveSegments([])
     setStreamTokensCount(0)
     setStreamReasoningCount(0)
@@ -313,8 +391,16 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
     (ev: any, runId: string) => {
       if (!ev || typeof ev !== 'object') return
       switch (ev.type) {
+        case 'turn_start': {
+          // 立刻切空主体区：上一轮的 thinking/tool 当场折叠回圆点，
+          // 而不是拖到新轮的第一个 delta 才换。
+          ensureTurn(typeof ev.turn === 'number' ? ev.turn : 0)
+          publishSegments()
+          break
+        }
         case 'token_delta': {
           const delta = typeof ev.delta === 'string' ? ev.delta : ''
+          ensureTurn(typeof ev.turn === 'number' ? ev.turn : 0)
           appendDelta(segmentsRef.current, 'text', delta)
           textBufRef.current += delta
           // 快照在跑就交给它：权威值随后会覆盖同一位置。
@@ -328,6 +414,7 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
         }
         case 'reasoning_delta': {
           const delta = typeof ev.delta === 'string' ? ev.delta : ''
+          ensureTurn(typeof ev.turn === 'number' ? ev.turn : 0)
           appendDelta(segmentsRef.current, 'reasoning', delta)
           reasoningBufRef.current += delta
           if (!hasSnapshotRef.current) {
@@ -347,14 +434,18 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
             arguments: ev.arguments || {},
             isRunning: true
           }
+          const turn = ensureTurn(typeof ev.turn === 'number' ? ev.turn : 0)
           if (!updateTool(segmentsRef.current, toolCallId, () => tool)) {
             appendTool(segmentsRef.current, tool)
+            turn.toolCount += 1
           }
+          publishTurns()
           publishSegments()
           break
         }
         case 'tool_exec_result': {
           const toolCallId = String(ev.tool_call_id || '')
+          ensureTurn(typeof ev.turn === 'number' ? ev.turn : 0)
           updateTool(segmentsRef.current, toolCallId, (t) => ({
             ...t,
             isRunning: false,
@@ -389,6 +480,20 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
           break
         }
         case 'turn_end': {
+          // 轮结束：把这一轮冻住（圆点由此从 running 变 done），并记下它的账。
+          {
+            const turn = ensureTurn(typeof ev.turn === 'number' ? ev.turn : 0)
+            turn.status = ev.finish_reason === 'error' ? 'error' : 'done'
+            turn.finishReason = typeof ev.finish_reason === 'string' ? ev.finish_reason : undefined
+            const dur = typeof ev.stats?.duration_ms === 'number' ? ev.stats.duration_ms : undefined
+            if (dur !== undefined) turn.durationMs = dur
+            if (typeof ev.stats?.prompt_tokens === 'number') turn.promptTokens = ev.stats.prompt_tokens
+            if (typeof ev.stats?.completion_tokens === 'number') {
+              turn.completionTokens = ev.stats.completion_tokens
+            }
+            currentTurnRef.current = null
+            publishTurns()
+          }
           const stats = ev.stats
           if (stats) {
             const pt = typeof stats.prompt_tokens === 'number' ? stats.prompt_tokens : undefined
@@ -457,13 +562,17 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
         case 'error': {
           const message = String(ev.message || '').trim()
           if (message) errorDetailRef.current.set(runId, message)
+          if (currentTurnRef.current) {
+            currentTurnRef.current.status = 'error'
+            publishTurns()
+          }
           break
         }
         default:
           break
       }
     },
-    [applyMetrics, publishSegments]
+    [applyMetrics, ensureTurn, publishSegments, publishTurns]
   )
 
   /** 发起一轮 run，并在结束时归还结果。调用方负责追加聊天消息。 */
@@ -475,7 +584,7 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
 
       resetStreamState()
       errorDetailRef.current.delete(params.runId)
-      segmentsRef.current = []
+      setLastRunPrototypeId(params.prototypeId)
       setIsStreaming(true)
       setActiveRunId(params.runId)
       setRunPrototypeId(params.prototypeId)
@@ -533,14 +642,14 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
           return {
             ok: false,
             error: res?.error ?? '未知错误',
-            partialContent: liveTextOf(segmentsRef.current).trim() || undefined
+            partialContent: runTextOf(turnsRef.current).trim() || undefined
           }
         }
 
         // 结束原因带 failure notice 时，把它作为正文呈现给调用方。
         const reason = String(res.finishReason || 'done')
         const notice = failureNoticeFor(reason, errorDetailRef.current.get(params.runId))
-        const streamed = liveTextOf(segmentsRef.current)
+        const streamed = runTextOf(turnsRef.current)
         let finalContent: string | null = res.finalContent ?? null
         if (notice) {
           finalContent = `${notice}${streamed ? `\n\n${streamed}` : ''}`
@@ -561,9 +670,18 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
         return {
           ok: false,
           error: err?.message ?? String(err),
-          partialContent: liveTextOf(segmentsRef.current).trim() || undefined
+          partialContent: runTextOf(turnsRef.current).trim() || undefined
         }
       } finally {
+        // 收口：最后一轮若没等到 turn_end（取消/异常），也把圆点落成终态。
+        const pendingTurn = currentTurnRef.current
+        if (pendingTurn) {
+          pendingTurn.status = pendingTurn.status === 'error' ? 'error' : 'done'
+          pendingTurn.durationMs =
+            pendingTurn.durationMs ?? Math.max(0, Date.now() - runStartRef.current - pendingTurn.startedAtOffset)
+          currentTurnRef.current = null
+          publishTurns()
+        }
         offStream?.()
         offQuestion?.()
         offCode?.()
@@ -576,7 +694,7 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
         stopTimer()
       }
     },
-    [applyEvent, resetStreamState, stopTimer]
+    [applyEvent, publishTurns, resetStreamState, stopTimer]
   )
 
   const cancelRun = useCallback(async () => {
@@ -664,6 +782,10 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
     activeRunId,
     runPrototypeId,
     liveSegments,
+    /** 本次 run 的分轮结果（圆点条的输入）。 */
+    turns,
+    /** 上一次 run 归属的原型；圆点条在跑完后仍要显示，靠它判断。 */
+    lastRunPrototypeId,
     elapsedMs,
     lastRunMetrics,
     streamingMetrics: {
