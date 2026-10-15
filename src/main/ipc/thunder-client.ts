@@ -30,6 +30,8 @@ export interface ModelInfo {
   available: boolean;
 }
 
+export type ThunderPermissionMode = 'plan' | 'ask' | 'acceptEdits' | 'yolo';
+
 export interface RunTaskOptions {
   taskId: string;
   prompt: string;
@@ -41,6 +43,8 @@ export interface RunTaskOptions {
   useMock?: boolean;
   workspaceDir?: string;
   extraWorkspaceDirs?: string[];
+  /** Approval mode (plan | ask | acceptEdits | yolo). Defaults to yolo in prototype-edit-llm. */
+  mode?: ThunderPermissionMode | string;
   /** Disable ask_user_question for clients that cannot answer it. */
   headless?: boolean;
   /** Callback for real-time observed events (tokens, tools, turns) */
@@ -168,6 +172,19 @@ export class ThunderClient extends EventEmitter {
   }
 
   /**
+   * Switch the approval mode for a session.
+   */
+  public async setMode(
+    sessionId: string,
+    mode: ThunderPermissionMode | string
+  ): Promise<{ session_id: string; mode: string }> {
+    return this.sendRequest('set_mode', {
+      session_id: sessionId,
+      mode,
+    });
+  }
+
+  /**
    * Run an Agent task and stream tokens/tool events.
    */
   public async runTask(opts: RunTaskOptions): Promise<any> {
@@ -205,6 +222,7 @@ export class ThunderClient extends EventEmitter {
         prompt: opts.prompt,
         session_id: opts.sessionId,
         model: opts.model,
+        mode: opts.mode ?? 'yolo',
         ...(opts.modelDescriptor ? { model_descriptor: opts.modelDescriptor } : {}),
         ...(opts.thinkingLevel ? { thinking_level: opts.thinkingLevel } : {}),
         ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
