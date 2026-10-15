@@ -884,6 +884,39 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           </button>
         </div>
 
+        {stream.isStreaming && stream.agentStatus && stream.agentStatus.phase !== 'idle' && stream.agentStatus.phase !== 'done' && (
+          <div className="flex items-center gap-1.5 text-[11px] px-2 py-0.5 rounded-full bg-slate-800/90 border border-slate-700 text-slate-300 flex-shrink-0 animate-fadeIn">
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                stream.agentStatus.phase === 'error'
+                  ? 'bg-red-400'
+                  : stream.agentStatus.phase === 'awaiting_user' || stream.agentStatus.phase === 'paused'
+                    ? 'bg-amber-400 animate-pulse'
+                    : 'bg-emerald-400 animate-pulse'
+              }`}
+            />
+            <span className="font-medium text-slate-200">
+              {stream.agentStatus.phase === 'tool' && stream.agentStatus.tool
+                ? `运行 ${stream.agentStatus.tool}`
+                : stream.agentStatus.phase === 'thinking'
+                  ? '思考中'
+                  : stream.agentStatus.phase === 'streaming'
+                    ? '生成中'
+                    : stream.agentStatus.phase === 'awaiting_user'
+                      ? '等待回答'
+                      : stream.agentStatus.phase === 'paused'
+                        ? '已暂停'
+                        : stream.agentStatus.phase === 'compacting'
+                          ? '压缩上下文'
+                          : stream.agentStatus.phase === 'error'
+                            ? '出错'
+                            : stream.agentStatus.phase}
+            </span>
+            {stream.agentStatus.turn > 0 && (
+              <span className="text-[10px] text-slate-400">R{stream.agentStatus.turn}</span>
+            )}
+          </div>
+        )}
       </header>
 
       {/* 未配置模型提示 */}

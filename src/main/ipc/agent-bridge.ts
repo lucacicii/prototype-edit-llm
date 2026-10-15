@@ -594,6 +594,16 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
       win.webContents.send('agent:ui-request', msg)
     }
   })
+  daemonClient.on('mode_changed', (msg: any) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      win.webContents.send('agent:mode-changed', msg)
+    }
+  })
+  daemonClient.on('ui_notice', (msg: any) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      win.webContents.send('agent:ui-notice', msg)
+    }
+  })
   try {
     daemonClient.start()
   } catch (err) {

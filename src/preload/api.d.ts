@@ -523,6 +523,8 @@ export interface IAgentAPI {
       stackChanged?: boolean
     }) => void
   ) => () => void
+  onModeChanged?: (callback: (data: { session_id: string; mode: string; previous?: string; source: string; task_id?: string }) => void) => () => void
+  onUiNotice?: (callback: (data: { source: string; message: string; level: string }) => void) => () => void
 }
 
 export interface IMaterialAPI {

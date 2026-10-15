@@ -133,6 +133,16 @@ const agentApi = {
     }) => callback(data)
     ipcRenderer.on('agent:code-updated', handler)
     return () => ipcRenderer.removeListener('agent:code-updated', handler)
+  },
+  onModeChanged: (callback: (data: any) => void) => {
+    const handler = (_: any, data: any) => callback(data)
+    ipcRenderer.on('agent:mode-changed', handler)
+    return () => ipcRenderer.removeListener('agent:mode-changed', handler)
+  },
+  onUiNotice: (callback: (data: any) => void) => {
+    const handler = (_: any, data: any) => callback(data)
+    ipcRenderer.on('agent:ui-notice', handler)
+    return () => ipcRenderer.removeListener('agent:ui-notice', handler)
   }
 }
 

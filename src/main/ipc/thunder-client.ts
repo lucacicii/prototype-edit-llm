@@ -47,6 +47,20 @@ export interface RunTaskOptions {
   onEvent?: (event: any) => void;
 }
 
+export interface ModeChangedEvent {
+  session_id: string;
+  task_id?: string;
+  mode: string;
+  previous?: string;
+  source: string;
+}
+
+export interface UiNoticeEvent {
+  source: string;
+  message: string;
+  level: string;
+}
+
 export class ThunderClient extends EventEmitter {
   private process: ChildProcess | null = null;
   private lineReader: readline.Interface | null = null;
@@ -262,6 +276,22 @@ export class ThunderClient extends EventEmitter {
     return res?.cancelled ?? false;
   }
 
+  /**
+   * Listen for mode_changed events pushed by the daemon.
+   */
+  public onModeChanged(listener: (evt: ModeChangedEvent) => void): () => void {
+    this.on('mode_changed', listener);
+    return () => this.off('mode_changed', listener);
+  }
+
+  /**
+   * Listen for ui_notice events pushed by the daemon.
+   */
+  public onUiNotice(listener: (evt: UiNoticeEvent) => void): () => void {
+    this.on('ui_notice', listener);
+    return () => this.off('ui_notice', listener);
+  }
+
   private sendRequest(method: string, params: Record<string, any>): Promise<any> {
     return new Promise((resolve, reject) => {
       if (!this.process || !this.process.stdin?.writable) {
@@ -324,6 +354,10 @@ export class ThunderClient extends EventEmitter {
         this.emit('task_paused', msg);
       } else if (type === 'task_queue_update') {
         this.emit('task_queue_update', msg);
+      } else if (type === 'mode_changed') {
+        this.emit('mode_changed', msg);
+      } else if (type === 'ui_notice') {
+        this.emit('ui_notice', msg);
       }
     } catch (e) {
       console.error('[ThunderClient] Failed to parse daemon output line:', trimmed, e);

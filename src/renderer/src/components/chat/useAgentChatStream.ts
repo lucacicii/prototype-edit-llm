@@ -94,6 +94,27 @@ export interface AgentMetricsSnapshot {
   wall_duration_ms?: number
 }
 
+export type ThunderAgentPhase =
+  | 'idle'
+  | 'thinking'
+  | 'streaming'
+  | 'tool'
+  | 'awaiting_user'
+  | 'paused'
+  | 'compacting'
+  | 'done'
+  | 'error'
+
+export interface ThunderAgentStatus {
+  session_id: string
+  phase: ThunderAgentPhase
+  tool?: string
+  turn: number
+  detail?: string
+  started_at_ms: number
+  seq: number
+}
+
 /**
  * 快速 token 估算，与 thunder 内核 `core::token_estimator` 同一口径：
  * CJK/假名/谚文约 1.5 token/字，ASCII（空白半权）约 3.7 字符/token，标点 +0.2。
@@ -295,6 +316,7 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
   // 交互
   const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null)
   const [queuedMessages, setQueuedMessages] = useState<string[]>([])
+  const [agentStatus, setAgentStatus] = useState<ThunderAgentStatus | null>(null)
 
   /** 当前轮的切片数组（`liveSegments` 是它的快照）；换轮时整体换新。 */
   const segmentsRef = useRef<LiveSegment[]>([])
@@ -377,6 +399,7 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
     setElapsedMs(0)
     setPendingQuestion(null)
     setQueuedMessages([])
+    setAgentStatus(null)
     hasSnapshotRef.current = false
     textBufRef.current = ''
     reasoningBufRef.current = ''
@@ -456,6 +479,16 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
           break
         }
         case 'custom': {
+          if (ev.kind === 'agent_status' && ev.payload && typeof ev.payload === 'object') {
+            const nextStatus = ev.payload as ThunderAgentStatus
+            setAgentStatus((prev) => {
+              if (prev && typeof nextStatus.seq === 'number' && typeof prev.seq === 'number' && nextStatus.seq <= prev.seq) {
+                return prev
+              }
+              return nextStatus
+            })
+            break
+          }
           // thunder 0.4+ 的权威遥测：token 数、速率、上下文占用全部以它为准。
           if (ev.kind !== 'metrics_update' || !ev.payload || typeof ev.payload !== 'object') break
           const snap = ev.payload as AgentMetricsSnapshot
@@ -793,6 +826,7 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
       tps: liveTps,
       reasoningCount: streamReasoningCount
     },
+    agentStatus,
     sessionTotalTokens,
     currentContextTokens,
     contextWindowLimit: options.contextWindowLimit,
