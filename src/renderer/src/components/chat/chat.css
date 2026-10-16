@@ -21,12 +21,30 @@
 }
 
 /* ===== 消息流 ===== */
+/*
+ * 正文必须可选中。
+ *
+ * App 根与 .pc-chat-root 都带着 Tailwind 的 select-none —— 那是给窗口拖拽区
+ * （.app-drag）和各类按钮用的，但 select-none 会被所有后代继承，于是思考块、
+ * 工具输出、Markdown 代码块在鼠标按下滑动时全都选不中，用户只能整条复制。
+ * 这里在消息流这一层收回选中权（同权重、chat.css 在 main.css 之后加载，故生效）。
+ * 交互 chrome（header / 指标条 / 操作按钮）继续留在 select-none 里，见下方各条。
+ */
 .pc-feed {
   flex: 1 1 auto;
   overflow-y: auto;
   padding: 16px 14px 12px;
   display: flex;
   flex-direction: column;
+  user-select: text;
+}
+
+/* 消息流里的交互 chrome：这些是按钮/卡片，选中正文时别把它们的文字一起卷进去，
+   也别让「按住拖一下」看起来像在选字（拖动会顺带触发 click）。 */
+.pc-user-toolbar,
+.pc-msg-footer,
+.pc-empty {
+  user-select: none;
 }
 
 .pc-messages {
@@ -1417,6 +1435,8 @@
   display: flex;
   flex-direction: column;
   gap: 7px;
+  /* 回看抽屉不在 .pc-feed 里，选中权要自己收回一份 */
+  user-select: text;
 }
 
 .pc-turn-text {
