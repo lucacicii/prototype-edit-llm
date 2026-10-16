@@ -1,17 +1,25 @@
 import React, { useState } from 'react'
 import { Modal } from 'antd'
-import { Server, Settings2, ArrowLeft, X } from 'lucide-react'
+import { Server, Settings2, BookText, ArrowLeft, X } from 'lucide-react'
 import { ProviderPane } from './ProviderPane'
 import { AgentPane } from './AgentPane'
+import { SpecDocPane } from './SpecDocPane'
 import { AddProviderModal } from './AddProviderModal'
+import { SETTINGS_SECTIONS, type SettingsSectionKey } from './sections'
 
 interface SettingsModalProps {
   open: boolean
   onClose: () => void
 }
 
+const SECTION_ICON: Record<SettingsSectionKey, React.ReactNode> = {
+  provider: <Server size={14} />,
+  agent: <Settings2 size={14} />,
+  spec: <BookText size={14} />
+}
+
 export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) => {
-  const [activeTab, setActiveTab] = useState<'provider' | 'agent'>('provider')
+  const [activeTab, setActiveTab] = useState<SettingsSectionKey>('provider')
   const [addProviderOpen, setAddProviderOpen] = useState(false)
 
   return (
@@ -45,28 +53,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
               <div className="px-3 py-2 text-xs font-bold text-slate-400 uppercase tracking-wider">
                 系统设置
               </div>
-              <button
-                onClick={() => setActiveTab('provider')}
-                className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition cursor-pointer ${
-                  activeTab === 'provider'
-                    ? 'bg-sky-600 text-white shadow'
-                    : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'
-                }`}
-              >
-                <Server size={14} />
-                <span>服务商管理</span>
-              </button>
-              <button
-                onClick={() => setActiveTab('agent')}
-                className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition cursor-pointer ${
-                  activeTab === 'agent'
-                    ? 'bg-sky-600 text-white shadow'
-                    : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'
-                }`}
-              >
-                <Settings2 size={14} />
-                <span>通用与 Agent</span>
-              </button>
+              {SETTINGS_SECTIONS.map((s) => (
+                <button
+                  key={s.key}
+                  onClick={() => setActiveTab(s.key)}
+                  className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition cursor-pointer ${
+                    activeTab === s.key
+                      ? 'bg-sky-600 text-white shadow'
+                      : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'
+                  }`}
+                >
+                  {SECTION_ICON[s.key]}
+                  <span>{s.label}</span>
+                </button>
+              ))}
             </div>
 
             <button
@@ -80,11 +80,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
 
           {/* 右侧面板 */}
           <section className="flex-1 min-w-0 bg-slate-900/60 overflow-hidden">
-            {activeTab === 'provider' ? (
+            {activeTab === 'provider' && (
               <ProviderPane onOpenAddProvider={() => setAddProviderOpen(true)} />
-            ) : (
-              <AgentPane />
             )}
+            {activeTab === 'agent' && <AgentPane />}
+            {activeTab === 'spec' && <SpecDocPane />}
           </section>
         </div>
       </Modal>

@@ -142,33 +142,30 @@ export interface IPrototypeAPI {
 }
 
 export interface ITopologyAPI {
-  /** 分析项目源码生成页面跳转流转图，并落盘 topology.json / topology.html。 */
+  /** 分析项目源码生成页面说明书（Spec v2），并双写 spec.json / topology.json。 */
   generate: (params: { prototypeId: string }) => Promise<{
     ok: boolean
     runId?: string
     graph?: import('../shared/topology').TopologyGraph
+    spec?: import('../shared/spec').SpecDoc
     error?: string
     /** 模型没回 JSON 时，它实际回的那段原文。 */
     rawExcerpt?: string
     cancelled?: boolean
   }>
-  /** 各页面截图的缩略图：nodeId → dataURL。 */
-  shots: (params: { prototypeId: string }) => Promise<{
-    ok: boolean
-    shots?: Record<string, string>
-    error?: string
-  }>
-  /** 把整张拓扑图导出成一份自包含的 HTML（每页完整截图内联在里面）。 */
-  exportHtml: (params: { prototypeId: string }) => Promise<{
+  /** 停掉正在生成的那一轮。 */
+  cancel: () => Promise<{ ok: boolean }>
+  /**
+   * 导出说明书。`json` 是机器消费的真相，`markdown` 是给人读的文档；
+   * 缺省 json。老项目只有 topology.json 时会合成骨架再导出。
+   */
+  exportSpec: (params: { prototypeId: string; format?: 'json' | 'markdown' }) => Promise<{
     ok: boolean
     path?: string
-    /** 实际内联进去的截图张数。 */
-    shots?: number
+    format?: 'json' | 'markdown'
     error?: string
     cancelled?: boolean
   }>
-  /** 停掉正在生成的那一轮。 */
-  cancel: () => Promise<{ ok: boolean }>
 }
 
 export interface IHistoryAPI {

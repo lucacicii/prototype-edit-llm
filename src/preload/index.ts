@@ -149,13 +149,12 @@ const agentApi = {
 }
 
 const topologyApi = {
-  // 原型页面拓扑图（生成 → 截各页图 → 导出成一份自包含 HTML）
+  // 原型页面说明书（生成 Spec v2 + 投影旧图，双写落盘）
   generate: (params: { prototypeId: string }) => ipcRenderer.invoke('topology:generate', params),
   cancel: () => ipcRenderer.invoke('topology:cancel'),
-  // 节点缩略图（nodeId → dataURL）。单独取，避免把整页长图塞进 prototype:list。
-  shots: (params: { prototypeId: string }) => ipcRenderer.invoke('topology:shots', params),
-  exportHtml: (params: { prototypeId: string }) =>
-    ipcRenderer.invoke('topology:export-html', params)
+  // 导出说明书：json=机器消费的真相，markdown=给人读的文档。
+  exportSpec: (params: { prototypeId: string; format?: 'json' | 'markdown' }) =>
+    ipcRenderer.invoke('topology:export-spec', params)
 }
 
 const projectApi = {

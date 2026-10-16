@@ -1,24 +1,12 @@
 /**
- * 拓扑图生成：提示词、回包解析、自包含 HTML 渲染。
+ * 拓扑图/Spec 生成：提示词、回包解析。
  *
- * 三步都放在一个模块里，因为它们改的其实是同一份契约 ——
- * 提示词里描述的 JSON、解析器接受的形状、渲染器吃的字段，
- * 分开写就会各说各话。
- *
- * 注意渲染出的 HTML 里**不能出现 `<script>`，也不能出现
- * `import ... from '...'` 这样的字样**：electron-vite 的 esmShimPlugin
- * 会连字符串字面量一起正则扫描主进程 bundle，找最后一个静态 import
- * 插 CJS 垫片（DEVELOPMENT.md §五.1）。纯静态 SVG 直接绕开这个坑。
+ * 提示词里描述的 JSON、解析器接受的形状、校验器吃的字段，
+ * 分开写就会各说各话，所以 prompt 与解析放同一模块。
+ * 校验在 `shared/spec.ts`（normalizeSpec），静态证据在 `spec-static.ts`。
  */
 
-import {
-  KIND_LABEL,
-  layerDepths,
-  TopologyGraph,
-  TopologyNode,
-  TopologyNodeKind,
-  TRIGGER_LABEL
-} from '../../shared/topology'
+import type { StaticEvidence } from './spec-static'
 
 export interface TopologySourceFile {
   file: string
@@ -35,6 +23,21 @@ export interface TopologyPromptInput {
   sources: TopologySourceFile[]
   /** 是否因为体积被截断，让模型知道有文件没看全。 */
   truncated: boolean
+}
+
+/** v2 Spec 生成的输入：源码 + 静态证据 + 截断明细。 */
+export interface SpecPromptInput {
+  projectName: string
+  techStack: string
+  entryFile: string
+  files: string[]
+  /** 入口全量 + 非入口证据窗口（命中行上下 40 行），无命中文件只给前 30 行。 */
+  sources: TopologySourceFile[]
+  /** 静态解析器打底的证据，全量内联。 */
+  evidence: StaticEvidence
+  /** 省略的文件与只给了窗口的文件，如实告知模型。 */
+  omittedFiles: string[]
+  windowedFiles: Array<{ file: string; ranges: string }>
 }
 
 const STACK_HINT: Record<string, string> = {
@@ -125,6 +128,118 @@ export function buildTopologyPrompt(input: TopologyPromptInput): string {
 }
 
 /**
+ * v2 Spec 生成的提示词：前端重写分析师产出可重写说明书。
+ *
+ * 与旧 `buildTopologyPrompt` 并存（旧函数保留供回退）。最终目标是“拿着
+ * spec 能用任意 UI 库重写”，所以字段的 required/rules/linkage 与动作的
+ * condition/params/sideEffect/target 一个都不能靠编 —— 无依据就写
+ * inferred，校验层会自动标 unverified。
+ */
+export function buildSpecPrompt(input: SpecPromptInput): string {
+  const stack = STACK_HINT[input.techStack] ?? input.techStack
+  const sections: string[] = []
+
+  sections.push(
+    [
+      `你是一名前端重写分析师。下面是一个已经做好的原型（${stack}），请把它整理成一份**页面说明书（Spec）** —— 拿着这份说明书，另一个工程师能用任意 UI 库（antd / element-plus 等）把原型完整重写出来。`,
+      ``,
+      `任务分三层：`,
+      `1. 页面列表：找出原型里的所有「页面 / 视图」。一个文件里用页内区块、hash 路由、条件渲染（v-if / useState）或弹窗实现的多个屏，全部拆成独立页面；底部 Tab / 顶部导航 / 侧边导航的每一项单独算一页，即使共用同一个视图容器；漏页比多页更糟。`,
+      `2. 页面关系：页面之间怎么跳转。每条跳转写清触发点、成立条件、携带参数、前置守卫。`,
+      `3. 页面逻辑：每个页面的业务详情 —— 有哪些输入字段（名称/类型/必填/校验规则/候选项/联动）、有哪些可触发的动作（触发条件/副作用/跳转目标）、布局上分哪几个区块。`,
+      `- 确实只有一个屏时，就返回 1 个页面、0 条跳转，不要硬造。`,
+      ``,
+      `【铁律 · 最重要】每个 page / flow / field / action 都必须带 evidence 字段，指向它的源码出处：`,
+      `- 引用静态证据或源码行：{"kind":"source","file":"index.html","line":423,"desc":"Tab 按钮 data-tab=\\"tpl\\""}`,
+      `- 引用静态证据命中：{"kind":"static","file":"index.html","line":423,"desc":"静态解析命中"}`
+      ,
+      `- 实在没有依据：{"kind":"inferred"}（下游会标为待核实）。`,
+      `缺少 evidence 的条目会被下游一律标记为"待核实"，说明书可信度直接归零。所以：宁可能力不够写少几条，也不要写一堆没有出处的条目。`
+    ].join('\n')
+  )
+
+  sections.push(
+    [
+      `【项目】`,
+      `- 名称：${input.projectName}`,
+      `- 技术栈：${input.techStack}（${stack}）`,
+      `- 入口文件：${input.entryFile}`,
+      input.files.length > 1 ? `- 全部源码文件：${input.files.join('、')}` : ''
+    ]
+      .filter(Boolean)
+      .join('\n')
+  )
+
+  sections.push(
+    [
+      `【静态证据】（从源码自动提取，必须逐条处理）`,
+      `- 候选页面 ${input.evidence.stats.pageCandidates} 个：下面列出的每个候选页必须逐个认领 —— 要么成为 pages 里的一项，要么书面说明合并理由（在 warnings 里写一句），禁止静默丢失。`,
+      `- 跳转证据 ${input.evidence.stats.jumpEvidence} 条：每条必须对应到某个 action/flow，或书面驳回（误报，因为…）。`,
+      `- 表单证据 ${input.evidence.stats.formFields} 个字段：静态命中的字段/按钮在 spec 里出现率必须是 100%（允许你补更多，但不许更少）。`,
+      '```json',
+      JSON.stringify({
+        pageCandidates: input.evidence.pageCandidates,
+        jumpEvidence: input.evidence.jumpEvidence,
+        formEvidence: input.evidence.formEvidence
+      }),
+      '```'
+    ].join('\n')
+  )
+
+  for (const source of input.sources) {
+    const isEntry = source.file === input.entryFile ? '（入口，全量）' : ''
+    sections.push([`【源码 ${source.file}${isEntry}】`, '```', source.code, '```'].join('\n'))
+  }
+
+  if (input.omittedFiles.length || input.windowedFiles.length) {
+    const lines = ['注意：上面不是全部源码，没给全的部分不要凭空猜测它的页面。']
+    if (input.omittedFiles.length) lines.push(`- 完全没读的文件：${input.omittedFiles.join('、')}`)
+    for (const w of input.windowedFiles) {
+      lines.push(`- ${w.file}：只给了命中行附近的窗口（${w.ranges}），窗口之外省略。`)
+    }
+    sections.push(lines.join('\n'))
+  }
+
+  // 源码块很长（可能 90k 字符），模型读完容易忘掉头部的铁律 —— 在离生成点
+  // 最近的位置再复述一次，并给一个完整的条目样例。
+  sections.push(
+    [
+      `【写之前再确认一次】`,
+      `每个 page、每条 flow、每个 field、每个 action 都要有 evidence，形如：`,
+      `  "evidence": [{"kind":"source","file":"${input.entryFile}","line":423,"desc":"Tab 按钮 data-tab=\\"tpl\\""}]`,
+      `没有出处的条目会被下游标成"待核实"，等于告诉重写者"这条别信"。请优先保证每条都带证据，而不是条目多。`,
+      `另外这两块不能省（它们是"业务逻辑详情"的主体）：`,
+      `- pages[].sections：本页布局分几个区块（如"底部 Tab 栏""搜索浮层"），每块写 title + layout + 归属的 fieldIds/actionIds。`,
+      `- pages[].route：本页在源码里靠什么切出来 —— {"tabKey":"tpl"} / {"anchor":"pricing"} / {"visibleWhen":"activeTab==='search'"}。`
+    ].join('\n')
+  )
+
+  sections.push(
+    [
+      `【输出要求】`,
+      `只输出一个 JSON 对象，不要任何解释、不要 markdown 代码块、不要多余文字。`,
+      `**不要创建、修改或删除任何文件，不要调用任何写文件的工具。**`,
+      `字段如下：`,
+      `- title: 字符串，说明书标题。`,
+      `- entry: 字符串，入口页面的 id。`,
+      `- pages: 数组，每项 { id, label, kind, file, line, summary, route, sections, fields, actions, evidence }。`,
+      `  - id: 短英文标识（kebab-case），全 spec 唯一。label: 中文名，用源码原叫法。kind: "page"|"view"|"modal"|"state"。file/line: 源码位置。summary: 2-3 句业务说明。`,
+      `  - route: 单文件多页语义的关键，如 {"tabKey":"mine"} / {"anchor":"capability"} / {"visibleWhen":"activeTab==='search'"}。`,
+      `  - sections: 数组，每项 { id, title, layout, order, visibleWhen, fieldIds, actionIds }，记录布局分区与字段归属。`,
+      `  - fields: 数组，每项 { name, label, type, required, rules, options, default, linkage, evidence }。type 只能是 text|number|date|select|radio|checkbox|textarea|search|password|custom，无法判断填 custom。rules 每项 { kind, value?, message? }，只有源码能佐证的才写。linkage 每项 { when, thenShow?, thenRequire?, thenSet?, targetField }。`,
+      `  - actions: 数组，每项 { id, label, trigger, condition, params, sideEffect, target, evidence }。trigger 只能是 click|submit|change|route|timer|other。sideEffect 从 stateSet|navigate|openModal|closeModal|toast|apiMock|filter|reset 里多选，只选有依据的。target 是跳转目标页 id，不跳转省略。`,
+      `- flows: 数组，每项 { from, to, label, trigger, condition, params, guards, evidence, actionId }。trigger 只能是 click|link|route|state|other。condition 是跳转成立条件，guards 是前置守卫（如"需登录"），actionId 反指来源 action。凡 action.target 指向他页者必须有对应 flow。`,
+      `- evidence: 数组，每项 { kind, file, line, snippet, desc }。kind 只能是 static|source|inferred —— 引用静态证据用 static，引用源码行用 source，没依据用 inferred。`,
+      `- warnings: 数组，字符串。候选页合并理由、误报驳回、编不出来的字段说明全写在这里。`,
+      ``,
+      `再次强调：你只输出 JSON，不要创建或修改任何文件。`
+    ].join('\n')
+  )
+
+  return sections.join('\n\n')
+}
+
+/**
  * 从模型回包里抠出 JSON。
  *
  * 尽量宽容：剥围栏、截掉前后废话、按括号计数找第一个平衡的对象
@@ -176,307 +291,3 @@ export function rawExcerpt(reply: string | null | undefined, limit = 600): strin
   return text.length > limit ? `${text.slice(0, limit)}…` : text
 }
 
-const KIND_COLORS: Record<TopologyNodeKind, { fill: string; stroke: string }> = {
-  page: { fill: '#eff6ff', stroke: '#3b82f6' },
-  view: { fill: '#ecfdf5', stroke: '#10b981' },
-  modal: { fill: '#fffbeb', stroke: '#f59e0b' },
-  state: { fill: '#faf5ff', stroke: '#a855f7' }
-}
-
-function escapeXml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;')
-}
-
-/** 单行截断：中英混排按字数估宽，超出部分用省略号。 */
-function clampLabel(value: string, max = 11): string {
-  const text = value.trim()
-  return text.length > max ? `${text.slice(0, max)}…` : text
-}
-
-/** SVG 的 id 只认字母数字和 -_ ，节点 id 是模型给的，先洗一遍再用。 */
-function svgId(value: string): string {
-  return value.replace(/[^a-zA-Z0-9_-]/g, '_')
-}
-
-/**
- * 导出文档的卡片几何。
- *
- * 卡片高度**由截图比例决定**（`imgH = 卡片宽 × 截图高 / 截图宽`）：整页长图
- * 原样完整放进去，不做任何裁切 —— 这正是导出改回 HTML 的原因，一张图片
- * 无论怎么抓都会有「装不下整张图」的问题，而 HTML 里长短卡片可以并存。
- *
- * 没有截图的节点给一个固定高度的占位框。
- */
-const CARD_WIDTH = 260
-const CARD_LABEL_HEIGHT = 48
-const NO_SHOT_IMAGE_HEIGHT = 170
-/** 横向：层与层之间的距离；纵向：同层卡片之间的距离。 */
-const H_GAP = 130
-const V_GAP = 44
-const CANVAS_PAD = 48
-
-interface DocCard {
-  x: number
-  y: number
-  w: number
-  h: number
-  imgH: number
-}
-
-/**
- * 给导出文档排版：层号定 x，卡片高度各不相同。
- *
- * 与面板用的 `layeredLayout` 是两套：面板卡片等尺寸（截图裁过、只露顶上
- * 一条），这里卡片必须随截图长短变化，所以每层的高度得取该层最高的一张，
- * 层内其余卡片垂直居中。
- */
-function layoutDocCards(graph: TopologyGraph, shots: Map<string, string>): {
-  cards: Map<string, DocCard>
-  width: number
-  height: number
-} {
-  const depth = layerDepths(graph.nodes, graph.edges, graph.entry)
-
-  const layers = new Map<number, TopologyNode[]>()
-  for (const node of graph.nodes) {
-    const layer = depth.get(node.id)!
-    if (!layers.has(layer)) layers.set(layer, [])
-    layers.get(layer)!.push(node)
-  }
-
-  const cardHeight = (node: TopologyNode): number => {
-    const shot = node.shot
-    if (!shots.has(node.id) || !shot?.width || !shot?.height) {
-      return NO_SHOT_IMAGE_HEIGHT + CARD_LABEL_HEIGHT
-    }
-    // 截图高度按比例换算；极端长图仍然完整保留（这就是「完整截图」的代价）
-    const imgH = Math.round((CARD_WIDTH * shot.height) / shot.width)
-    return imgH + CARD_LABEL_HEIGHT
-  }
-
-  const layerIds = Array.from(layers.keys()).sort((a, b) => a - b)
-  const cards = new Map<string, DocCard>()
-
-  // 先量每层的高度，最大的一层决定画布高度，其余层垂直居中
-  const heights = layerIds.map((layer) => {
-    const nodes = layers.get(layer)!
-    return nodes.reduce((sum, node) => sum + cardHeight(node), 0) + V_GAP * (nodes.length - 1)
-  })
-  const tallest = Math.max(...heights, 0)
-
-  layerIds.forEach((layer, index) => {
-    const nodes = layers.get(layer)!
-    let y = CANVAS_PAD + (tallest - heights[index]) / 2
-    for (const node of nodes) {
-      const h = cardHeight(node)
-      cards.set(node.id, {
-        x: CANVAS_PAD + index * (CARD_WIDTH + H_GAP),
-        y,
-        w: CARD_WIDTH,
-        h,
-        imgH: h - CARD_LABEL_HEIGHT
-      })
-      y += h + V_GAP
-    }
-  })
-
-  return {
-    cards,
-    width: CANVAS_PAD * 2 + layerIds.length * CARD_WIDTH + (layerIds.length - 1) * H_GAP,
-    height: CANVAS_PAD * 2 + tallest
-  }
-}
-
-/**
- * 把图渲染成一份**自包含的 HTML 文档**：内联样式 + 内联 SVG + 内联截图
- * （data URL），零网络请求、零脚本。这是导出的最终产物 —— 用户在应用里看
- * 到的是可交互面板，导出的是一份能直接发给别人、双击就能看的文件。
- *
- * 为什么不导出图片：图片要先在离屏窗口里画出 HTML 再抓屏，抓屏的取景依赖
- * 「量出来的 DOM 尺寸」，实测反复被视口继承、GPU 纹理上限这类环境因素咬到，
- * 右边整层节点被裁掉。HTML 没有这个问题：截图按原始比例完整内联，长短卡片
- * 各自排开，画布多大由内容决定，不由任何窗口决定。
- *
- * 约束：模板里**不能出现 `<script>`，也不能出现 `import ... from` 这样的
- * 字样** —— electron-vite 的 esmShimPlugin 会连字符串字面量一起正则扫描主
- * 进程 bundle（DEVELOPMENT.md §五.1）。所以这里只有静态标记。
- *
- * `shots` 是 nodeId → `data:image/png;base64,...`。缺图的节点画占位框，
- * 不拿别的页面的图冒充。
- */
-export function renderTopologyDocument(
-  graph: TopologyGraph,
-  shots: Map<string, string> = new Map()
-): string {
-  const { cards, width, height } = layoutDocCards(graph, shots)
-
-  const edgeMarkup = graph.edges
-    .map((edge, index) => {
-      const from = cards.get(edge.from)
-      const to = cards.get(edge.to)
-      if (!from || !to) return ''
-
-      const sx = from.x + from.w
-      const sy = from.y + from.h / 2
-      const tx = to.x
-      const ty = to.y + to.h / 2
-
-      let path: string
-      let labelX: number
-      let labelY: number
-      if (tx > sx + 8) {
-        // 从左往右：水平贝塞尔，控制点落在两端中间
-        const mid = (sx + tx) / 2
-        path = `M ${sx} ${sy} C ${mid} ${sy} ${mid} ${ty} ${tx} ${ty}`
-        labelX = mid
-        labelY = (sy + ty) / 2 - 6
-      } else {
-        // 同层或回跳：向右绕一圈，从目标右侧回到它身上。
-        // 不能让它落在目标左边 —— 那样最后一段会横穿整个节点，
-        // 箭头被节点盖住，看起来就像没连上。
-        const bow = 46 + (index % 3) * 18
-        const endX = to.x + to.w
-        const midX = Math.max(sx, endX) + bow
-        path = `M ${sx} ${sy} C ${midX} ${sy} ${midX} ${ty} ${endX} ${ty}`
-        labelX = midX
-        // 绕行边的中段会跟正向边挤在一起，往旁边让一格
-        labelY = (sy + ty) / 2 + 15
-      }
-
-      const label = edge.label?.trim()
-      return [
-        `      <path d="${path}" fill="none" stroke="#94a3b8" stroke-width="1.8" marker-end="url(#arrow)" />`,
-        label
-          ? `      <text class="edge-label" x="${labelX.toFixed(1)}" y="${labelY.toFixed(1)}">${escapeXml(clampLabel(label, 16))}</text>`
-          : ''
-      ]
-        .filter(Boolean)
-        .join('\n')
-    })
-    .join('\n')
-
-  const nodeMarkup = graph.nodes
-    .map((node) => {
-      const card = cards.get(node.id)!
-      const color = KIND_COLORS[node.kind]
-      const isEntry = node.id === graph.entry
-      const tooltip = [node.note, node.file && `${node.file}${node.line ? `:${node.line}` : ''}`]
-        .filter(Boolean)
-        .join(' · ')
-      const clipId = `clip-${svgId(node.id)}`
-      const shot = shots.get(node.id)
-      // 完整内联：宽度铺满卡片，高度就是按比例算出来的高度，不裁不缩
-      const image = shot
-        ? `        <image href="${shot}" x="${card.x}" y="${card.y}" width="${card.w}" height="${card.imgH}" preserveAspectRatio="xMidYMin meet" clip-path="url(#${clipId})" />`
-        : [
-            `        <rect x="${card.x}" y="${card.y}" width="${card.w}" height="${card.imgH}" fill="#f1f5f9" />`,
-            `        <text class="node-kind" x="${card.x + card.w / 2}" y="${card.y + card.imgH / 2 + 8}">未截到截图</text>`
-          ].join('\n')
-      const labelTop = card.y + card.imgH
-      return [
-        `      <g class="node">`,
-        tooltip ? `        <title>${escapeXml(tooltip)}</title>` : '',
-        `        <rect x="${card.x}" y="${card.y}" width="${card.w}" height="${card.h}" rx="10" fill="#ffffff" stroke="${color.stroke}" stroke-width="${isEntry ? 3 : 1.5}" />`,
-        image,
-        // 截图与标签之间的分隔线，兼作卡片的「标题栏」上沿
-        `        <line x1="${card.x}" y1="${labelTop}" x2="${card.x + card.w}" y2="${labelTop}" stroke="#e2e8f0" stroke-width="1" />`,
-        `        <text class="node-label" x="${card.x + card.w / 2}" y="${labelTop + 20}">${escapeXml(clampLabel(node.label, 16))}</text>`,
-        `        <text class="node-kind" x="${card.x + card.w / 2}" y="${labelTop + 35}" fill="${color.stroke}">${escapeXml(KIND_LABEL[node.kind])}${isEntry ? ' · 入口' : ''}</text>`,
-        `      </g>`
-      ]
-        .filter(Boolean)
-        .join('\n')
-    })
-    .join('\n')
-
-  const clipMarkup = graph.nodes
-    .map((node) => {
-      const card = cards.get(node.id)!
-      return `      <clipPath id="clip-${svgId(node.id)}"><rect x="${card.x}" y="${card.y}" width="${card.w}" height="${card.imgH}" rx="9" /></clipPath>`
-    })
-    .join('\n')
-
-  const usedKinds = Array.from(new Set(graph.nodes.map((n) => n.kind)))
-  const generated = graph.generatedAt
-    ? new Date(graph.generatedAt).toLocaleString('zh-CN')
-    : '未知时间'
-  const shotCount = graph.nodes.filter((n) => shots.has(n.id)).length
-  const warnings = graph.warnings?.length
-    ? `<ul class="warnings">${graph.warnings.map((w) => `<li>${escapeXml(w)}</li>`).join('')}</ul>`
-    : ''
-
-  return `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>${escapeXml(graph.title)}</title>
-<style>
-  :root { color-scheme: light; }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    padding: 28px 32px 40px;
-    background: #f8fafc;
-    color: #0f172a;
-    font: 14px/1.6 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
-  }
-  header { max-width: 1100px; }
-  h1 { margin: 0 0 6px; font-size: 20px; font-weight: 600; }
-  .meta { color: #64748b; font-size: 12px; }
-  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 12px; }
-  .legend span { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #475569; }
-  .legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; border: 1.5px solid; }
-  .warnings { margin: 12px 0 0; padding-left: 20px; color: #b45309; font-size: 12px; }
-  /* 画布宽度由内容决定；窗口窄了横向滚动就好，不做任何缩放，截图保持原样 */
-  .stage {
-    display: inline-block;
-    margin-top: 18px;
-    background: #ffffff;
-    border: 1px solid #e2e8f0;
-    border-radius: 12px;
-    padding: 6px;
-  }
-  svg { display: block; }
-  .node-label { text-anchor: middle; font-size: 14px; font-weight: 600; fill: #0f172a; }
-  .node-kind { text-anchor: middle; font-size: 11px; fill: #64748b; }
-  .edge-label { text-anchor: middle; font-size: 11px; fill: #475569; paint-order: stroke; stroke: #ffffff; stroke-width: 3px; stroke-linejoin: round; }
-  footer { max-width: 1100px; margin: 18px 0 0; color: #94a3b8; font-size: 12px; }
-</style>
-</head>
-<body>
-<header>
-  <h1>${escapeXml(graph.title)}</h1>
-  <div class="meta">共 ${graph.nodes.length} 个页面 · ${graph.edges.length} 条跳转 · ${shotCount} 张页面截图 · 生成于 ${escapeXml(generated)}</div>
-  <div class="legend">
-${usedKinds
-  .map(
-    (kind) =>
-      `    <span><i style="background:${KIND_COLORS[kind].fill};border-color:${KIND_COLORS[kind].stroke}"></i>${escapeXml(KIND_LABEL[kind])}</span>`
-  )
-  .join('\n')}
-  </div>
-  ${warnings}
-</header>
-<div class="stage">
-  <svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeXml(graph.title)}">
-    <defs>
-      <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-        <path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8" />
-      </marker>
-${clipMarkup}
-    </defs>
-${edgeMarkup}
-${nodeMarkup}
-  </svg>
-</div>
-<footer>由 Prototype Studio 生成 · 节点为各页面的完整截图 · 跳转方式：${TRIGGER_LABEL.click} / ${TRIGGER_LABEL.link} / ${TRIGGER_LABEL.route} / ${TRIGGER_LABEL.state} / ${TRIGGER_LABEL.other}</footer>
-</body>
-</html>
-`
-}
