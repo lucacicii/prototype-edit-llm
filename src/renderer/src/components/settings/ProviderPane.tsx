@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { Modal, Input, Button, Switch, Select, message } from 'antd'
-import { Plus, Trash2, Globe, Cpu, RefreshCw, CloudDownload, Sparkles, Wand2 } from 'lucide-react'
+import { Plus, Trash2, Globe, Cpu, RefreshCw, CloudDownload, Sparkles, Wand2, Download } from 'lucide-react'
 import {
   useAgentModelConfigStore,
   useProviderGroups,
@@ -45,6 +45,7 @@ export const ProviderPane: React.FC<ProviderPaneProps> = ({ onOpenAddProvider })
   const [providerApiKey, setProviderApiKey] = useState('')
   const [savingProvider, setSavingProvider] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+  const [syncingThunder, setSyncingThunder] = useState(false)
 
   // Model modal
   const [modelModalOpen, setModelModalOpen] = useState(false)
@@ -70,6 +71,42 @@ export const ProviderPane: React.FC<ProviderPaneProps> = ({ onOpenAddProvider })
     setRefreshing(true)
     await refresh()
     setRefreshing(false)
+  }
+
+  // 手动从 Thunder 配置一次性导入模型：只在点击时读 Thunder 配置目录
+  //（$THUNDER_CONFIG_DIR 优先，否则 ~/.thunder），按"自家已有永远赢"合并
+  //（同 id 跳过、同 provider 端点冲突整条跳过）。ok:true 即成功：无新增时
+  // 显示"无变化"，真冲突才走 warning；ok:false 只剩报错场景。
+  const handleSyncThunder = async () => {
+    if (!window.agent?.syncThunderModels) return
+    setSyncingThunder(true)
+    try {
+      const res = await window.agent.syncThunderModels()
+      if (res?.ok) {
+        const sourceSuffix = res.sourceDir ? `（来源：${res.sourceDir}）` : ''
+        const changed = (res.imported?.length ?? 0) > 0 || (res.keysImported?.length ?? 0) > 0
+        if (!changed) {
+          message.success(`Thunder 配置与自家一致，无变化${sourceSuffix}`)
+        } else {
+          const parts: string[] = []
+          if (res.imported?.length) parts.push(`导入 ${res.imported.length} 个（${res.imported.slice(0, 3).join('、')}${res.imported.length > 3 ? '…' : ''}）`)
+          if (res.skipped?.length) parts.push(`跳过 ${res.skipped.length} 个（自家已有）`)
+          if (res.conflicts?.length) parts.push(`${res.conflicts.length} 个冲突未导入`)
+          if (res.keysImported?.length) parts.push(`存入 ${res.keysImported.length} 把密钥`)
+          message.success(`从 Thunder 同步完成${sourceSuffix}：${parts.join('，')}`)
+          if (res.conflicts?.length) {
+            message.warning(`首条冲突：${res.conflicts[0].selectionId}——${res.conflicts[0].reason}`, 8)
+          }
+        }
+        await refresh()
+      } else {
+        message.error(res?.error || '未能从 Thunder 导入模型')
+      }
+    } catch (e: any) {
+      message.error(`同步失败：${e?.message ?? e}`)
+    } finally {
+      setSyncingThunder(false)
+    }
   }
 
   const handleSaveProvider = async () => {
@@ -286,6 +323,15 @@ export const ProviderPane: React.FC<ProviderPaneProps> = ({ onOpenAddProvider })
           >
             刷新
           </Button>
+          <Button
+            size="small"
+            icon={<Download size={12} className={syncingThunder ? 'animate-bounce' : ''} />}
+            onClick={handleSyncThunder}
+            loading={syncingThunder}
+            title="只在点击时读取 Thunder 配置（$THUNDER_CONFIG_DIR 优先，否则 ~/.thunder），按自家优先合并导入"
+          >
+            {syncingThunder ? '同步中…' : '从 Thunder 同步'}
+          </Button>
           <Button size="small" type="primary" icon={<Plus size={12} />} onClick={onOpenAddProvider}>
             添加服务商
           </Button>
@@ -302,6 +348,9 @@ export const ProviderPane: React.FC<ProviderPaneProps> = ({ onOpenAddProvider })
           </p>
           <Button type="primary" onClick={onOpenAddProvider}>
             立即添加
+          </Button>
+          <Button className="mt-2" icon={<Download size={12} />} onClick={handleSyncThunder} loading={syncingThunder} title="只在点击时读取 Thunder 配置（$THUNDER_CONFIG_DIR 优先，否则 ~/.thunder），按自家优先合并导入">
+            {syncingThunder ? '同步中…' : '从 Thunder 同步已有模型'}
           </Button>
         </div>
       ) : (

@@ -85,6 +85,8 @@ const agentApi = {
   // 服务商＝共享一个 provider id 的那组模型，所以删除它就是删掉整组 + 它的密钥。
   deleteProvider: (params: { provider: string }) =>
     ipcRenderer.invoke('agent:delete-provider', params),
+  // 手动从 Thunder 配置一次性导入模型（只在用户点击按钮时读 ~/.thunder）。
+  syncThunderModels: () => ipcRenderer.invoke('agent:sync-thunder-models'),
   // 改端点也是服务商级的：写一次整组，不能逐条 saveModel（会被自己的同组撞死）。
   saveProvider: (input: any) => ipcRenderer.invoke('agent:save-provider', input),
   fetchRemoteModels: (params: { provider?: string; api?: string; baseUrl: string; apiKey?: string }) =>

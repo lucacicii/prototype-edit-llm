@@ -426,6 +426,29 @@ export interface IAgentAPI {
     updated?: number
     keyStore?: { encrypted: boolean }
   }>
+  /**
+   * 手动从 Thunder 配置一次性导入模型。
+   *
+   * 只在用户点击按钮时读 Thunder 配置目录（`$THUNDER_CONFIG_DIR` 优先，
+   * 否则 `~/.thunder`）下的 models.json/auth.json，按"自家已有永远赢"合并进模型库：
+   * 同 provider/id 跳过，同 provider 端点不一致整条跳过，全新才入库；
+   * 密钥只给自家无 key 的 provider 存加密存储，永不覆盖。
+   * 无新增且无真冲突时返回 ok:true（幂等无变化）；sourceDir 标明实际读取的目录。
+   */
+  syncThunderModels: () => Promise<{
+    ok: boolean
+    error?: string
+    sourceDir?: string
+    /** 新入库的 selectionId 列表。 */
+    imported?: string[]
+    /** 自家已存在而跳过的 selectionId 列表。 */
+    skipped?: string[]
+    /** 端点冲突 / 校验失败而未入库的条目。 */
+    conflicts?: Array<{ selectionId: string; reason: string }>
+    /** 本次新存入加密存储的 provider 列表。 */
+    keysImported?: string[]
+    keyStore?: { encrypted: boolean }
+  }>
   fetchRemoteModels: (params: {
     provider?: string
     api?: string
