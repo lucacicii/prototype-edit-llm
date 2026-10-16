@@ -4,7 +4,6 @@ import {
   Globe,
   Code2,
   Clock,
-  FolderOutput,
   PanelLeftOpen,
   PanelLeftClose,
   Share2
@@ -17,7 +16,6 @@ import { EmbeddedBrowserViewer, type EmbeddedBrowserViewerRef } from './componen
 import { CodeEditorPane } from './components/editor/CodeEditorPane'
 import { TopologyPanel } from './components/topology/TopologyPanel'
 import { SettingsModal } from './components/settings/SettingsModal'
-import { ExportModal } from './components/modals/ExportModal'
 import { VersionHistoryModal } from './components/modals/VersionHistoryModal'
 import {
   usePrototypeStore,
@@ -57,14 +55,12 @@ export const App: React.FC = () => {
 
   // Dialog toggles
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
-  const [isExportDialogOpen, setIsExportDialogOpen] = useState(false)
   const [isHistoryOpen, setIsHistoryOpen] = useState(false)
 
   // Suspension of native browser view when modals are open or when in Material Library menu
   const browserSuspended =
     activePrimaryMenu !== 'prototype' ||
     isSettingsOpen ||
-    isExportDialogOpen ||
     isHistoryOpen ||
     isResizing
 
@@ -501,16 +497,6 @@ export const App: React.FC = () => {
                 <Clock size={13} />
                 <span className="wh-action-label whitespace-nowrap">版本{currentVersionNo ? ` v${currentVersionNo}` : ''}</span>
               </button>
-
-              {/* 导出按钮 */}
-              <button
-                onClick={() => setIsExportDialogOpen(true)}
-                title="导出至业务工程"
-                className="wh-action px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg shadow transition flex items-center gap-1.5 cursor-pointer"
-              >
-                <FolderOutput size={13} />
-                <span className="wh-action-label whitespace-nowrap">导出至业务工程</span>
-              </button>
             </div>
           </header>
 
@@ -591,13 +577,6 @@ export const App: React.FC = () => {
 
       {/* 弹窗系统 */}
       <SettingsModal open={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
-
-      <ExportModal
-        open={isExportDialogOpen}
-        codeContent={currentPrototype?.vueCode || ''}
-        techStack={currentPrototype?.techStack}
-        onClose={() => setIsExportDialogOpen(false)}
-      />
 
       <VersionHistoryModal
         open={isHistoryOpen}

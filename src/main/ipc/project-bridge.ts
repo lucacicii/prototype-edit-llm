@@ -1,7 +1,4 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron'
-import * as fs from 'fs/promises'
-import * as fsSync from 'fs'
-import * as path from 'path'
 import { ProjectWorkspaceManager } from '../project-workspace-manager'
 import {
   deleteSharedFile,
@@ -12,27 +9,9 @@ import {
   type RepoRole
 } from '../shared-workspace'
 
-export interface SaveCodeParams {
-  filePath: string
-  content: string
-}
-
 export function setupProjectIpc(): void {
   const wsManager = ProjectWorkspaceManager.getInstance()
   void wsManager.init()
-
-  // 打开目录选择器（单选）
-  ipcMain.handle('project:select-directory', async (event) => {
-    const window = BrowserWindow.fromWebContents(event.sender)
-    const result = await dialog.showOpenDialog(window || (undefined as any), {
-      title: '选择项目目标目录',
-      properties: ['openDirectory', 'createDirectory']
-    })
-    if (result.canceled || result.filePaths.length === 0) {
-      return null
-    }
-    return result.filePaths[0]
-  })
 
   // 导入并注册本地项目工作区（支持一次性多选多个目录：第 1 个为 Primary 主仓，其余为 Reference 参考仓）
   ipcMain.handle('project:import-directory', async (event, portOrUrl?: string) => {
@@ -238,39 +217,5 @@ export function setupProjectIpc(): void {
   ipcMain.handle('project:find-source-file', async (_event, target: string, prototypeId?: string) => {
     await wsManager.init()
     return wsManager.findSourceFile(target, prototypeId)
-  })
-
-  // 保存代码到指定文件（支持自动创建多级子目录）
-  ipcMain.handle('project:save-code', async (_event, params: SaveCodeParams) => {
-    try {
-      const { filePath, content } = params
-      if (!filePath) {
-        return { success: false, error: '文件路径不能为空' }
-      }
-
-      const dir = path.dirname(filePath)
-      await fs.mkdir(dir, { recursive: true })
-      await fs.writeFile(filePath, content, 'utf-8')
-
-      return {
-        success: true,
-        savedPath: filePath
-      }
-    } catch (err: any) {
-      return {
-        success: false,
-        error: err.message || String(err)
-      }
-    }
-  })
-
-  // 检查目标文件是否已存在（以便前端提示覆写）
-  ipcMain.handle('project:check-file-exists', async (_event, filePath: string) => {
-    try {
-      const exists = fsSync.existsSync(filePath)
-      return { exists }
-    } catch {
-      return { exists: false }
-    }
   })
 }

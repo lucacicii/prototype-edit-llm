@@ -212,7 +212,6 @@ export interface IHistoryAPI {
 }
 
 export interface IProjectAPI {
-  selectDirectory: () => Promise<string | null>
   importDirectory: (portOrUrl?: string) => Promise<ProjectWorkspace | null>
   importUrl: (params: { url: string; name?: string }) => Promise<ProjectWorkspace>
   listWorkspaces: () => Promise<ProjectWorkspace[]>
@@ -269,8 +268,6 @@ export interface IProjectAPI {
     agentsDisabled?: boolean
   }>
   findSourceFile: (target: string, prototypeId?: string) => Promise<{ filePath: string; content: string } | null>
-  saveCode: (params: { filePath: string; content: string }) => Promise<{ success: boolean; savedPath?: string; error?: string }>
-  checkFileExists: (filePath: string) => Promise<{ exists: boolean }>
 }
 
 export interface IAgentAPI {

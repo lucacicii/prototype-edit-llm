@@ -159,7 +159,6 @@ const topologyApi = {
 
 const projectApi = {
   // 本地业务工程与共享工作区交互
-  selectDirectory: () => ipcRenderer.invoke('project:select-directory'),
   importDirectory: (portOrUrl?: string) => ipcRenderer.invoke('project:import-directory', portOrUrl),
   importUrl: (params: { url: string; name?: string }) => ipcRenderer.invoke('project:import-url', params),
   listWorkspaces: () => ipcRenderer.invoke('project:list-workspaces'),
@@ -190,11 +189,7 @@ const projectApi = {
   refreshSharedWorkspace: (workspaceId: string) =>
     ipcRenderer.invoke('project:refresh-shared-workspace', workspaceId),
   findSourceFile: (target: string, prototypeId?: string) =>
-    ipcRenderer.invoke('project:find-source-file', target, prototypeId),
-  saveCode: (params: { filePath: string; content: string }) =>
-    ipcRenderer.invoke('project:save-code', params),
-  checkFileExists: (filePath: string) =>
-    ipcRenderer.invoke('project:check-file-exists', filePath)
+    ipcRenderer.invoke('project:find-source-file', target, prototypeId)
 }
 
 const browserApi = {
