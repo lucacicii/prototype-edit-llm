@@ -21,18 +21,6 @@ export interface TopologyNode {
   line?: number
   /** 模型对这个页面的一句话说明。 */
   note?: string
-  /**
-   * 页面的截图。`file` 是相对 `.prototype-meta/` 的路径。
-   * 截不到（模型没给出可达路径、或点击失败）就没有这个字段 ——
-   * 那就退回纯文字卡片，不拿别的页面的图冒充。
-   */
-  shot?: TopologyShot
-}
-
-export interface TopologyShot {
-  file: string
-  width: number
-  height: number
 }
 
 export interface TopologyEdge {
@@ -41,11 +29,6 @@ export interface TopologyEdge {
   /** 跳转是怎么发生的，例如「点击『查看详情』」。 */
   label?: string
   trigger: TopologyTrigger
-  /**
-   * 触发跳转的元素选择器。截图时要靠它把预览点进目标页面的状态 ——
-   * 单文件原型里「详情页」只是同一个 DOM 的另一个状态，不点进去截不到。
-   */
-  selector?: string
 }
 
 export interface TopologyGraph {
@@ -82,14 +65,12 @@ export const TRIGGER_LABEL: Record<TopologyTrigger, string> = {
 }
 
 /**
- * 与应用内节点卡片一致的几何尺寸；导出成图片时也按这套画。
- * 卡片是「上面一张截图 + 下面一行标签」，所以比纯文字卡片高不少。
+ * 与应用内节点卡片一致的几何尺寸：纯文字卡片。
  */
 export const NODE_WIDTH = 200
-export const NODE_IMAGE_HEIGHT = 116
-export const NODE_HEIGHT = NODE_IMAGE_HEIGHT + 44
+export const NODE_HEIGHT = 64
 export const LAYER_GAP = 300
-export const NODE_GAP = 200
+export const NODE_GAP = 120
 
 /** 稳定的小哈希。用来给「生成时的源码」留指纹，不用于安全用途。 */
 export function djb2(input: string): string {
@@ -119,7 +100,6 @@ interface RawEdge {
   to?: unknown
   label?: unknown
   trigger?: unknown
-  selector?: unknown
 }
 
 function text(value: unknown): string | undefined {
@@ -193,15 +173,11 @@ export function normalizeTopology(raw: unknown, fingerprint = ''): NormalizeResu
     if (edgeKeys.has(key)) continue
     edgeKeys.add(key)
     const trigger = text(item?.trigger) as TopologyTrigger | undefined
-    // selector 是模型给的可信度最低的一项：它只用来「把预览点进那个状态」，
-    // 点不到就当没有，不会让整张图变坏，所以照收。
-    const selector = text(item?.selector)
     edges.push({
       from,
       to,
       ...(label ? { label } : {}),
-      trigger: trigger && TRIGGERS.includes(trigger) ? trigger : 'other',
-      ...(selector ? { selector } : {})
+      trigger: trigger && TRIGGERS.includes(trigger) ? trigger : 'other'
     })
   }
   if (dangling) warnings.push(`丢弃了 ${dangling} 条指向不存在页面的跳转`)
@@ -285,9 +261,6 @@ export function layerDepths(
 
 /**
  * 面板用的等尺寸分层布局：层号定 x，层内按序居中。
- *
- * 卡片尺寸是固定的（截图按固定高度裁过），所以这里不需要知道图片比例。
- * 导出文档要展示完整截图、卡片高度不一，那边另外算（见 renderTopologyDocument）。
  */
 export function layeredLayout(
   nodes: TopologyNode[],
@@ -321,46 +294,4 @@ export function layeredLayout(
 /** 图里是否只有一个节点且没有跳转（单页面原型的正常形态）。 */
 export function isSingleScreen(graph: TopologyGraph): boolean {
   return graph.nodes.length === 1 && graph.edges.length === 0
-}
-
-/**
- * 从入口点到某个页面的「点击路径」：按顺序要在预览里点哪些元素。
- *
- * 只用带 `selector` 的边 —— 没有选择器的跳转没法复现（可能是代码里直接
- * 切状态的），拿它当路径只会在错误的页面上截图。
- *
- * 返回 null 表示走不到：入口本身是 []（不需要点），其余情况说明这个页面
- * 只可能是别的方式到达的，截图这一环就放弃它。
- */
-export function capturePath(graph: TopologyGraph, targetId: string): TopologyEdge[] | null {
-  if (targetId === graph.entry) return []
-
-  const clickable = graph.edges.filter((edge) => Boolean(edge.selector))
-  const parents = new Map<string, TopologyEdge>()
-  const seen = new Set<string>([graph.entry])
-  const queue = [graph.entry]
-
-  while (queue.length) {
-    const current = queue.shift()!
-    for (const edge of clickable) {
-      if (edge.from !== current || seen.has(edge.to)) continue
-      seen.add(edge.to)
-      parents.set(edge.to, edge)
-      if (edge.to === targetId) {
-        // 回溯成从入口出发的顺序
-        const path: TopologyEdge[] = []
-        let cursor: string = targetId
-        while (cursor !== graph.entry) {
-          const step: TopologyEdge | undefined = parents.get(cursor)
-          if (!step) break
-          path.unshift(step)
-          cursor = step.from
-        }
-        return path
-      }
-      queue.push(edge.to)
-    }
-  }
-
-  return null
 }

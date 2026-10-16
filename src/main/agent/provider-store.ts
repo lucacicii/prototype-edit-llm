@@ -347,6 +347,27 @@ export function thinkingLevelsFor(model: LibraryModel): string[] {
 }
 
 /**
+ * 从模型支持的档位里挑一个最接近 `prefer` 的。
+ *
+ * 硬编码 thinkingLevel 是踩过的坑：模型不支持 'medium' 时会被映射成 null
+ * （等于完全不思考），模型于是草草输出骨架、把 evidence/sections 全省了。
+ * 所以调用方要给"想要的档位"，由这里按模型真实能力降级 —— 优先不低于
+ * prefer 的最弱档位（够用且省），没有才退到低于 prefer 的最强档位。
+ */
+export function nearestThinkingLevel(model: LibraryModel, prefer: string): string {
+  const levels = canonicalThinkingLevels(thinkingLevelsFor(model))
+  if (!levels.length) return prefer
+  const rank = (level: string): number => {
+    const index = (THINKING_LEVEL_VOCABULARY as readonly string[]).indexOf(level.toLowerCase())
+    return index < 0 ? THINKING_LEVEL_VOCABULARY.length : index
+  }
+  const target = rank(prefer)
+  const atOrAbove = levels.filter((l) => rank(l) >= target)
+  if (atOrAbove.length) return atOrAbove[0]
+  return levels[levels.length - 1]
+}
+
+/**
  * A model is usable when the transport can stream it *and* it has somewhere to
  * send the request. A missing key counts as unusable — but say which half is
  * missing, so the dialog can point at the field instead of shrugging.

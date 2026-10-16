@@ -18,6 +18,7 @@ import {
 } from './agent/pm-persona'
 import { detectTechStack, type TechStack } from './agent/tech-stack'
 import type { TopologyGraph } from '../shared/topology'
+import { specToTopologyGraph, topologyToSpec, type SpecDoc } from '../shared/spec'
 
 export interface RunStats {
   totalTurns: number
@@ -66,36 +67,39 @@ export interface PrototypeProjectItem extends ProjectMetaFile {
   files: string[]
   /** 页面跳转流转图；没生成过就是 null。 */
   topology?: TopologyGraph | null
+  /** 页面说明书（v2 真相）；没生成过就是 null。 */
+  spec?: SpecDoc | null
 }
 
 const META_DIR = '.prototype-meta'
 const PROJECT_JSON = 'project.json'
 const CHAT_JSON = 'chat.json'
 const TOPOLOGY_JSON = 'topology.json'
-const TOPOLOGY_SHOTS_DIR = 'topology-shots'
+const SPEC_JSON = 'spec.json'
 const TOPOLOGY_RAW = 'topology.raw.txt'
 const ACTIVE_ID_FILE = 'active-project.txt'
 
 /**
- * 拓扑图相关文件的位置。
+ * 拓扑图/Spec 相关文件的位置。
  *
  * 刻意放在 `.prototype-meta/` 里：`listProjectSourceFiles` 会跳过点目录，
  * 所以它们既不会冒充源码出现在代码编辑器的文件页签里，
  * 也不会被预览的静态服务当成一个页面。
  *
- * 没有 HTML 产物 —— 导出的是图片（一张 PNG），网页只是中间的渲染载体。
+ * 截图链路已删除：没有 `topology-shots/`，也没有图片产物。
+ * 落盘只有 spec.json（v2 真相）+ topology.json（投影，旧版本兼容）。
  */
 export function topologyPathsFor(projectId: string): {
   dir: string
   json: string
-  shotsDir: string
+  spec: string
   raw: string
 } {
   const metaDir = path.join(projectDirFor(projectId), META_DIR)
   return {
     dir: metaDir,
     json: path.join(metaDir, TOPOLOGY_JSON),
-    shotsDir: path.join(metaDir, TOPOLOGY_SHOTS_DIR),
+    spec: path.join(metaDir, SPEC_JSON),
     raw: path.join(metaDir, TOPOLOGY_RAW)
   }
 }
@@ -349,15 +353,29 @@ export async function loadProjectItem(dir: string): Promise<PrototypeProjectItem
 
     const files = await listProjectSourceFiles(dir)
 
-    // 拓扑图跟 chat.json 一样挂在项目上一起返回：渲染层通过 `prototype:list`
+    // 拓扑图/Spec 跟 chat.json 一样挂在项目上一起返回：渲染层通过 `prototype:list`
     // 白拿，不需要第二条加载路径。文件坏了就当没生成过，不能连累整个项目。
+    // 读取顺序 spec.json > topology.json：有新文件读新的并投影出旧图，
+    // 只有旧文件时合成骨架 spec（前端降级显示）。
     let topology: TopologyGraph | null = null
+    let spec: SpecDoc | null = null
+    const specPath = path.join(dir, META_DIR, SPEC_JSON)
     const topologyPath = path.join(dir, META_DIR, TOPOLOGY_JSON)
-    if (existsSync(topologyPath)) {
+    if (existsSync(specPath)) {
+      try {
+        spec = JSON.parse(await fs.readFile(specPath, 'utf-8')) as SpecDoc
+        topology = specToTopologyGraph(spec)
+      } catch {
+        spec = null
+      }
+    }
+    if (!spec && existsSync(topologyPath)) {
       try {
         topology = JSON.parse(await fs.readFile(topologyPath, 'utf-8')) as TopologyGraph
+        spec = topologyToSpec(topology)
       } catch {
         topology = null
+        spec = null
       }
     }
 
@@ -367,7 +385,8 @@ export async function loadProjectItem(dir: string): Promise<PrototypeProjectItem
       vueCode,
       chatMessages,
       files,
-      topology
+      topology,
+      spec
     }
   } catch (err) {
     console.warn('[project-store] failed to load project:', dir, err)

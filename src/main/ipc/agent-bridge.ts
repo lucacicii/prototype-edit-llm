@@ -29,16 +29,14 @@ import {
 } from '../project-store'
 import { ProjectWorkspaceManager } from '../project-workspace-manager'
 import {
-  buildTopologyPrompt,
+  buildSpecPrompt,
   parseTopologyReply,
   rawExcerpt
 } from '../agent/topology'
-import {
-  capturePreviewShots,
-  loadShotThumbs,
-  renderTopologyDocumentFile
-} from '../topology-capture'
-import { djb2, normalizeTopology, type TopologyGraph } from '../../shared/topology'
+import { extractStaticEvidence, type StaticEvidence } from '../agent/spec-static'
+import { renderSpecMarkdown } from '../agent/spec-markdown'
+import { normalizeSpec, specToTopologyGraph, topologyToSpec, type SpecDoc } from '../../shared/spec'
+import type { TopologyGraph } from '../../shared/topology'
 import {
   AgentConfigFile,
   loadLibrary,
@@ -60,6 +58,7 @@ import {
   DEFAULT_MAX_TOKENS,
   DEFAULT_THINKING_LEVELS,
   LibraryModel,
+  nearestThinkingLevel,
   providerIds,
   selectionId,
   SUPPORTED_APIS,
@@ -1277,13 +1276,17 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
   })
 
   /**
-   * 生成拓扑图（页面跳转流转图）。
+   * 生成页面说明书（Spec v2，含页面跳转流转图投影）。
    *
    * 走的是与 `agent:run` 同一条 daemon 通路，但只让模型读、只让它回 JSON：
    * - 独立 session：拓扑的提示词与 JSON 不该污染原型对话的上下文；
    * - `headless: true`：关掉 `ask_user_question`，这一轮不需要跟用户交互；
    * - 跑完比对入口文件内容与其它文件的 mtime —— 模型被要求不要写文件，
    *   但 daemon 手里确实有 `write_file`/`bash`，这条约束得能真正强制。
+   *
+   * 两阶段：静态解析器先从源码抠出页面候选/跳转/表单证据打底，LLM 认领并
+   * 补业务语义。产物双写：spec.json（v2 全量）+ topology.json（投影，旧
+   * 版本兼容）。截图链路已删除，这里没有任何截图逻辑。
    */
   ipcMain.handle('topology:generate', async (_, params: { prototypeId?: string }) => {
     const prototypeId = params?.prototypeId
@@ -1320,13 +1323,19 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
     topologyCancelRequested = false
     try {
       const collected = await collectTopologySources(projectDir, item)
-      const prompt = buildTopologyPrompt({
+      // 静态打底：入口全量 + 非入口证据窗口（命中行上下 40 行）。
+      const staticEvidence = extractStaticEvidence(collected.sources)
+      const specSources = buildSpecSources(collected.sources, staticEvidence, item.entryFile)
+      const fingerprint = specFingerprint(entryCode, knownFiles, before)
+      const prompt = buildSpecPrompt({
         projectName: item.name,
         techStack: item.techStack,
         entryFile: item.entryFile,
         files: knownFiles.length ? knownFiles : [item.entryFile],
-        sources: collected.sources,
-        truncated: collected.truncated
+        sources: specSources.sources,
+        evidence: staticEvidence,
+        omittedFiles: specSources.omittedFiles,
+        windowedFiles: specSources.windowedFiles
       })
 
       await syncThunderModelConfig()
@@ -1334,8 +1343,12 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
 
       let failureDetail = ''
       let finalContent: string | null = null
-      // 模型偶尔会回一段散文或带围栏的块；只重试一次，够用了 ——
-      // 再失败就是模型不支持这个任务，多试只是烧钱。
+      // 想要 medium（补语义需要推理链），但模型不一定支持 —— 按它真实支持的
+      // 档位挑最接近的，避免被映射成 null（不思考）而草草交骨架。
+      const specThinking = nearestThinkingLevel(resolved.model, 'medium')
+      // 模型偶尔会回一段散文或带围栏的块；重试一次。第二轮降档并收紧成骨架
+      // （只要 pages+flows），保证先有图再说 —— 详情缺失标 detailMissing，
+      // 不阻塞成图。
       for (let attempt = 1; attempt <= 2; attempt++) {
         // 记下这一轮的 daemon task id，取消要打到具体的它（重试会换个 id）。
         topologyTaskId = `${runId}_a${attempt}`
@@ -1344,12 +1357,12 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
           prompt:
             attempt === 1
               ? prompt
-              : `${prompt}\n\n【上一次的回复无法解析】这一轮只输出那个 JSON 对象，不要解释、不要 markdown 围栏。`,
+              : `${prompt}\n\n【上一次的回复无法解析】这一轮只输出那个 JSON 对象，不要解释、不要 markdown 围栏。如果写不全字段与动作，只给 pages（含 id/label/kind）与 flows（含 from/to/label/trigger）骨架即可。`,
           sessionId: `sess_topology_${prototypeId}`,
           model: selectionId(resolved.model),
           modelDescriptor: resolved.model as unknown as Record<string, any>,
-          // 抽页面与跳转不需要深思，压住延迟与成本。
-          thinkingLevel: 'low',
+          thinkingLevel:
+            attempt === 1 ? specThinking : nearestThinkingLevel(resolved.model, 'low'),
           workspaceDir: projectDir,
           headless: true,
           onEvent: (observed: any) => {
@@ -1364,6 +1377,7 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
       }
 
       const warnings = await restoreTouchedSources(projectDir, item.entryFile, entryCode, knownFiles, before)
+      warnings.push(`本次思考档位：${specThinking}（模型支持的档位：${thinkingLevelsFor(resolved.model).join(' / ')}）`)
 
       const parsed = parseTopologyReply(finalContent)
       if (!parsed) {
@@ -1380,49 +1394,30 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
         }
       }
 
-      const normalized = normalizeTopology(parsed, djb2(entryCode))
-      if (!normalized.graph) {
+      const normalized = normalizeSpec(parsed, fingerprint)
+      if (!normalized.spec) {
         return { ok: false, runId, error: normalized.error ?? '模型没有给出可用的页面节点' }
       }
 
-      const allWarnings = [...(normalized.graph.warnings ?? []), ...warnings]
-      const graph: TopologyGraph = {
-        ...normalized.graph,
+      const allWarnings = [...(normalized.spec.warnings ?? []), ...warnings]
+      const spec: SpecDoc = {
+        ...normalized.spec,
+        techStack: item.techStack,
+        entryFile: item.entryFile,
+        // 渲染层过期判断用：入口指纹 + 文件清单快照。
+        entryFingerprint: entryFingerprint(entryCode),
+        files: knownFiles,
         generatedAt: Date.now(),
         ...(allWarnings.length ? { warnings: allWarnings } : {})
       }
+      const graph: TopologyGraph = specToTopologyGraph(spec)
 
-      // 接下来要真的去预览里点着截图，这会把带 selectors 的整张图跑一遍，
-      // 所以放在写完 JSON 之前：截到的图要一起进 JSON。
+      // 双写：spec.json 是真相，topology.json 是投影（旧版本兼容）。
       await fs.mkdir(paths.dir, { recursive: true })
-      try {
-        const preview = await ProjectRunner.getInstance().syncAndResolvePreviewUrl({
-          projectId: prototypeId
-        })
-        const captured = await capturePreviewShots({
-          graph,
-          previewUrl: preview.previewUrl,
-          entryFile: preview.entryFile,
-          shotDir: paths.shotsDir
-        })
-        for (const node of graph.nodes) {
-          const shot = captured.shots[node.id]
-          if (shot) node.shot = shot
-        }
-        if (captured.warnings.length) {
-          graph.warnings = [...(graph.warnings ?? []), ...captured.warnings]
-        }
-      } catch (err: any) {
-        // 截图是加分项：拿不到图仍然要交出这张图（纯文字卡片）。
-        graph.warnings = [
-          ...(graph.warnings ?? []),
-          `截图失败：${err?.message ?? String(err)}，本次只有页面名称`
-        ]
-      }
-
+      await fs.writeFile(paths.spec, JSON.stringify(spec, null, 2), 'utf-8')
       await fs.writeFile(paths.json, JSON.stringify(graph, null, 2), 'utf-8')
 
-      return { ok: true, runId, graph }
+      return { ok: true, runId, graph, spec }
     } catch (err: any) {
       const message = err?.message ?? String(err)
       // daemon 自己的失败文案常常是泛泛一句，取消请求这个标志更可靠。
@@ -1447,56 +1442,49 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
     return { ok: true }
   })
 
-  /** 面板要的缩略图。单独取，不塞进 `prototype:list` —— 那边每次列项目都会跑。 */
-  ipcMain.handle('topology:shots', async (_, params: { prototypeId?: string }) => {
-    const prototypeId = params?.prototypeId
-    if (!prototypeId) return { ok: false, error: '缺少原型 id' }
-    const item = await loadProjectItem(projectDirFor(prototypeId))
-    const thumbs = await loadShotThumbs(item?.topology ?? null, topologyPathsFor(prototypeId).dir)
-    return { ok: true, shots: Object.fromEntries(thumbs) }
-  })
-
   /**
-   * 导出成一份自包含的 HTML 文档。
+   * 导出页面说明书。
    *
-   * 每个节点的**完整整页截图**都以 data URL 内联在里面，双击就能看、可以
-   * 直接发给别人，不依赖任何外部文件。不打成一个文件（HTML 里内联了所有
-   * 截图，天然就是单文件）。
-   *
-   * 曾经导出成 PNG：那条路要先在离屏窗口里画出版面再抓屏，抓屏取景依赖量
-   * 出来的 DOM 尺寸，反复被视口继承、窗口大小、纹理上限咬到 —— 表现就是
-   * 图右边整层节点被裁掉。HTML 没有这个环节。
+   * `format: 'json' | 'markdown'`，缺省 json —— json 是真相（机器消费），
+   * markdown 给人读。老项目可能只有 topology.json，那条路合成骨架再导出，
+   * 不因为缺 spec.json 就拒绝。
    */
-  ipcMain.handle('topology:export-html', async (_, params: { prototypeId?: string }) => {
-    const prototypeId = params?.prototypeId
-    if (!prototypeId) return { ok: false, error: '缺少原型 id' }
+  ipcMain.handle(
+    'topology:export-spec',
+    async (_, params: { prototypeId?: string; format?: 'json' | 'markdown' }) => {
+      const prototypeId = params?.prototypeId
+      if (!prototypeId) return { ok: false, error: '缺少原型 id' }
+      const format = params?.format === 'markdown' ? 'markdown' : 'json'
 
-    const paths = topologyPathsFor(prototypeId)
-    const raw = await fs.readFile(paths.json, 'utf-8').catch(() => null)
-    if (raw === null) return { ok: false, error: '还没有生成过拓扑图' }
+      const paths = topologyPathsFor(prototypeId)
+      let spec = await readSpecFile(paths.spec)
+      if (!spec) spec = await readSpecFile(paths.json, true)
+      if (!spec) return { ok: false, error: '还没有生成过说明书' }
 
-    let graph: TopologyGraph
-    try {
-      graph = JSON.parse(raw) as TopologyGraph
-    } catch {
-      return { ok: false, error: '拓扑图数据损坏，请重新生成' }
+      const item = await loadProjectItem(projectDirFor(prototypeId))
+      const baseName = item?.name || prototypeId
+      const isMarkdown = format === 'markdown'
+      const content = isMarkdown
+        ? renderSpecMarkdown(spec)
+        : JSON.stringify(spec, null, 2)
+
+      const options = {
+        title: isMarkdown ? '导出说明书（Markdown）' : '导出说明书（JSON）',
+        defaultPath: `${baseName}-页面说明书.${isMarkdown ? 'md' : 'json'}`,
+        filters: isMarkdown
+          ? [{ name: 'Markdown 文档', extensions: ['md'] }]
+          : [{ name: 'JSON 数据', extensions: ['json'] }]
+      }
+      const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+      const result = win
+        ? await dialog.showSaveDialog(win, options)
+        : await dialog.showSaveDialog(options)
+      if (result.canceled || !result.filePath) return { ok: false, cancelled: true }
+
+      await fs.writeFile(result.filePath, content, 'utf-8')
+      return { ok: true, path: result.filePath, format }
     }
-
-    const item = await loadProjectItem(projectDirFor(prototypeId))
-    const { html, shotCount } = await renderTopologyDocumentFile(graph, paths.dir)
-
-    const options = {
-      title: '导出拓扑图',
-      defaultPath: `${item?.name || prototypeId}-页面拓扑图.html`,
-      filters: [{ name: 'HTML 网页', extensions: ['html'] }]
-    }
-    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
-    const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
-    if (result.canceled || !result.filePath) return { ok: false, cancelled: true }
-
-    await fs.writeFile(result.filePath, html, 'utf-8')
-    return { ok: true, path: result.filePath, shots: shotCount }
-  })
+  )
 
   ipcMain.handle(
     'agent:fetch-remote-models',
@@ -1776,6 +1764,138 @@ async function collectTopologySources(
   }
 
   return { sources, truncated }
+}
+
+/** 证据窗口的上下行数：命中行附近给全，窗口之外省略。 */
+const SPEC_WINDOW_CONTEXT = 40
+/** 无命中文件只给头部行数：让模型知道它存在，不猜内容。 */
+const SPEC_HEAD_LINES = 30
+
+/**
+ * 读一份 spec/图文件。
+ *
+ * `asGraph` 为真时按旧图读并升成骨架 spec（老项目只有 topology.json 的兜底）。
+ * 文件缺失或损坏一律返回 null —— 导出功能不该因为一个坏文件就报错崩掉。
+ */
+async function readSpecFile(filePath: string, asGraph = false): Promise<SpecDoc | null> {
+  const raw = await fs.readFile(filePath, 'utf-8').catch(() => null)
+  if (raw === null) return null
+  try {
+    const parsed = JSON.parse(raw)
+    return asGraph ? topologyToSpec(parsed as TopologyGraph) : (parsed as SpecDoc)
+  } catch {
+    return null
+  }
+}
+
+interface SpecSources {
+  sources: { file: string; code: string }[]
+  omittedFiles: string[]
+  windowedFiles: Array<{ file: string; ranges: string }>
+}
+
+/**
+ * 把 collect 来的源码拼成 Spec 输入：入口全量，非入口只给证据窗口。
+ *
+ * 总量预算不变（TOPOLOGY_MAX_TOTAL_CHARS），但信息密度从“前 60k 连续文本”
+ * 变为“全证据覆盖” —— 截断时丢的是无人引用的代码，而非关键跳转逻辑。
+ */
+function buildSpecSources(
+  collected: { file: string; code: string }[],
+  evidence: StaticEvidence,
+  entryFile: string
+): SpecSources {
+  const hitLines = new Map<string, Set<number>>()
+  const hit = (file: string, line: number) => {
+    if (!file || !(line > 0)) return
+    if (!hitLines.has(file)) hitLines.set(file, new Set())
+    hitLines.get(file)!.add(line)
+  }
+  for (const c of evidence.pageCandidates) hit(c.file, c.line)
+  for (const j of evidence.jumpEvidence) hit(j.file, j.line)
+  for (const f of evidence.formEvidence) hit(f.file, f.line)
+
+  const sources: { file: string; code: string }[] = []
+  const omittedFiles: string[] = []
+  const windowedFiles: Array<{ file: string; ranges: string }> = []
+  let total = 0
+
+  for (const { file, code } of collected) {
+    if (total >= TOPOLOGY_MAX_TOTAL_CHARS) {
+      omittedFiles.push(file)
+      continue
+    }
+    if (file === entryFile || !hitLines.has(file)) {
+      if (file !== entryFile) {
+        // 无命中文件：只给前 30 行，声明身份即可。
+        const head = code.split('\n').slice(0, SPEC_HEAD_LINES).join('\n')
+        const body = `${head}\n…（该文件与页面跳转无关，只给出头部）`
+        total += body.length
+        sources.push({ file, code: body })
+        windowedFiles.push({ file, ranges: `前 ${SPEC_HEAD_LINES} 行` })
+        continue
+      }
+      const remain = TOPOLOGY_MAX_TOTAL_CHARS - total
+      const body = code.length > remain ? `${code.slice(0, remain)}\n…（文件过长，已截断）` : code
+      total += body.length
+      sources.push({ file, code: body })
+      continue
+    }
+    // 证据窗口：命中行上下各 40 行合并成区间，区间外省略并标注行号。
+    const lines = code.split('\n')
+    const nums = Array.from(hitLines.get(file)!).sort((a, b) => a - b)
+    const ranges: Array<[number, number]> = []
+    for (const n of nums) {
+      const lo = Math.max(1, n - SPEC_WINDOW_CONTEXT)
+      const hi = Math.min(lines.length, n + SPEC_WINDOW_CONTEXT)
+      const last = ranges[ranges.length - 1]
+      if (last && lo <= last[1] + 1) last[1] = Math.max(last[1], hi)
+      else ranges.push([lo, hi])
+    }
+    const parts: string[] = []
+    const labels: string[] = []
+    for (const [lo, hi] of ranges) {
+      parts.push(`…（省略 ${file} 第 1–${lo - 1} 行）\n${lines.slice(lo - 1, hi).join('\n')}`)
+      labels.push(`${lo}–${hi} 行`)
+      if (hi < lines.length) parts.push(`…（省略 ${file} 第 ${hi + 1}–${lines.length} 行）`)
+    }
+    const body = parts.join('\n')
+    if (total + body.length > TOPOLOGY_MAX_TOTAL_CHARS) {
+      omittedFiles.push(file)
+      continue
+    }
+    total += body.length
+    sources.push({ file, code: body })
+    windowedFiles.push({ file, ranges: labels.join('、') })
+  }
+
+  return { sources, omittedFiles, windowedFiles }
+}
+
+/**
+ * 多文件联合指纹：入口源码 + 各文件 size/mtime。修“非入口文件的业务逻辑
+ * 改了，图不提示过期”的问题。复用已有的 fileMtimes 快照，无新增 IO。
+ */
+function hashText(input: string): string {
+  let hash = 5381
+  for (let i = 0; i < input.length; i++) {
+    hash = ((hash << 5) + hash + input.charCodeAt(i)) | 0
+  }
+  return (hash >>> 0).toString(16)
+}
+
+/** 入口源码指纹：渲染层拿它判断入口改没改过（渲染层算不出 mtime）。 */
+function entryFingerprint(entryCode: string): string {
+  return hashText(entryCode)
+}
+
+function specFingerprint(
+  entryCode: string,
+  knownFiles: string[],
+  mtimes: Map<string, number>
+): string {
+  const parts = [entryCode, ...knownFiles.map((f) => `${f}:${mtimes.get(f) ?? -1}`)]
+  return hashText(parts.join('\n'))
 }
 
 /** 生成前的文件 mtime 快照，用来看模型有没有偷动别的文件。 */
