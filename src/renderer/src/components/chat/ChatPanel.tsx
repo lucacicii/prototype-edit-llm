@@ -239,9 +239,19 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   // Attachments
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([])
 
+  /**
+   * 用户正在消息流里按住拖选正文。
+   *
+   * 流式期间每个 token 都会触发一次 scrollToBottom()，若拖选过程中视口被拽到底部，
+   * 拖出来的选区会随锚点一起漂走 —— 正文可选中了却选不住，等于没修。所以拖选期间
+   * 挂起自动跟随（只挂起，不改 stickToBottom：松手后用户若本来就在底部，继续跟随）。
+   */
+  const selectingInFeed = useRef(false)
+
   const scrollToBottom = useCallback((force = false) => {
     const node = chatScrollEl.current
     if (!node) return
+    if (selectingInFeed.current) return
     if (!force && !stickToBottom.current) return
     node.scrollTop = node.scrollHeight
   }, [])
@@ -251,6 +261,29 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     if (node.clientHeight <= 0) return
     stickToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 60
   }
+
+  // 拖选挂起/恢复：mouseup 挂在 window 上 —— 拖到面板外松手（选区越出滚动区很常见）
+  // 也必须能恢复，只监听元素自己会漏。
+  const handleFeedMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
+    // 只认左键，且只认真正的正文区；点在按钮/卡片上不是拖选
+    if (event.button !== 0) return
+    if ((event.target as HTMLElement).closest('button, a, input, textarea, [role="button"]')) return
+    selectingInFeed.current = true
+  }
+
+  useEffect(() => {
+    const release = () => {
+      selectingInFeed.current = false
+    }
+    window.addEventListener('mouseup', release)
+    // 兜底：拖到窗口外松手（或窗口失焦）时 mouseup 可能永远不来，
+    // 挂起状态不清就会让自动跟随从此失效。
+    window.addEventListener('blur', release)
+    return () => {
+      window.removeEventListener('mouseup', release)
+      window.removeEventListener('blur', release)
+    }
+  }, [])
 
   // ============ 流式运行（LiveSegment 时序模型 + 指标 + 问题卡 + steer） ============
   const stream = useAgentChatStream({
@@ -1020,7 +1053,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       )}
 
       {/* 消息流 / 空状态 */}
-      <div className="pc-feed" ref={chatScrollEl} onScroll={handleScroll}>
+      <div className="pc-feed" ref={chatScrollEl} onScroll={handleScroll} onMouseDown={handleFeedMouseDown}>
         {isEmptyConversation && !streamHere ? (
           <ChatEmptyState
             scenario={externalWs ? undefined : currentPrototype?.scenario}
