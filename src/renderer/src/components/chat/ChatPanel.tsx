@@ -51,6 +51,7 @@ import { useMaterialStore } from '../../stores/useMaterialStore'
 import { useAgentChatStream } from './useAgentChatStream'
 import { ChatMessageItem } from './ChatMessageItem'
 import { ChatQuestionBubble } from './ChatQuestionBubble'
+import { AcpPermissionBubble } from './AcpPermissionBubble'
 import { ChatEmptyState } from './ChatEmptyState'
 import { TurnDots, TurnDetailOverlay } from './TurnDots'
 import './chat.css'
@@ -163,6 +164,19 @@ function hashTokenAtCursor(text: string, cursor: number): { start: number; query
   return { start: match.index, query: match[1] || '' }
 }
 
+/** 取光标处的 `/命令` token（仅限单行未带空格），没有则返回 null。 */
+function slashTokenAtCursor(text: string, cursor: number): { start: number; query: string } | null {
+  const lineStart = text.lastIndexOf('\n', cursor - 1) + 1
+  const lineText = text.slice(lineStart, cursor)
+  if (lineText.startsWith('/')) {
+    const spaceIdx = lineText.indexOf(' ')
+    if (spaceIdx === -1) {
+      return { start: lineStart, query: lineText.slice(1).toLowerCase() }
+    }
+  }
+  return null
+}
+
 export const ChatPanel: React.FC<ChatPanelProps> = ({
   currentWorkspace,
   onOpenSettings,
@@ -215,8 +229,33 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     envLocked,
     configured,
     selectModel,
-    selectThinkingLevel
+    selectThinkingLevel,
+    engine,
+    acpPermissionPolicy,
+    acpStates,
+    selectEngine,
+    selectAcpPermissionPolicy,
+    connectAcp,
+    setAcpMode,
+    setAcpConfigOption,
+    applyAcpState
   } = useAgentModelConfigStore()
+
+  const currentAcpKey = `${engine}:${runKey || 'default'}`
+  const currentAcpState = acpStates[currentAcpKey]
+
+  useEffect(() => {
+    const off = window.agent?.onAcpState?.((st) => {
+      applyAcpState(st)
+    })
+    return () => off?.()
+  }, [applyAcpState])
+
+  useEffect(() => {
+    if ((engine === 'claude' || engine === 'codex') && runKey) {
+      void connectAcp(engine, runKey)
+    }
+  }, [engine, runKey, connectAcp])
 
   const groupedModels = useGroupedModels()
   const selectedModel = useSelectedModel()
@@ -475,6 +514,47 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     })
   }
 
+
+  // ============ ACP 斜杠命令补全 ============
+  const slashToken = useMemo(
+    () => (engine !== 'thunder' ? slashTokenAtCursor(promptInput, cursorPos) : null),
+    [engine, promptInput, cursorPos]
+  )
+
+  const slashSuggestions = useMemo(() => {
+    if (!slashToken) return []
+    const q = slashToken.query
+    const cmds = currentAcpState?.availableCommands || []
+    return cmds.filter((c) => !q || c.name.toLowerCase().includes(q))
+  }, [slashToken, currentAcpState?.availableCommands])
+
+  const [slashSuggestActive, setSlashSuggestActive] = useState(0)
+  const [slashSuggestDismissed, setSlashSuggestDismissed] = useState(false)
+
+  const slashSuggestOpen =
+    Boolean(slashToken) && !slashSuggestDismissed && slashSuggestions.length > 0 && !stream.isStreaming
+
+  useEffect(() => {
+    setSlashSuggestActive(0)
+    setSlashSuggestDismissed(false)
+  }, [slashToken?.start, slashToken?.query])
+
+  const acceptSlashCommand = (cmdName: string) => {
+    if (!slashToken) return
+    const inserted = `/${cmdName} `
+    const next = `${promptInput.slice(0, slashToken.start)}${inserted}${promptInput.slice(cursorPos)}`
+    const nextCursor = slashToken.start + inserted.length
+    setPromptInput(next)
+    setSlashSuggestDismissed(true)
+    requestAnimationFrame(() => {
+      const el = textareaRef.current
+      if (el) {
+        el.focus()
+        el.setSelectionRange(nextCursor, nextCursor)
+      }
+      setCursorPos(nextCursor)
+    })
+  }
   // ============ 提示词组装 ============
   const componentLabel = (t: any): string => {
     const comp = String(t?.componentName || '')
@@ -641,7 +721,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         : undefined
     })
 
-    const outgoingImages = selectedModel?.input?.includes('image')
+    const allowsImages =
+      engine === 'thunder'
+        ? selectedModel?.input?.includes('image')
+        : (currentAcpState?.imageUpload ?? true)
+
+    const outgoingImages = allowsImages
       ? images.map((a) => ({ name: a.name, mimeType: a.mimeType, data: a.data ?? '' }))
       : []
 
@@ -656,6 +741,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     const res = await stream.startRun({
       runId,
       prototypeId: runKey ?? currentPrototype.id,
+      engine,
       prompt: instruction,
       code: externalWs ? '' : currentPrototype.vueCode,
       history,
@@ -729,6 +815,30 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (slashSuggestOpen && slashSuggestions.length > 0) {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setSlashSuggestDismissed(true)
+        return
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setSlashSuggestActive((prev) => (prev + 1) % slashSuggestions.length)
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setSlashSuggestActive((prev) => (prev - 1 + slashSuggestions.length) % slashSuggestions.length)
+        return
+      }
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+        e.preventDefault()
+        const pick = slashSuggestions[slashSuggestActive] ?? slashSuggestions[0]
+        if (pick) acceptSlashCommand(pick.name)
+        return
+      }
+    }
+
     if (fileSuggestOpen && fileSuggestions.length > 0) {
       if (e.key === 'Escape') {
         e.preventDefault()
@@ -834,6 +944,199 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     }
   ])
 
+  const engineMenuItems: MenuProps['items'] = [
+    {
+      key: 'thunder',
+      label: (
+        <div className="flex items-center gap-1.5 py-0.5">
+          <Zap size={13} className="text-amber-400" />
+          <span className={engine === 'thunder' ? 'text-amber-400 font-semibold' : ''}>Thunder 内置引擎</span>
+        </div>
+      ),
+      onClick: () => void selectEngine('thunder')
+    },
+    {
+      key: 'claude',
+      label: (
+        <div className="flex items-center gap-1.5 py-0.5">
+          <Anthropic size={13} />
+          <span className={engine === 'claude' ? 'text-sky-400 font-semibold' : ''}>Claude Code (ACP)</span>
+        </div>
+      ),
+      onClick: () => void selectEngine('claude')
+    },
+    {
+      key: 'codex',
+      label: (
+        <div className="flex items-center gap-1.5 py-0.5">
+          <OpenAI size={13} />
+          <span className={engine === 'codex' ? 'text-emerald-400 font-semibold' : ''}>Codex (ACP)</span>
+        </div>
+      ),
+      onClick: () => void selectEngine('codex')
+    }
+  ]
+
+  const acpModelOpt = currentAcpState?.configOptions?.find(
+    (o) => o.type === 'select' && (o.category === 'model' || o.id === 'model')
+  )
+  const acpModelMenuItems: MenuProps['items'] | null = useMemo(() => {
+    if (acpModelOpt && acpModelOpt.type === 'select') {
+      const items: MenuProps['items'] = []
+      for (const opt of acpModelOpt.options) {
+        if ('group' in opt) {
+          items.push({
+            type: 'group',
+            label: opt.name,
+            children: opt.options.map((sub) => ({
+              key: sub.value,
+              label: (
+                <span className={sub.value === acpModelOpt.currentValue ? 'text-sky-400 font-semibold' : ''}>
+                  {sub.name}
+                </span>
+              ),
+              onClick: () => void setAcpConfigOption(engine as any, runKey || 'default', acpModelOpt.id, sub.value)
+            }))
+          })
+        } else {
+          items.push({
+            key: opt.value,
+            label: (
+              <span className={opt.value === acpModelOpt.currentValue ? 'text-sky-400 font-semibold' : ''}>
+                {opt.name}
+              </span>
+            ),
+            onClick: () => void setAcpConfigOption(engine as any, runKey || 'default', acpModelOpt.id, opt.value)
+          })
+        }
+      }
+      return items
+    }
+    if (currentAcpState?.models?.availableModels?.length) {
+      return currentAcpState.models.availableModels.map((m) => ({
+        key: m.modelId,
+        label: (
+          <span className={m.modelId === currentAcpState.models?.currentModelId ? 'text-sky-400 font-semibold' : ''}>
+            {m.name || m.modelId}
+          </span>
+        ),
+        onClick: () => void setAcpConfigOption(engine as any, runKey || 'default', 'model', m.modelId)
+      }))
+    }
+    return null
+  }, [acpModelOpt, currentAcpState?.models, engine, runKey, setAcpConfigOption])
+
+  const currentAcpModelLabel = useMemo(() => {
+    if (acpModelOpt && acpModelOpt.type === 'select') {
+      for (const opt of acpModelOpt.options) {
+        if ('group' in opt) {
+          const found = opt.options.find((s) => s.value === acpModelOpt.currentValue)
+          if (found) return found.name
+        } else if (opt.value === acpModelOpt.currentValue) {
+          return opt.name
+        }
+      }
+      return acpModelOpt.currentValue
+    }
+    if (currentAcpState?.models?.availableModels) {
+      const found = currentAcpState.models.availableModels.find(
+        (m) => m.modelId === currentAcpState.models?.currentModelId
+      )
+      return found?.name || currentAcpState.models.currentModelId
+    }
+    return null
+  }, [acpModelOpt, currentAcpState?.models])
+
+  const acpModeMenuItems: MenuProps['items'] | null = useMemo(() => {
+    if (currentAcpState?.modes?.length) {
+      return currentAcpState.modes.map((m) => ({
+        key: m.id,
+        label: (
+          <span className={m.id === currentAcpState.currentModeId ? 'text-sky-400 font-semibold' : ''}>
+            {m.name || m.id}
+          </span>
+        ),
+        onClick: () => void setAcpMode(engine as any, runKey || 'default', m.id)
+      }))
+    }
+    const modeOpt = currentAcpState?.configOptions?.find(
+      (o) => o.type === 'select' && (o.category === 'mode' || o.id === 'mode')
+    )
+    if (modeOpt && modeOpt.type === 'select') {
+      return modeOpt.options.map((opt) => {
+        if ('value' in opt) {
+          return {
+            key: opt.value,
+            label: (
+              <span className={opt.value === modeOpt.currentValue ? 'text-sky-400 font-semibold' : ''}>
+                {opt.name}
+              </span>
+            ),
+            onClick: () => void setAcpConfigOption(engine as any, runKey || 'default', modeOpt.id, opt.value)
+          }
+        }
+        return {
+          type: 'group',
+          label: opt.name,
+          children: opt.options.map((sub) => ({
+            key: sub.value,
+            label: sub.name,
+            onClick: () => void setAcpConfigOption(engine as any, runKey || 'default', modeOpt.id, sub.value)
+          }))
+        }
+      })
+    }
+    return null
+  }, [currentAcpState?.modes, currentAcpState?.currentModeId, currentAcpState?.configOptions, engine, runKey, setAcpMode, setAcpConfigOption])
+
+  const currentAcpModeLabel = useMemo(() => {
+    if (currentAcpState?.modes?.length) {
+      const found = currentAcpState.modes.find((m) => m.id === currentAcpState.currentModeId)
+      return found?.name || currentAcpState.currentModeId
+    }
+    return null
+  }, [currentAcpState?.modes, currentAcpState?.currentModeId])
+
+  const acpThoughtOpt = currentAcpState?.configOptions?.find(
+    (o) => o.type === 'select' && (o.category === 'thought_level' || o.id === 'reasoning_effort')
+  )
+  const acpThoughtMenuItems: MenuProps['items'] | null = useMemo(() => {
+    if (acpThoughtOpt && acpThoughtOpt.type === 'select') {
+      return acpThoughtOpt.options.map((opt) => {
+        if ('value' in opt) {
+          return {
+            key: opt.value,
+            label: (
+              <span className={opt.value === acpThoughtOpt.currentValue ? 'text-amber-400 font-semibold' : ''}>
+                {opt.name}
+              </span>
+            ),
+            onClick: () => void setAcpConfigOption(engine as any, runKey || 'default', acpThoughtOpt.id, opt.value)
+          }
+        }
+        return {
+          type: 'group',
+          label: opt.name,
+          children: opt.options.map((sub) => ({
+            key: sub.value,
+            label: sub.name,
+            onClick: () => void setAcpConfigOption(engine as any, runKey || 'default', acpThoughtOpt.id, sub.value)
+          }))
+        }
+      })
+    }
+    return null
+  }, [acpThoughtOpt, engine, runKey, setAcpConfigOption])
+
+  const currentAcpThoughtLabel = useMemo(() => {
+    if (acpThoughtOpt && acpThoughtOpt.type === 'select') {
+      const found = acpThoughtOpt.options.find((o) => 'value' in o && o.value === acpThoughtOpt.currentValue)
+      return found && 'name' in found ? found.name : acpThoughtOpt.currentValue
+    }
+    return null
+  }, [acpThoughtOpt])
+
+
   const thinkingLevels = selectedModel?.thinkingLevels?.length
     ? selectedModel.thinkingLevels
     : ['off', 'low', 'medium', 'high']
@@ -901,20 +1204,64 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             <Zap size={15} />
             <span>AI 原型对话</span>
           </span>
-          <button
-            className={`text-[10px] px-1.5 py-0.5 rounded border transition truncate max-w-[140px] cursor-pointer flex items-center gap-1 ${
-              configured
-                ? 'border-emerald-700 text-emerald-400 hover:text-emerald-300'
-                : 'border-amber-700 text-amber-400 hover:text-amber-300'
-            }`}
-            onClick={onOpenSettings}
-            title={configured ? `当前模型：${selectedModel?.name || selectionId}` : '尚未配置模型，点击设置'}
-          >
-            {configured && selectedModel && getProviderIcon(selectedModel.provider, 11)}
-            <span className="truncate">
-              {configured ? selectedModel?.name || selectionId : '未配置模型'}
-            </span>
-          </button>
+          {engine === 'thunder' ? (
+            <button
+              className={`text-[10px] px-1.5 py-0.5 rounded border transition truncate max-w-[140px] cursor-pointer flex items-center gap-1 ${
+                configured
+                  ? 'border-emerald-700 text-emerald-400 hover:text-emerald-300'
+                  : 'border-amber-700 text-amber-400 hover:text-amber-300'
+              }`}
+              onClick={onOpenSettings}
+              title={configured ? `当前模型：${selectedModel?.name || selectionId}` : '尚未配置模型，点击设置'}
+            >
+              {configured && selectedModel && getProviderIcon(selectedModel.provider, 11)}
+              <span className="truncate">
+                {configured ? selectedModel?.name || selectionId : '未配置模型'}
+              </span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              className={`text-[10px] px-2 py-0.5 rounded-full border transition flex items-center gap-1.5 ${
+                currentAcpState?.status === 'ready'
+                  ? 'border-emerald-700/60 bg-emerald-950/30 text-emerald-400'
+                  : currentAcpState?.status === 'connecting'
+                    ? 'border-amber-700/60 bg-amber-950/30 text-amber-400'
+                    : currentAcpState?.status === 'error'
+                      ? 'border-rose-700/60 bg-rose-950/30 text-rose-400 hover:border-rose-600'
+                      : 'border-slate-700 bg-slate-800 text-slate-400'
+              }`}
+              onClick={() => {
+                if (currentAcpState?.status === 'error' && runKey) {
+                  void connectAcp(engine as any, runKey, true)
+                } else {
+                  onOpenSettings?.()
+                }
+              }}
+              title={currentAcpState?.error ? `错误：${currentAcpState.error}（点击重连）` : `${engine === 'claude' ? 'Claude Code' : 'Codex'} ACP 模式`}
+            >
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${
+                  currentAcpState?.status === 'ready'
+                    ? 'bg-emerald-400'
+                    : currentAcpState?.status === 'connecting'
+                      ? 'bg-amber-400 animate-pulse'
+                      : currentAcpState?.status === 'error'
+                        ? 'bg-rose-400'
+                        : 'bg-slate-500'
+                }`}
+              />
+              <span>
+                {currentAcpState?.status === 'ready'
+                  ? `${engine === 'claude' ? 'Claude Code' : 'Codex'} 就绪`
+                  : currentAcpState?.status === 'connecting'
+                    ? '连接中...'
+                    : currentAcpState?.status === 'error'
+                      ? '连接失败 · 重连'
+                      : '未连接'}
+              </span>
+            </button>
+          )}
         </div>
 
         {stream.isStreaming && stream.agentStatus && stream.agentStatus.phase !== 'idle' && stream.agentStatus.phase !== 'done' && (
@@ -953,7 +1300,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       </header>
 
       {/* 未配置模型提示 */}
-      {!configured && (
+      {engine === 'thunder' && !configured && (
         <div className="bg-amber-950/70 border-b border-amber-800/70 px-3 py-2 flex items-center justify-between text-[11px] text-amber-200 flex-shrink-0">
           <span className="flex items-center gap-1">
             <AlertCircle size={13} className="text-amber-400" />
@@ -1096,6 +1443,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             onDismiss={() => void stream.dismissQuestion()}
           />
         )}
+        {streamHere && stream.pendingPermission && (
+          <AcpPermissionBubble
+            permission={stream.pendingPermission}
+            onRespond={stream.respondPermission}
+            onDismiss={stream.dismissPermission}
+          />
+        )}
+
 
         {streamHere && stream.queuedCount > 0 && (
           <div className="pc-queued">
@@ -1176,6 +1531,28 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
               ))}
             </ul>
           )}
+          {/* ACP 斜杠命令补全 */}
+          {slashSuggestOpen && (
+            <ul className="pc-file-suggest" role="listbox" aria-label="ACP 斜杠命令">
+              {slashSuggestions.map((cmd, index) => (
+                <li
+                  key={cmd.name}
+                  role="option"
+                  aria-selected={index === slashSuggestActive}
+                  className={`pc-file-suggest-item ${index === slashSuggestActive ? 'is-active' : ''}`}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => acceptSlashCommand(cmd.name)}
+                >
+                  <Bot size={12} className="text-purple-400 shrink-0" />
+                  <span className="pc-file-suggest-path font-mono text-purple-300">/{cmd.name}</span>
+                  {cmd.description && <span className="pc-command-suggest-desc">{cmd.description}</span>}
+                  {cmd.inputHint && <span className="pc-command-suggest-hint font-mono">{cmd.inputHint}</span>}
+                  <span className="pc-file-suggest-kbd">Tab</span>
+                </li>
+              ))}
+            </ul>
+          )}
+
 
           {/* 指标条 */}
           <div className="pc-metrics">
@@ -1283,25 +1660,90 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                 <Paperclip size={12} />
               </button>
 
-              {/* 模型选择 */}
-              <Dropdown menu={{ items: modelMenuItems }} trigger={['click']} disabled={envLocked || stream.isStreaming}>
+              {/* 引擎选择 Dropdown */}
+              <Dropdown menu={{ items: engineMenuItems }} trigger={['click']} disabled={stream.isStreaming}>
                 <button
                   type="button"
                   className="pc-action-btn has-label"
-                  title="选择模型"
+                  title="切换 Agent 引擎"
                 >
-                  {selectedModel && getProviderIcon(selectedModel.provider, 11)}
-                  <span className="max-w-[90px] truncate">{selectedModel?.name || selectionId || '选择模型'}</span>
+                  {engine === 'thunder' ? (
+                    <Zap size={11} className="text-amber-400" />
+                  ) : engine === 'claude' ? (
+                    <Anthropic size={11} />
+                  ) : (
+                    <OpenAI size={11} />
+                  )}
+                  <span className="font-medium">
+                    {engine === 'thunder' ? 'Thunder' : engine === 'claude' ? 'Claude' : 'Codex'}
+                  </span>
                 </button>
               </Dropdown>
 
-              {/* 思考档位 */}
-              <Dropdown menu={{ items: thinkingMenuItems }} trigger={['click']} disabled={envLocked || stream.isStreaming}>
-                <button type="button" className="pc-action-btn has-label" title="思考档位">
-                  <Sparkles size={11} className="text-amber-400" />
-                  <span>{thinkingLevel ? thinkingLevel.toUpperCase() : 'OFF'}</span>
-                </button>
-              </Dropdown>
+              {/* 当为 Thunder 时：原有模型与思考档位 */}
+              {engine === 'thunder' ? (
+                <>
+                  <Dropdown menu={{ items: modelMenuItems }} trigger={['click']} disabled={envLocked || stream.isStreaming}>
+                    <button
+                      type="button"
+                      className="pc-action-btn has-label"
+                      title="选择模型"
+                    >
+                      {selectedModel && getProviderIcon(selectedModel.provider, 11)}
+                      <span className="max-w-[90px] truncate">{selectedModel?.name || selectionId || '选择模型'}</span>
+                    </button>
+                  </Dropdown>
+
+                  <Dropdown menu={{ items: thinkingMenuItems }} trigger={['click']} disabled={envLocked || stream.isStreaming}>
+                    <button type="button" className="pc-action-btn has-label" title="思考档位">
+                      <Sparkles size={11} className="text-amber-400" />
+                      <span>{thinkingLevel ? thinkingLevel.toUpperCase() : 'OFF'}</span>
+                    </button>
+                  </Dropdown>
+                </>
+              ) : (
+                /* 当为 ACP 模式 (Claude Code / Codex) 时 */
+                <>
+                  {acpModelMenuItems && (
+                    <Dropdown menu={{ items: acpModelMenuItems }} trigger={['click']} disabled={stream.isStreaming}>
+                      <button type="button" className="pc-action-btn has-label" title="ACP 模型">
+                        <span className="max-w-[90px] truncate">{currentAcpModelLabel || '选择模型'}</span>
+                      </button>
+                    </Dropdown>
+                  )}
+
+                  {acpModeMenuItems && (
+                    <Dropdown menu={{ items: acpModeMenuItems }} trigger={['click']} disabled={stream.isStreaming}>
+                      <button type="button" className="pc-action-btn has-label" title="ACP 模式">
+                        <span className="max-w-[80px] truncate">{currentAcpModeLabel || '默认模式'}</span>
+                      </button>
+                    </Dropdown>
+                  )}
+
+                  {acpThoughtMenuItems && (
+                    <Dropdown menu={{ items: acpThoughtMenuItems }} trigger={['click']} disabled={stream.isStreaming}>
+                      <button type="button" className="pc-action-btn has-label" title="ACP 思考档位">
+                        <Sparkles size={11} className="text-amber-400" />
+                        <span>{currentAcpThoughtLabel || '思考档位'}</span>
+                      </button>
+                    </Dropdown>
+                  )}
+
+                  <button
+                    type="button"
+                    className={`pc-action-btn has-label ${acpPermissionPolicy === 'allowAll' ? 'text-emerald-400' : 'text-amber-400'}`}
+                    title={
+                      acpPermissionPolicy === 'allowAll'
+                        ? '当前：工作区操作自动批准（点击切换为手动审批）'
+                        : '当前：每次操作手动审批（点击切换为自动批准）'
+                    }
+                    disabled={stream.isStreaming}
+                    onClick={() => void selectAcpPermissionPolicy(acpPermissionPolicy === 'allowAll' ? 'ask' : 'allowAll')}
+                  >
+                    <span>{acpPermissionPolicy === 'allowAll' ? '⚡ 自动批准' : '✋ 手动审批'}</span>
+                  </button>
+                </>
+              )}
             </div>
 
             {streamHere ? (

@@ -1452,3 +1452,106 @@
   color: var(--pc-text-3);
   padding: 8px 2px;
 }
+
+/* ================= ACP 权限卡片与控制样式 ================= */
+.pc-acp-permission-card {
+  background: linear-gradient(180deg, rgba(99, 102, 241, 0.16), rgba(30, 41, 59, 0.95));
+  border: 1px solid rgba(129, 140, 248, 0.45);
+}
+
+.pc-acp-provider-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  background: rgba(147, 51, 234, 0.2);
+  border: 1px solid rgba(168, 85, 247, 0.4);
+  color: #d8b4fe;
+}
+
+.pc-acp-permission-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pc-acp-permission-title {
+  margin: 0;
+  font-size: 12px;
+  color: #e2e8f0;
+  line-height: 1.45;
+  word-break: break-all;
+}
+
+.pc-acp-permission-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.pc-acp-perm-btn {
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(30, 41, 59, 0.8);
+  color: #cbd5e1;
+  transition: all 0.15s ease;
+}
+
+.pc-acp-perm-btn:hover {
+  background: rgba(51, 65, 85, 0.9);
+  color: #f8fafc;
+}
+
+.pc-acp-perm-btn.is-primary {
+  background: #2563eb;
+  border-color: #3b82f6;
+  color: #ffffff;
+}
+
+.pc-acp-perm-btn.is-primary:hover {
+  background: #1d4ed8;
+}
+
+.pc-acp-perm-btn.is-always {
+  background: rgba(16, 185, 129, 0.15);
+  border-color: rgba(16, 185, 129, 0.4);
+  color: #6ee7b7;
+}
+
+.pc-acp-perm-btn.is-always:hover {
+  background: rgba(16, 185, 129, 0.25);
+  color: #a7f3d0;
+}
+
+.pc-acp-perm-btn.is-reject {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+}
+
+.pc-acp-perm-btn.is-reject:hover {
+  background: rgba(239, 68, 68, 0.25);
+}
+
+.pc-command-suggest-desc {
+  font-size: 10px;
+  color: #94a3b8;
+  margin-left: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pc-command-suggest-hint {
+  font-size: 9px;
+  color: #64748b;
+  margin-left: auto;
+  padding-left: 8px;
+}

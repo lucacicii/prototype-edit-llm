@@ -21,6 +21,7 @@
     "build:mac": "npm run build && electron-builder --mac"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "^1.8.0",
     "@lobehub/icons": "^5.23.0",
     "@lobehub/ui": "^5.57.3",
     "@monaco-editor/react": "^4.7.0",
