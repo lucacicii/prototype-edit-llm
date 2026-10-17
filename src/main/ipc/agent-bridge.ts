@@ -19,7 +19,6 @@ import { PointedTarget, PrototypeAgent } from '../agent/prototype-agent'
 import { detectTechStack, stackInfo, TechStack } from '../agent/tech-stack'
 import { ThunderClient, getSharedThunderClient } from './thunder-client'
 import { syncThunderModelConfig } from '../agent/thunder-model-config'
-import { syncThunderModels } from '../agent/thunder-import'
 import { ProjectRunner } from '../project-runner'
 import {
   loadProjectItem,
@@ -923,24 +922,6 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
       }
     }
   )
-
-  /**
-   * 手动从 Thunder 配置一次性导入模型（设置页按钮触发）。
-   *
-   * 只在点击时读 `~/.thunder/models.json`，按"自家已有永远赢"合并进
-   * providers.json。平时 resolveAgentModel 不读 thunder。
-   */
-  ipcMain.handle('agent:sync-thunder-models', async () => {
-    try {
-      const result = await syncThunderModels()
-      if (!result.ok) {
-        return { ...result, keyStore: keyStoreStatus() }
-      }
-      return { ...result, keyStore: keyStoreStatus() }
-    } catch (err: any) {
-      return { ok: false, error: err?.message ?? String(err) }
-    }
-  })
 
   ipcMain.handle('agent:tools', () => [
     {

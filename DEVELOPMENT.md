@@ -53,6 +53,17 @@
    - `thunder` 侧车不需要维护任何 `models.json` 或 `auth.json`。
    - 每次执行任务时，Electron 主进程从 `providers.json` + `provider-secrets.json` 解密组装出完整的 `RuntimeModel`，通过 `run_task` 请求的 **`model_descriptor`** 字段直接传给 `thunder-daemon`。
    - `thunder-daemon` 收到 `model_descriptor` 后直接调用 `RpiAiClient::from_descriptor` 构建 HTTP 流客户端。
+3. **`~/.thunder` 不参与服务商配置**：设置页「模型服务」没有「从 thunder 导入/同步」这条路（它实际读的是本应用自己的隔离目录，不是用户家目录，已于 `feat/curl-import-provider` 删除）。服务商只有两种加进来的方式：**预设/手填**，或在「添加服务商」弹窗里**粘贴一段 curl 命令**。
+
+### 「从 curl 导入」的边界（`src/renderer/src/utils/parseCurl.ts`）
+
+- **解析在渲染层做，是个纯函数**：输入一段命令行文本，输出一条服务商记录的**初值**。不新增 IPC —— 解析出的密钥只是填进 `Input.Password`，之后和手打进去的密钥走完全相同的路径（`agent:save-model` → `secrets.ts` 的 safeStorage）。
+- **方言是推断，不是词表**：`api` 只由 URL 路径后缀推（`/responses`、`/chat/completions`、`/messages`），推不出来就**留空并提示**，绝不猜 —— 词表的权威仍是主进程的 `SUPPORTED_APIS`（经 `get-config` 下发，弹窗再过滤一次）。
+- **密钥的来源有优先级**：`Authorization: Bearer` → `x-api-key`/`api-key` → 裸 `Authorization` → 地址里的 `?k=`/`key=`/`api_key=`/`token=`。取第一个**不是占位符**的（`{{...}}`、`$VAR`、`<...>`、`xxxx` 都算占位符 —— 填进去就是一把假密钥，要到第一次对话才炸）。
+- ⚠️ **`?k=` 不一定是 API Key**：实测 `https://www.lucastech.xyz/?k=…` 那个值拿去 `GET /v1/models` 与 `POST /v1/responses` 都是 **401**，真正能用的是 curl 里 `Authorization` 头那把 key。所以解析器会把「密钥是从查询参数取的」单独标成 warning，提醒保存前确认 —— 它没法替用户判断那是不是控制台口令。
+- **`baseUrl` 不含端点**：剥掉路径上的端点后缀剩下的就是 `baseUrl`。注意 `agent-bridge.ts` 的探测与「拉取模型列表」在 `baseUrl` 不以 `/v1` 结尾时会**自动补 `/v1`**，所以「端点在 `{origin}/xxx` 且不带 `/v1`」的网关表达不出来 —— 解析器会在剥到根地址时提示这一点。
+- **不写 `LibraryModel.headers`**：非鉴权请求头（如 `X-Tenant`）解析器会在界面上点名说「已忽略」，但不会偷偷塞进 `headers` —— 设置页两张表单都没有它的输入框，塞进去就是改了看不见的状态。要支持得先给表单加输入框，并按 §五.3 的提醒同步 `thunder-model-config.ts` 的映射。
+- 自检：`node scripts/verify-curl-import.cjs`（见 `scripts/verify-curl-import.md`）。
 
 ---
 

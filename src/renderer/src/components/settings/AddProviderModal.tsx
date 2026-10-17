@@ -1,10 +1,12 @@
 import React, { useState } from 'react'
 import { Modal, Input, Select, Checkbox, message } from 'antd'
-import { CloudDownload, Sparkles } from 'lucide-react'
+import { ChevronDown, ChevronRight, ClipboardPaste, CloudDownload, Sparkles } from 'lucide-react'
 import {
-  useAgentModelConfigStore
+  useAgentModelConfigStore,
+  useProviderGroups
 } from '../../stores/useAgentModelConfigStore'
-import { presetsFor, type ProviderPreset } from './provider-presets'
+import { CUSTOM_PRESET_KEY, presetsFor, type ProviderPreset } from './provider-presets'
+import { parseCurlImport, type CurlImportResult } from '../../utils/parseCurl'
 import {
   fetchRemoteModelsHelper,
   inferModelCapabilities,
@@ -18,8 +20,26 @@ interface AddProviderModalProps {
   onClose: () => void
 }
 
+/**
+ * 「解析并填入」那一刻 setState 还没提交，所以拉列表/探测思考档位不能读 state
+ * —— 得把刚解析出来的值直接传下去，否则会拿旧端点去请求。
+ */
+interface FetchOverrides {
+  provider?: string
+  api?: string
+  baseUrl?: string
+  apiKey?: string
+  modelId?: string
+}
+
+/** 密钥只给用户看个首尾，别把整把密钥铺在屏幕上。 */
+function maskKey(value: string): string {
+  return value.length <= 8 ? '•'.repeat(value.length) : `${value.slice(0, 4)}…${value.slice(-4)}`
+}
+
 export const AddProviderModal: React.FC<AddProviderModalProps> = ({ open, onClose }) => {
   const { vocabularies, envLocked, selectModel } = useAgentModelConfigStore()
+  const providers = useProviderGroups()
   const presets = presetsFor(vocabularies.apiOptions)
 
   const [presetKey, setPresetKey] = useState<string>('deepseek')
@@ -38,6 +58,11 @@ export const AddProviderModal: React.FC<AddProviderModalProps> = ({ open, onClos
   const [selectedRemoteModel, setSelectedRemoteModel] = useState<RemoteModelItem | null>(null)
   const [probingThinking, setProbingThinking] = useState(false)
 
+  // 从 curl 导入
+  const [curlOpen, setCurlOpen] = useState(false)
+  const [curlText, setCurlText] = useState('')
+  const [curlParsed, setCurlParsed] = useState<CurlImportResult | null>(null)
+
   const handleApplyPreset = (item: ProviderPreset) => {
     setPresetKey(item.key)
     setProvider(item.providerId)
@@ -50,8 +75,20 @@ export const AddProviderModal: React.FC<AddProviderModalProps> = ({ open, onClos
     setSelectedRemoteModel(null)
   }
 
-  const handleFetchModels = async () => {
-    if (!baseUrl.trim()) {
+  const handleFetchModels = async (overrides: FetchOverrides = {}) => {
+    const targetProvider = (overrides.provider ?? provider).trim()
+    const targetApi = overrides.api ?? api
+    const targetBaseUrl = (overrides.baseUrl ?? baseUrl).trim()
+    const targetApiKey = (overrides.apiKey ?? apiKey).trim() || undefined
+    const preferredModelId = (overrides.modelId ?? modelId).trim()
+    const target: FetchOverrides = {
+      provider: targetProvider,
+      api: targetApi,
+      baseUrl: targetBaseUrl,
+      apiKey: targetApiKey
+    }
+
+    if (!targetBaseUrl) {
       message.warning('请先填写 Base URL')
       return
     }
@@ -59,20 +96,20 @@ export const AddProviderModal: React.FC<AddProviderModalProps> = ({ open, onClos
     setFetchingModels(true)
     try {
       const res = await fetchRemoteModelsHelper({
-        provider: provider.trim(),
-        api,
-        baseUrl: baseUrl.trim(),
-        apiKey: apiKey.trim() || undefined
+        provider: targetProvider,
+        api: targetApi,
+        baseUrl: targetBaseUrl,
+        apiKey: targetApiKey
       })
 
       if (res?.ok && Array.isArray(res.models) && res.models.length > 0) {
         setRemoteModels(res.models)
         message.success(`成功从服务商获取到 ${res.models.length} 个模型！`)
 
-        // If current modelId is empty or not in list, auto pick the first or matching one
-        const match = res.models.find((m) => m.id === modelId) || res.models[0]
+        // 解析出的模型在列表里就选它，否则退回第一个
+        const match = res.models.find((m) => m.id === preferredModelId) || res.models[0]
         if (match) {
-          handleSelectRemoteModel(match)
+          await handleSelectRemoteModel(match, target)
         }
       } else {
         message.warning(res?.error || '未获取到可用模型，请检查 Base URL 与 API Key 是否正确')
@@ -84,19 +121,27 @@ export const AddProviderModal: React.FC<AddProviderModalProps> = ({ open, onClos
     }
   }
 
-  const handleSelectRemoteModel = async (model: RemoteModelItem) => {
+  const handleSelectRemoteModel = async (
+    model: RemoteModelItem,
+    overrides: FetchOverrides = {}
+  ) => {
+    const targetProvider = (overrides.provider ?? provider).trim()
+    const targetApi = overrides.api ?? api
+    const targetBaseUrl = (overrides.baseUrl ?? baseUrl).trim()
+    const targetApiKey = (overrides.apiKey ?? apiKey).trim() || undefined
+
     setSelectedRemoteModel(model)
     setModelId(model.id)
     setModelName(model.name || '')
 
-    if (!baseUrl.trim() || !model.id.trim()) return
+    if (!targetBaseUrl || !model.id.trim()) return
     setProbingThinking(true)
     try {
       const res = await probeThinkingLevelsHelper({
-        provider: provider.trim(),
-        api,
-        baseUrl: baseUrl.trim(),
-        apiKey: apiKey.trim() || undefined,
+        provider: targetProvider,
+        api: targetApi,
+        baseUrl: targetBaseUrl,
+        apiKey: targetApiKey,
         modelId: model.id.trim()
       })
       if (res?.ok && Array.isArray(res.thinkingLevels) && res.thinkingLevels.length > 0) {
@@ -129,6 +174,71 @@ export const AddProviderModal: React.FC<AddProviderModalProps> = ({ open, onClos
     } finally {
       setProbingThinking(false)
     }
+  }
+
+  /**
+   * 「从 curl 导入」：只填字段，不落库 —— 密钥与方言都留在界面上可改，
+   * 点「保存」才走 window.agent.saveModel。解析本身不碰网络。
+   */
+  const handleApplyCurl = async () => {
+    const parsed = parseCurlImport(curlText)
+    setCurlParsed(parsed)
+    if (!parsed.ok) {
+      message.error(parsed.error || '没能从这段文本里解析出网关信息')
+      return
+    }
+
+    const warnings = [...parsed.warnings]
+    // 方言的权威是主进程下发的 apiOptions，不是解析器 —— 内核不支持就不填。
+    const apiSupported = !!parsed.api && vocabularies.apiOptions.includes(parsed.api)
+    if (parsed.api && !apiSupported) {
+      warnings.push(`解析出的方言 ${parsed.api} 当前内核不支持，已保留原选择`)
+    }
+
+    const nextProvider = parsed.provider ?? provider
+    const nextApi = apiSupported ? parsed.api! : api
+    const nextBaseUrl = parsed.baseUrl ?? baseUrl
+    const nextApiKey = parsed.apiKey ?? apiKey
+    const nextModelId = parsed.modelId ?? modelId
+
+    // 模型库的不变量是「一个 provider id 对一个网关」，撞上会被 validateModel 拒掉。
+    // 提前说清怎么解，别让人在保存时才看到一句看不懂的报错。
+    const existing = providers.find((group) => group.provider === nextProvider)
+    const sameEndpoint =
+      existing &&
+      existing.api === nextApi &&
+      existing.baseUrl.replace(/\/+$/, '') === nextBaseUrl.replace(/\/+$/, '')
+    if (existing && !sameEndpoint) {
+      warnings.push(
+        `服务商「${nextProvider}」已存在且指向 ${existing.api} ${existing.baseUrl} —— 直接保存会被拒：改个标识，或先在那里用「保存网关设置」把端点改过来`
+      )
+    }
+
+    setPresetKey(CUSTOM_PRESET_KEY)
+    setProvider(nextProvider)
+    setApi(nextApi)
+    setBaseUrl(nextBaseUrl)
+    setApiKey(nextApiKey)
+    setModelId(nextModelId)
+    setModelName('')
+    setRemoteModels([])
+    setSelectedRemoteModel(null)
+    setCurlParsed({ ...parsed, warnings })
+
+    if (parsed.apiKey) {
+      message.success('已解析并填入下面的表单，请核对后保存')
+    } else {
+      message.warning('已解析并填入表单，但没有拿到密钥 —— 请补上后再保存')
+    }
+
+    // 顺手拉一次真实模型列表，让用户从列表里挑（解析出的 id 作为默认选中）
+    await handleFetchModels({
+      provider: nextProvider,
+      api: nextApi,
+      baseUrl: nextBaseUrl,
+      apiKey: nextApiKey,
+      modelId: nextModelId
+    })
   }
 
   const handleSave = async () => {
@@ -228,7 +338,65 @@ export const AddProviderModal: React.FC<AddProviderModalProps> = ({ open, onClos
       okText="保存"
       cancelText="取消"
     >
-      <div className="py-2 space-y-3.5 text-xs">
+      <div className="py-2 space-y-3.5 text-xs max-h-[70vh] overflow-y-auto">
+        {/* 从 curl 导入：解析只填下面那几栏，落库仍走「保存」 */}
+        <div className="rounded-lg border border-slate-800 bg-slate-900/60">
+          <button
+            type="button"
+            className="w-full flex items-center gap-1.5 px-2.5 py-2 text-left transition cursor-pointer hover:bg-slate-800/40 rounded-lg"
+            onClick={() => setCurlOpen((v) => !v)}
+          >
+            {curlOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+            <ClipboardPaste size={13} className="text-sky-400" />
+            <span className="font-semibold text-slate-200">从 curl 导入</span>
+            <span className="text-slate-500">粘贴 curl 命令，自动填下面几栏</span>
+          </button>
+
+          {curlOpen && (
+            <div className="px-2.5 pb-2.5 space-y-2">
+              <Input.TextArea
+                rows={4}
+                value={curlText}
+                onChange={(e) => setCurlText(e.target.value)}
+                className="font-mono text-[11px]"
+                placeholder={`curl https://gw.example.com/v1/responses \\
+  -H "Authorization: Bearer sk-..." \\
+  -d '{"model":"vendor/model-name"}'`}
+              />
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleApplyCurl}
+                  className="h-7 px-2.5 rounded bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 border border-sky-500/30 font-medium transition cursor-pointer"
+                >
+                  解析并填入
+                </button>
+                <span className="text-slate-500">
+                  解析在本地做：密钥只会填进下面的输入框，不会另存一份
+                </span>
+              </div>
+
+              {curlParsed?.ok && (
+                <div className="rounded border border-slate-800 bg-slate-950/60 p-2 space-y-0.5 font-mono text-[11px] text-slate-300">
+                  {curlParsed.provider && <div>provider <span className="text-sky-300">{curlParsed.provider}</span></div>}
+                  {curlParsed.api && <div>api <span className="text-sky-300">{curlParsed.api}</span></div>}
+                  {curlParsed.baseUrl && <div>baseUrl <span className="text-sky-300">{curlParsed.baseUrl}</span></div>}
+                  {curlParsed.apiKey && <div>密钥 <span className="text-sky-300">{maskKey(curlParsed.apiKey)}</span></div>}
+                  {curlParsed.modelId && <div>模型 <span className="text-sky-300">{curlParsed.modelId}</span></div>}
+                </div>
+              )}
+
+              {!!curlParsed?.warnings.length && (
+                <ul className="space-y-0.5 text-[11px] text-amber-300/90 list-disc pl-4">
+                  {curlParsed.warnings.map((warning, index) => (
+                    <li key={index}>{warning}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
+
         {/* 预设标签 */}
         <div>
           <label className="block text-slate-400 font-medium mb-1.5">常用服务商预设</label>
@@ -304,7 +472,7 @@ export const AddProviderModal: React.FC<AddProviderModalProps> = ({ open, onClos
             <button
               type="button"
               disabled={fetchingModels}
-              onClick={handleFetchModels}
+              onClick={() => handleFetchModels()}
               className="h-7 px-2.5 rounded bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 border border-sky-500/30 text-xs font-medium flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50"
             >
               <CloudDownload size={13} className={fetchingModels ? 'animate-bounce' : ''} />
