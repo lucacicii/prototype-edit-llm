@@ -9,13 +9,15 @@
  * 行尾 `\` 续行、单引号里原样、双引号里只有 `\"` 是转义 —— 这些决定了
  * `-d '{"model": "x"}'` 里的引号会不会把后面的 `-H` 一起吞掉。
  *
- * 三条自我约束：
+ * 四条自我约束：
  *   1. 判不出来就说判不出来。方言认不出来时不猜一个「大概率对」的值填上去，
  *      而是留 undefined + 一条 warning —— 猜错方言的代价是发出去才报错
  *      （见 provider-presets.ts 里记着的那次 `google-generative-ai` 事故）。
  *   2. 密钥永不留占位符。`{{API_KEY_x}}` 这种模板占位符一旦被填进表单，
  *      保存后就是一把假密钥，要到第一次对话才炸；这里直接跳过并说明跳过了什么。
- *   3. 丢东西要出声。认不出、被忽略、被跳过的，全部进 `warnings`。
+ *   3. 密钥只从**鉴权头**取，不看地址里的 `?k=` 等查询参数（理由见 `parseCurlImport`
+ *      里密钥那一段的注释：实测那些参数常常是控制台口令，不是 API Key）。
+ *   4. 丢东西要出声。认不出、被忽略、被跳过的，全部进 `warnings`。
  *
  * 注意 `api` 的三个推断目标是**推断目标**，不是方言词表的一份拷贝 ——
  * 词表的权威在主进程（`provider-store.ts` 的 `SUPPORTED_APIS`，经 `get-config`
@@ -36,9 +38,6 @@ const DATA_FLAGS = new Set([
   '--data-urlencode'
 ])
 
-/** 携带密钥的查询参数名。用户给的样本用的是 `?k=`。 */
-const KEY_PARAMS = ['k', 'key', 'api_key', 'apikey', 'token']
-
 /** 鉴权头的候选，按优先级。 */
 const KEY_HEADERS = ['authorization', 'x-api-key', 'api-key', 'x-goog-api-key']
 
@@ -57,7 +56,7 @@ export interface CurlImportResult {
   /** SUPPORTED_APIS 之一，或 undefined（判不出来）。调用方仍须用 apiOptions 过滤。 */
   api?: string
   baseUrl?: string
-  /** 真密钥。占位符一律不填。 */
+  /** 真密钥，只来自 curl 的鉴权头。占位符、以及地址里的查询参数，一律不填。 */
   apiKey?: string
   modelId?: string
   /** 认不出 / 被忽略 / 被跳过的，逐条说清。 */
@@ -219,17 +218,11 @@ export function parseCurlImport(input: string): CurlImportResult {
   const tokens = tokenize(text)
   if (!tokens.length) return { ok: false, error: '没能从这段文本里切出任何内容', warnings }
 
-  // 配置 URL 只从 `curl` 之后找：粘贴里常见的「控制台地址（带密钥）」在前，
-  // 那是给密钥用的，不是网关端点。
+  // 配置 URL 只从 `curl` 之后找：粘贴里常见的「控制台地址（带 ?k=）」在前，
+  // 那是控制台页面，不是网关端点。
   const curlIdx = tokens.findIndex((t) => t === 'curl')
   const scanFrom = curlIdx >= 0 ? curlIdx + 1 : 0
 
-  // 整段文本里所有 URL 都要留着 —— 密钥可能藏在任何一个的查询参数里。
-  const allUrls: string[] = []
-  for (const token of tokens) {
-    const found = token.match(/https?:\/\/[^\s"']+/g)
-    if (found) for (const u of found) allUrls.push(u.replace(/[,;]+$/, ''))
-  }
 
   let configUrl: string | undefined
   for (let i = scanFrom; i < tokens.length; i++) {
@@ -304,7 +297,12 @@ export function parseCurlImport(input: string): CurlImportResult {
     warnings.push('这段 curl 没有请求体，模型 ID 请手填或点「拉取模型列表」')
   }
 
-  // ---- 密钥：按优先级取第一个「不是占位符」的 ----
+  // ---- 密钥：只在鉴权头里找 ----
+  //
+  // 为什么不去看地址的 `?k=` 等查询参数：实测过，`https://www.lucastech.xyz/?k=…`
+  // 那个值拿去 `GET /v1/models` 与 `POST /v1/responses` 都是 401，真正能用的是
+  // curl 里 `Authorization` 头那把 key —— 也就是说那个参数是控制台/仪表盘口令。
+  // 自动回退到它只会填出一把「看着填好了、一发就 401」的密钥，比留空更糟。
   const candidates: KeyCandidate[] = []
   const pushCandidate = (value: string, from: string): void => {
     if (value?.trim()) candidates.push({ value: value.trim(), from })
@@ -320,39 +318,17 @@ export function parseCurlImport(input: string): CurlImportResult {
     const value = headers.get(name)
     if (value) pushCandidate(value, `curl 的 ${name} 头`)
   }
-  for (const raw of allUrls) {
-    let url: URL
-    try {
-      url = new URL(raw)
-    } catch {
-      continue
-    }
-    for (const param of KEY_PARAMS) {
-      const value = url.searchParams.get(param)
-      if (value?.trim()) {
-        pushCandidate(value, `地址里的 ${param}= 参数`)
-        break
-      }
-    }
-  }
 
   const picked = candidates.find((c) => !isPlaceholder(c.value))
   const skipped = candidates.filter((c) => isPlaceholder(c.value))
-  if (picked) {
-    for (const s of skipped) {
-      warnings.push(`${s.from}里是占位符 ${s.value}，已改用别处的密钥`)
-    }
-    if (picked.from.includes('参数')) {
-      // 实测过的坑：有的网关 `?k=` 是控制台口令，不是 API Key（拿去调 /v1/* 会 401）。
-      // 这里没法替用户判断，只能把风险指出来。
+  if (!picked) {
+    if (skipped.length) {
       warnings.push(
-        `密钥是从${picked.from}取的 —— 有的网关这个参数是控制台口令而不是 API Key（调用会 401），保存前请确认真实可用的密钥`
+        `${skipped.map((s) => s.from).join('、')}里是占位符（${skipped.map((s) => s.value).join('、')}）—— 未填入密钥，请把真实密钥粘到下面的密钥栏`
       )
+    } else {
+      warnings.push('这段 curl 里没有鉴权头，未填入密钥 —— 请把真实密钥粘到下面的密钥栏')
     }
-  } else if (skipped.length) {
-    warnings.push(
-      `解析到的密钥是占位符（${skipped.map((s) => s.value).join('、')}），没有填入 —— 请粘贴真实密钥`
-    )
   }
 
   // ---- 方言 ----

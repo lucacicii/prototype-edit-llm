@@ -59,8 +59,8 @@
 
 - **解析在渲染层做，是个纯函数**：输入一段命令行文本，输出一条服务商记录的**初值**。不新增 IPC —— 解析出的密钥只是填进 `Input.Password`，之后和手打进去的密钥走完全相同的路径（`agent:save-model` → `secrets.ts` 的 safeStorage）。
 - **方言是推断，不是词表**：`api` 只由 URL 路径后缀推（`/responses`、`/chat/completions`、`/messages`），推不出来就**留空并提示**，绝不猜 —— 词表的权威仍是主进程的 `SUPPORTED_APIS`（经 `get-config` 下发，弹窗再过滤一次）。
-- **密钥的来源有优先级**：`Authorization: Bearer` → `x-api-key`/`api-key` → 裸 `Authorization` → 地址里的 `?k=`/`key=`/`api_key=`/`token=`。取第一个**不是占位符**的（`{{...}}`、`$VAR`、`<...>`、`xxxx` 都算占位符 —— 填进去就是一把假密钥，要到第一次对话才炸）。
-- ⚠️ **`?k=` 不一定是 API Key**：实测 `https://www.lucastech.xyz/?k=…` 那个值拿去 `GET /v1/models` 与 `POST /v1/responses` 都是 **401**，真正能用的是 curl 里 `Authorization` 头那把 key。所以解析器会把「密钥是从查询参数取的」单独标成 warning，提醒保存前确认 —— 它没法替用户判断那是不是控制台口令。
+- **密钥只从鉴权头取**：`Authorization: Bearer` → `x-api-key`/`api-key`，取第一个**不是占位符**的（`{{...}}`、`$VAR`、`<...>`、`xxxx` 都算占位符 —— 填进去就是一把假密钥，要到第一次对话才炸）。全是占位符、或者压根没有鉴权头，就**什么都不填**，只提示「请粘贴真实密钥」。
+- ⚠️ **地址里的 `?k=` 不当密钥**：实测 `https://www.lucastech.xyz/?k=…` 那个值拿去 `GET /v1/models` 与 `POST /v1/responses` **都是 401**，真正能用的是 curl 里 `Authorization` 头那把 key —— 也就是说 `?k=` 是控制台/仪表盘口令。自动回退到它只会填出一把「看着填好了、一发就 401」的密钥，比留空更糟，所以解析器直接忽略它。（代价：只有裸地址、没有 curl 的粘贴，密钥栏会空着，得手填。）
 - **`baseUrl` 不含端点**：剥掉路径上的端点后缀剩下的就是 `baseUrl`。注意 `agent-bridge.ts` 的探测与「拉取模型列表」在 `baseUrl` 不以 `/v1` 结尾时会**自动补 `/v1`**，所以「端点在 `{origin}/xxx` 且不带 `/v1`」的网关表达不出来 —— 解析器会在剥到根地址时提示这一点。
 - **不写 `LibraryModel.headers`**：非鉴权请求头（如 `X-Tenant`）解析器会在界面上点名说「已忽略」，但不会偷偷塞进 `headers` —— 设置页两张表单都没有它的输入框，塞进去就是改了看不见的状态。要支持得先给表单加输入框，并按 §五.3 的提醒同步 `thunder-model-config.ts` 的映射。
 - 自检：`node scripts/verify-curl-import.cjs`（见 `scripts/verify-curl-import.md`）。

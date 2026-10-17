@@ -65,18 +65,17 @@ const sample = [
   '     -d \'{"model": "group/auto-glm-5-3-flash", "input": "hi"}\''
 ].join('\n')
 const r1 = parseCurlImport(sample)
-check('样本：五个字段', pick(r1), {
+check('样本：字段', pick(r1), {
   ok: true,
   error: undefined,
   provider: 'lucastech',
   api: 'openai-responses',
   baseUrl: 'https://www.lucastech.xyz/v1',
-  apiKey: K(1),
+  apiKey: undefined,
   modelId: 'group/auto-glm-5-3-flash'
 })
-check('样本：占位符被点名跳过，并提示 ?k= 的风险', r1.warnings, [
-  'curl 的 Authorization: Bearer 头里是占位符 $MY_API_KEY，已改用别处的密钥',
-  '密钥是从地址里的 k= 参数取的 —— 有的网关这个参数是控制台口令而不是 API Key（调用会 401），保存前请确认真实可用的密钥'
+check('样本：占位符不填，改提示粘贴真密钥', r1.warnings, [
+  'curl 的 Authorization: Bearer 头里是占位符（$MY_API_KEY）—— 未填入密钥，请把真实密钥粘到下面的密钥栏'
 ])
 
 // 2. 单行 curl
@@ -169,7 +168,7 @@ check('连写与 --url', pick(r10), {
   modelId: 'm4'
 })
 
-// 11. 只有裸 URL（没有 curl）—— 地址本身就是配置 URL
+// 11. 只有裸 URL（没有 curl）—— 地址本身就是配置 URL；?k= 不当密钥
 const r11 = parseCurlImport(`https://www.lucastech.xyz/v1/responses?k=${K(11)}`)
 check('裸 URL', pick(r11), {
   ok: true,
@@ -177,10 +176,10 @@ check('裸 URL', pick(r11), {
   provider: 'lucastech',
   api: 'openai-responses',
   baseUrl: 'https://www.lucastech.xyz/v1',
-  apiKey: K(11),
+  apiKey: undefined,
   modelId: undefined
 })
-check('裸 URL：提示 ?k= 的风险', hasWarning(r11, '控制台口令'), true)
+check('裸 URL：地址里的 ?k= 被忽略', hasWarning(r11, '没有鉴权头'), true)
 
 // 12. 本机地址推不出服务商名，端口得留着
 const r12 = parseCurlImport(`curl http://127.0.0.1:11434/v1/chat/completions -d '{"model":"llama3"}'`)
@@ -211,11 +210,11 @@ check('双引号包地址 + 续行', pick(r14), {
   modelId: 'm14'
 })
 
-// 15. 两把真密钥：Authorization 优先于 ?k=
+// 15. 地址里的 ?k= 一律不当密钥：只认鉴权头
 const r15 = parseCurlImport(
   `curl https://gw.example.com/v1/responses?k=${K(15)} -H "Authorization: Bearer ${K(16)}" -d '{"model":"m15"}'`
 )
-check('Authorization 优先于 ?k=', pick(r15).apiKey, K(16))
+check('只认鉴权头，?k= 被忽略', pick(r15).apiKey, K(16))
 
 console.log(failed ? `\n${failed} 个用例失败` : '\n全部通过')
 process.exit(failed ? 1 : 0)
