@@ -1,10 +1,18 @@
-import { useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, X, Terminal, Check, Sparkles } from 'lucide-react'
 import { ThinkingState } from './ThinkingState'
 import { ToolCallsState } from './ToolCallsState'
 import type { LiveSegment, LiveTurn } from './useAgentChatStream'
 
-/** 已完成/进行中的一轮圆点：跑完的轮折叠回这里，点开可回看该轮全部思考与工具。 */
+/**
+ * 本次 run 已完成的轮次，挂在助手回复内部（对齐 agent-resume-panel）。
+ *
+ * 主体区只直播当前轮，跑完的轮折叠成这里的一排圆点：上面一行汇总
+ * 「N 步 · M 个工具 · 1.2s」，点开某个圆点在该轮的详情抽屉里回看它的
+ * 思考与工具。正在跑的那一轮不出圆点 —— 它已经在屏幕上，圆点只会是更旧的副本。
+ *
+ * 圆点由调用方作为 ChatMessageItem 的 `turnDots` 插槽传入，位置在正文之前。
+ */
 export function TurnDots({
   turns,
   openIndex,
@@ -16,41 +24,110 @@ export function TurnDots({
   onOpen: (index: number) => void
   onClose: () => void
 }) {
-  if (turns.length === 0) return null
+  const trackRef = useRef<HTMLDivElement | null>(null)
+  const [userExpanded, setUserExpanded] = useState<boolean | null>(null)
+
+  /** 已完成的轮次，带上它在 `turns` 里的下标 —— 抽屉按下标取轮，过滤不能重编号。 */
+  const finished = turns
+    .map((turn, index) => ({ turn, index }))
+    .filter((entry) => entry.turn.status !== 'running')
+
+  // 一轮跑很久时会走出可见区；始终把最新的圆点带进视野。
+  useEffect(() => {
+    const track = trackRef.current
+    if (!track) return
+    track.scrollLeft = track.scrollWidth
+  }, [finished.length])
+
+  if (finished.length === 0) return null
+
+  const showSteps = openIndex !== null || (userExpanded ?? finished.length <= 3)
+
+  const totalTurns = finished.length
+  const totalTools = finished.reduce((sum, entry) => sum + entry.turn.toolCount, 0)
+  const totalDurationMs = finished.reduce((sum, entry) => sum + (entry.turn.durationMs || 0), 0)
+  const errorCount = finished.filter((entry) => entry.turn.status === 'error').length
 
   return (
     <div className="pc-turn-dots" role="tablist" aria-label="Agent 轮次">
-      <span className="pc-turn-dots-label">轮次</span>
-      <div className="pc-turn-dots-track">
-        {turns.map((turn, index) => {
-          const isCurrent = turn.status === 'running'
-          const isOpen = openIndex === index
-          return (
-            <button
-              key={turn.turn}
-              type="button"
-              role="tab"
-              aria-selected={isOpen}
-              className={`pc-turn-dot is-${turn.status}${isOpen ? ' is-open' : ''}`}
-              onClick={() => (isOpen ? onClose() : onOpen(index))}
-              title={turnTitle(turn)}
-            >
-              <span className="pc-turn-dot-num">{turn.turn}</span>
-              {isCurrent && <span className="pc-turn-dot-ring" aria-hidden="true" />}
-            </button>
-          )
-        })}
+      <div
+        className="pc-turn-process-bar"
+        role="button"
+        tabIndex={0}
+        onClick={() => setUserExpanded((prev) => !(prev ?? finished.length <= 3))}
+        onKeyDown={(event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return
+          event.preventDefault()
+          setUserExpanded((prev) => !(prev ?? finished.length <= 3))
+        }}
+      >
+        <div className="pc-turn-process-info">
+          <span className="pc-turn-process-icon">
+            <Sparkles size={12} />
+          </span>
+          <span className="pc-turn-process-label">
+            {totalTurns} 步
+          </span>
+          {totalTools > 0 && (
+            <span className="pc-turn-process-chip">
+              <Terminal size={10} />
+              <span>{totalTools} 个工具</span>
+            </span>
+          )}
+          {totalDurationMs > 0 && (
+            <span className="pc-turn-process-time">{(totalDurationMs / 1000).toFixed(1)}s</span>
+          )}
+          {errorCount > 0 && <span className="pc-turn-process-error">{errorCount} 个失败</span>}
+        </div>
+        <span className="pc-turn-process-hint">
+          {showSteps ? '收起步骤 ▴' : '查看步骤 ▾'}
+        </span>
       </div>
+
+      {showSteps && (
+        <div className="pc-turn-dots-track" ref={trackRef}>
+          {finished.map(({ turn, index }) => {
+            const isOpen = openIndex === index
+            const title = turnTitle(turn)
+            return (
+              <button
+                key={turn.turn}
+                type="button"
+                role="tab"
+                aria-selected={isOpen}
+                aria-label={title}
+                title={title}
+                className={`pc-turn-dot ${kindOf(turn)}${isOpen ? ' is-open' : ''}${
+                  turn.status === 'error' ? ' is-error' : ''
+                }`}
+                onClick={() => (isOpen ? onClose() : onOpen(index))}
+              >
+                <span className="pc-turn-dot-num">{turn.turn}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
+}
+
+/**
+ * 圆点颜色说明这一轮做了什么：调过工具是 `is-tools`，只在脑子里想过是
+ * `is-thinking`。两者都有的轮次按「出去做过事」算 —— 这是眼睛在圆点条上
+ * 读到的差别，也是 tooltip 与 aria-label 报给读屏用户的信息。
+ */
+function kindOf(turn: LiveTurn): 'is-tools' | 'is-thinking' {
+  return turn.toolCount > 0 ? 'is-tools' : 'is-thinking'
 }
 
 function turnTitle(turn: LiveTurn): string {
   const parts = [`第 ${turn.turn} 轮`]
   if (turn.toolCount > 0) parts.push(`${turn.toolCount} 个工具`)
   if (turn.durationMs !== undefined) parts.push(`${(turn.durationMs / 1000).toFixed(1)}s`)
-  parts.push(turn.status === 'running' ? '进行中' : turn.status === 'error' ? '出错' : '已完成')
-  return `${parts.join(' · ')}（点击查看思考与工具）`
+  parts.push(turn.status === 'error' ? '出错' : '已完成')
+  parts.push('点击查看思考与工具')
+  return parts.join(' · ')
 }
 
 /**

@@ -1,5 +1,15 @@
-import { useState } from 'react'
-import { Sparkles, Copy, Check, FileText, Zap, RotateCcw, RefreshCw } from 'lucide-react'
+import React, { useState } from 'react'
+import {
+  Sparkles,
+  Copy,
+  Check,
+  FileText,
+  Zap,
+  RotateCcw,
+  RefreshCw,
+  Pencil,
+  AlertCircle
+} from 'lucide-react'
 import { Markdown } from '@lobehub/ui'
 import { ThinkingState } from './ThinkingState'
 import { ToolCallsState } from './ToolCallsState'
@@ -7,8 +17,8 @@ import type { LiveSegment } from './useAgentChatStream'
 import type { PrototypeChatMessage } from '../../stores/usePrototypeStore'
 
 // 与 chat.css 中 .pc-bubble 的字号/行高保持一致，让用户纯文本与 Agent Markdown 同大。
-const BUBBLE_FONT_SIZE = 12.5
-const BUBBLE_LINE_HEIGHT = 1.65
+const BUBBLE_FONT_SIZE = 13.5
+const BUBBLE_LINE_HEIGHT = 1.6
 
 interface ChatMessageItemProps {
   message: PrototypeChatMessage
@@ -16,13 +26,18 @@ interface ChatMessageItemProps {
   isStreaming?: boolean
   /** 本轮运行的时序切片（流式期间与冻结后都有）。 */
   segments?: LiveSegment[]
+  /**
+   * 本次 run 已完成的轮次圆点。作为容器的第一个子节点渲染，落在头像之后、
+   * 正文之前 —— 一轮的过程属于 Agent 的回复，不属于整个面板。
+   */
+  turnDots?: React.ReactNode
   onEdit?: (text: string) => void
   onResend?: (index: number) => void
   onRegenerate?: (index: number) => void
 }
 
 /**
- * 单条消息渲染（移植自 agent-resume-panel 的 ChatMessageItem）。
+ * 单条消息渲染（对齐 agent-resume-panel 的 ChatMessageItem）。
  *
  * 有 segments 时按真实时间序渲染思考/工具/正文交错；没有时按消息
  * 自身形状（reasoning → 工具 → 正文）兜底。
@@ -32,6 +47,7 @@ export function ChatMessageItem({
   index = 0,
   isStreaming = false,
   segments,
+  turnDots,
   onEdit,
   onResend,
   onRegenerate
@@ -46,7 +62,7 @@ export function ChatMessageItem({
       setCopied(true)
       setTimeout(() => setCopied(false), 1500)
     } catch {
-      // ignore
+      // 剪贴板不可用时静默失败
     }
   }
 
@@ -93,7 +109,7 @@ export function ChatMessageItem({
         <div className="pc-bubble">
           {message.content ? (
             isUser ? (
-              <div className="whitespace-pre-wrap">{message.content}</div>
+              <div className="pc-bubble-text">{message.content}</div>
             ) : (
               <Markdown fontSize={BUBBLE_FONT_SIZE} lineHeight={BUBBLE_LINE_HEIGHT}>
                 {message.content}
@@ -109,6 +125,8 @@ export function ChatMessageItem({
       </>
     )
 
+  const isErrorAnswer = !isUser && message.content?.startsWith('⚠️')
+
   return (
     <div className={`pc-message-row${isUser ? ' is-user' : ' is-assistant'}`}>
       <div className="pc-avatar">
@@ -116,12 +134,14 @@ export function ChatMessageItem({
           <span className="pc-avatar-user">我</span>
         ) : (
           <span className="pc-avatar-agent">
-            <Zap size={13} />
+            <Zap size={14} />
           </span>
         )}
       </div>
 
       <div className="pc-message-container">
+        {turnDots}
+
         {message.inspectContext && (
           <div className="pc-msg-anchor">
             <Sparkles size={10} />
@@ -131,7 +151,7 @@ export function ChatMessageItem({
 
         {body}
 
-        {/* 用户消息操作：复制 / 编辑引用 */}
+        {/* 用户消息操作：复制 / 编辑引用 / 重发（悬停显示） */}
         {isUser && message.content && !isStreaming && (
           <div className="pc-user-toolbar">
             <button type="button" className="pc-action-btn" onClick={handleCopy} title="复制消息">
@@ -144,18 +164,7 @@ export function ChatMessageItem({
                 onClick={() => onEdit(message.content || '')}
                 title="引用到输入框编辑"
               >
-                <svg
-                  width="11"
-                  height="11"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                </svg>
+                <Pencil size={11} />
               </button>
             )}
             {onResend && (
@@ -172,14 +181,35 @@ export function ChatMessageItem({
           </div>
         )}
 
-        {/* 助手消息 footer：复制 + 统计 */}
+        {/* 失败回答：单独的「重试任务」横幅 */}
+        {isErrorAnswer && onRegenerate && (
+          <div className="pc-message-error-action">
+            <button
+              type="button"
+              className="pc-message-retry-btn"
+              onClick={() => onRegenerate(index)}
+              disabled={isStreaming}
+              title="重试本次任务"
+            >
+              <AlertCircle size={11} />
+              <span>重试任务</span>
+            </button>
+          </div>
+        )}
+
+        {/* 助手消息 footer：复制 + 重新生成 + 统计 */}
         {!isUser && message.content && !isStreaming && (
           <div className="pc-msg-footer">
-            <button type="button" className="pc-action-btn has-label" onClick={handleCopy} title="复制回答">
+            <button
+              type="button"
+              className="pc-action-btn has-label"
+              onClick={handleCopy}
+              title="复制回答"
+            >
               {copied ? <Check size={11} /> : <Copy size={11} />}
               <span>{copied ? '已复制' : '复制'}</span>
             </button>
-            {onRegenerate && (
+            {onRegenerate && !isErrorAnswer && (
               <button
                 type="button"
                 className="pc-action-btn has-label"

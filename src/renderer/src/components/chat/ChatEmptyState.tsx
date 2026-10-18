@@ -163,7 +163,7 @@ export function ChatEmptyState({
     <div className="pc-empty">
       <div className="pc-empty-hero">
         <div className="pc-empty-badge">
-          <Sparkles size={18} />
+          <Sparkles size={24} />
         </div>
         <h2 className="pc-empty-title">{projectName || 'AI 原型工作台'}</h2>
         <p className="pc-empty-subtitle">
