@@ -13,16 +13,24 @@
     "requires $THUNDER_RUNTIME_BIN / $THUNDER_DAEMON_BIN to be set explicitly."
   ],
   "thunder": {
-    "version": "0.5.0",
-    "commit": "2085e7e",
-    "source": null,
+    "version": "0.6.0",
+    "commit": "3435ad5",
+    "source": "https://github.com/lucacicii/thunder/releases/download/v0.6.0",
     "artifacts": {
       "darwin-arm64": {
         "thunder-runtime": {
-          "sha256": "3bc5cf33f7d054e6d30c16e1ce4cd6c807ab3260948b7ac4bec355acd8bef5ed"
+          "sha256": "207c5bb1fb63d72079a022114ae01e58fd85122a9709ae1a3a7589422cbed49a"
         },
         "thunder-daemon": {
-          "sha256": "ca048bc00d4dfb76b36cb8a74123610362fb966595bb162f843b468bf3059b3c"
+          "sha256": "13fb90ad616dba3009af8a577624842dbf0b4e9415faa25abd763d25718af87e"
+        }
+      },
+      "darwin-x64": {
+        "thunder-runtime": {
+          "sha256": "e8a75fac792d6dbb8344472c751f3da2ae3948a311471a0183d20df00ab2b804"
+        },
+        "thunder-daemon": {
+          "sha256": "959f12ec584c12880ee3a9bdb3fd4f2ec0635346bb8852619f9905cf86000df7"
         }
       }
     }

@@ -4,3 +4,16 @@
 allowBuilds:
   esbuild: true
   vue-demi: true
+
+# 打包版把 runtime-host 整棵树（含 node_modules）发给用户，用 app 自带的
+# Electron 以 Node 模式跑 Vite。Vite 会按 process.arch 在运行时加载对应的
+# 原生包：esbuild 与 rollup 的 darwin-arm64 / darwin-x64 必须同时装进来，
+# 否则在另一个架构的包里预览服务起不来。current 解析成本机架构，再显式补上
+# 两个 mac 架构，这样无论在哪台机器上构建都同时具备两份。
+supportedArchitectures:
+  os:
+    - current
+  cpu:
+    - current
+    - arm64
+    - x64

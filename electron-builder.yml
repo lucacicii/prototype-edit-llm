@@ -1,7 +1,7 @@
 # 打包版：一个拷到别的 Mac 上双击就能用的 .app / .dmg。
 #
 # 两份外部产物靠下面的 files / extraResources 一起带上（构建前先跑
-# scripts/prepare-sidecars.mjs 把第一份收拢到 build/sidecars/）：
+# scripts/prepare-sidecars.mjs 把第一份按架构收拢到 build/sidecars-<arch>/）：
 #   1. thunder-runtime（Rust，agent 内核）      → Resources/bin/
 #   2. runtime-host（预览用的真 Vite dev server） → Resources/runtime-host/
 # 既不带 node，也不带 pi-ai bridge：模型调用已经回到 thunder 进程内（thunder 的
@@ -31,11 +31,13 @@ files:
   - '!**/node_modules/**'
 
 extraResources:
-  - from: build/sidecars/bin
+  # 侧车按目标架构取：arm64 包拿不到 x64 的 thunder-runtime，反之亦然。
+  # `${arch}` 是 electron-builder 的宏，打包每个架构时展开成 arm64 / x64。
+  - from: build/sidecars-${arch}/bin
     to: bin
   # 溯源戳：这批侧车来自哪一版 thunder（由 scripts/prepare-sidecars.mjs 生成）。
   # 就绪表里显示它，出问题时才知道内嵌的子包是哪一版。
-  - from: build/sidecars/thunder-revision.txt
+  - from: build/sidecars-${arch}/thunder-revision.txt
     to: thunder-revision.txt
   # 预览宿主本体。
   # 注意：runtime-host 现在是**多栈**宿主 —— LLM 按用户提示词
@@ -66,10 +68,18 @@ extraResources:
   # （react 372K + react-dom 4.4M + @vitejs/plugin-react 84K
   # 与各自的传递依赖），相对整包（约 165M 宿主 + asar）可忽略。
 
+dmg:
+  # x64 是 electron-builder 的默认架构，不显式写的话它的 dmg 会退化成
+  # `Prototype Studio-0.1.0.dmg`，只有 arm64 带后缀。两边都带架构名，
+  # 发布时 Intel 用户不会拿错。
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
 mac:
+  # arm64（Apple Silicon）与 x64（Intel）各出一个 dmg。构建时 npm 的
+  # prebuild:mac 会把两个架构的侧车都暂存好，extraResources 再按 ${arch} 取。
   target:
     - target: dmg
-      arch: [arm64]
+      arch: [arm64, x64]
   # 应用图标（.app 与 dmg 都用它）。默认也会到 buildResources（build/）里找
   # icon.icns，这里显式写出来是因为这个文件没有第二个来源：它以 build/icon.png
   # 为母版（1024，内容 832×832 居中、四边留 96px 透明，符合 macOS 图标栅格），

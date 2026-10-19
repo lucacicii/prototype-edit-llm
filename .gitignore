@@ -1,7 +1,7 @@
 node_modules
 out
 dist
-build/sidecars
+build/sidecars*
 # 预编译的 thunder 侧车缓存（scripts/fetch-thunder-binaries.mjs 下载，按 sha256 校验）
 build/thunder-bin
 

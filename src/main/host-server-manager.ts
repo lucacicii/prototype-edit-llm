@@ -107,7 +107,10 @@ export class HostServerManager {
 
     const stampFile = join(target, '.runtime-host-version')
     const viteCli = join(target, 'node_modules', 'vite', 'bin', 'vite.js')
-    const expectedStamp = `${app.getVersion()}-clean-v2`
+    // 铺设目标是所有架构共用的 ~/.prototype-studio/runtime-host，而 node_modules
+    // 里同时放着两个架构的 esbuild / rollup。戳里带 process.arch，切到另一个
+    // 架构的包时会把这份缓存重新铺一遍，不会沿用上一个包留下的树。
+    const expectedStamp = `${app.getVersion()}-clean-v3-${process.arch}`
 
     try {
       const stamp = await fs.readFile(stampFile, 'utf-8').catch(() => null)
