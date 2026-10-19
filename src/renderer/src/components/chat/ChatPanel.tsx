@@ -241,7 +241,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
   // ============ 流式运行（LiveSegment 时序模型 + 指标 + 问题卡 + steer） ============
   const stream = useAgentChatStream({
-    contextWindowLimit: selectedModel?.contextWindow,
+    // thunder 的窗口来自本地模型库；ACP 对面那个 agent 的窗口只能等协议回（见 hook 里的快照）。
+    contextWindowLimit: engine === 'thunder' ? selectedModel?.contextWindow : undefined,
     onCodeUpdated: (code, techStack, previewUrl, entryFile, runPrototypeId) => {
       // 归属以发起 run 的原型为准，而不是「此刻正在看的」那个。
       const owner = usePrototypeStore.getState().prototypes.find((p) => p.id === runPrototypeId)
@@ -627,7 +628,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
   // ============ 指标条数值 ============
   const { lastRunMetrics: metrics, streamingMetrics } = stream
-  const contextLimit = selectedModel?.contextWindow || 0
+  const contextLimit = stream.contextWindowLimit || 0
   const draftTokens = promptInput.trim() ? Math.max(1, Math.ceil(promptInput.trim().length / 3)) : 0
   const contextTokensWithDraft = stream.currentContextTokens + draftTokens
   const contextPercent =
