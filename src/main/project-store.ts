@@ -401,6 +401,8 @@ export async function createProjectOnDisk(params: {
   description?: string
   scenario?: ProductScenario
   preferredStack?: PreferredStack
+  /** 导入的文档：不跑内容启发式，直接锁定技术栈。 */
+  forcedStack?: TechStack
   initialCode?: string
   initialMessages?: PrototypeChatMessage[]
   updatedAt?: number
@@ -413,9 +415,9 @@ export async function createProjectOnDisk(params: {
 
   const scenario: ProductScenario = params.scenario || 'auto'
   const preferredStack: PreferredStack = params.preferredStack || 'auto'
-  let techStack: TechStack = resolveInitialStack(scenario, preferredStack)
+  let techStack: TechStack = params.forcedStack ?? resolveInitialStack(scenario, preferredStack)
 
-  if (params.initialCode) {
+  if (!params.forcedStack && params.initialCode) {
     const verdict = detectTechStack(params.initialCode)
     if (verdict.stack) techStack = verdict.stack
   }

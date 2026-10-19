@@ -12,6 +12,7 @@ import { BrowserViewManager } from './browser-view-manager'
 import { HostServerManager } from './host-server-manager'
 import { ProjectRunner } from './project-runner'
 import { setupPrototypeStoreIpc } from './project-store'
+import { setupHtmlImportIpc } from './html-import'
 import { setupMaterialStoreIpc } from './material-store'
 import { workspaceDir } from './app-paths'
 import { applyPackagedRuntimeEnv } from './runtime-env'
@@ -155,6 +156,7 @@ app.whenReady().then(async () => {
   )
 
   setupPrototypeStoreIpc()
+  setupHtmlImportIpc()
   setupMaterialStoreIpc()
   setupThunderIpc()
   setupProjectIpc()

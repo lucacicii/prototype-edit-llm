@@ -5,6 +5,7 @@ import type { PointedTarget } from '../main/agent/prototype-agent'
 // 版本元数据的权威定义在主进程那侧（同 PointedTarget 的口径，不在这儿抄一份）
 import type { VersionKind, VersionMeta } from '../main/ipc/history-bridge'
 import type { MaterialCategory, MaterialItem } from '../main/material-store'
+import type { HtmlImportResult } from '../main/html-import'
 
 export interface WorkspaceRepo {
   path: string
@@ -133,6 +134,8 @@ export interface IPrototypeAPI {
     id: string
     filePath: string
   }) => Promise<{ ok: boolean; content?: string; filePath?: string; error?: string }>
+  /** 直接导入单个 HTML 文件；不传 filePath 时主进程弹选择框。 */
+  importHtml: (params?: { filePath?: string; name?: string }) => Promise<HtmlImportResult>
   migrateLocalStorage: (items: any[]) => Promise<{
     ok: boolean
     migrated?: number

@@ -271,6 +271,40 @@ export const App: React.FC = () => {
     embeddedBrowserRef.current?.exitInspectMode()
   }
 
+  /** 导入 HTML 后：加载列表 → 选中新项目 → 回到默认工作区 → 预览落到新项目。 */
+  const handleHtmlImported = async ({ id }: { id: string; name: string }) => {
+    // 主进程已经写好 active-project.txt，重新加载后 activeId 就是新项目。
+    await prototypeStore.loadFromDisk()
+    prototypeStore.setActive(id)
+
+    if (currentWorkspaceRef.current && currentWorkspaceRef.current.id !== 'default-host') {
+      const ws = await window.project?.switchWorkspace?.('default-host')
+      if (ws) {
+        currentWorkspaceRef.current = ws
+        setCurrentWorkspace(ws)
+      }
+    }
+
+    // 给导入的项目种一个 v1，版本号立刻可见（内容没变时 record 会去重）。
+    const imported = usePrototypeStore.getState().prototypes.find((item) => item.id === id)
+    if (imported && window.historyApi) {
+      const recorded = await window.historyApi
+        .record({
+          prototypeId: id,
+          code: imported.vueCode,
+          label: '导入的 HTML 初始版本',
+          kind: 'seed'
+        })
+        .catch(() => null)
+      if (recorded?.ok && typeof recorded.version === 'number') {
+        setCurrentVersionNo(recorded.version)
+      }
+    }
+
+    clearSelectionState()
+    await syncActivePrototypeToFile()
+  }
+
   // Rollback
   const handleRollback = async (payload: { version: number; code: string; label: string }) => {
     if (!currentPrototype) return
@@ -383,6 +417,7 @@ export const App: React.FC = () => {
             setCurrentWorkspace(ws)
             clearSelectionState()
           }}
+          onHtmlImported={handleHtmlImported}
           collapsed={sidebarCollapsed}
           width={sidebarWidth}
           onWidthChange={(w) => {

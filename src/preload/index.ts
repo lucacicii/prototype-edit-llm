@@ -68,6 +68,9 @@ const prototypeApi = {
     ipcRenderer.invoke('prototype:save-chat', params),
   readFile: (params: { id: string; filePath: string }) =>
     ipcRenderer.invoke('prototype:read-file', params),
+  // 直接导入单个 HTML 文件：主进程弹 openFile，复制为新原型项目并带上本地资源
+  importHtml: (params?: { filePath?: string; name?: string }) =>
+    ipcRenderer.invoke('prototype:import-html', params),
   migrateLocalStorage: (items: any[]) =>
     ipcRenderer.invoke('prototype:migrate-localstorage', items)
 }

@@ -35,6 +35,7 @@ interface PrototypeSidebarProps {
   onClone: (item: PrototypeItem) => void
   onDelete: (id: string) => void
   onWorkspaceChanged: (ws: any) => void
+  onHtmlImported: (payload: { id: string; name: string }) => Promise<void>
   collapsed: boolean
   width: number
   onWidthChange: (w: number) => void
@@ -94,6 +95,7 @@ export const PrototypeSidebar: React.FC<PrototypeSidebarProps> = ({
   onClone,
   onDelete,
   onWorkspaceChanged,
+  onHtmlImported,
   collapsed,
   width,
   onWidthChange,
@@ -194,6 +196,12 @@ export const PrototypeSidebar: React.FC<PrototypeSidebarProps> = ({
         }
       }
     },
+    {
+      key: 'html-file',
+      icon: <FileText size={14} />,
+      label: '📄 导入 HTML 文件...',
+      onClick: () => void handleImportHtml()
+    },
     ...(isDefaultWorkspace
       ? []
       : [
@@ -232,6 +240,37 @@ export const PrototypeSidebar: React.FC<PrototypeSidebarProps> = ({
           ? '已设置主项目仓库并同步 AGENTS.md'
           : '已关联参考仓库并同步 AGENTS.md 地址表'
       )
+    }
+  }
+
+  const handleImportHtml = async () => {
+    if (!window.prototypeApi?.importHtml) return
+    try {
+      const res = await window.prototypeApi.importHtml()
+      if (res?.cancelled) return
+      if (!res?.ok || !res.item) {
+        message.error(res?.error || '导入 HTML 文件失败')
+        return
+      }
+
+      // 新项目由 App 统一接力：加载列表、选中、切回默认工作区、同步预览。
+      await onHtmlImported({ id: res.item.id, name: res.item.name })
+      await loadWorkspaces()
+      setActiveWorkspaceId('default-host')
+
+      const skipped = res.skipped?.length ?? 0
+      message.success(
+        `已导入 HTML 原型【${res.item.name}】（复制 ${res.copiedCount ?? 0} 个资源${
+          skipped ? `，${skipped} 个未复制` : ''
+        }）`
+      )
+      if (res.warnings?.length) {
+        const head = res.warnings.slice(0, 2).join('；')
+        const more = res.warnings.length > 2 ? `；另有 ${res.warnings.length - 2} 条提示` : ''
+        message.warning(head + more, 6)
+      }
+    } catch (err: any) {
+      message.error(`导入失败：${err?.message || err}`)
     }
   }
 
