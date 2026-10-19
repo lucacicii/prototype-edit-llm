@@ -12,8 +12,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AgentEngine, AcpPermissionRequestPayload } from '../../../../main/acp/types'
-/** token 估算与主进程（ACP 指标）共用同一份实现，数字才对得上。 */
-import { estimateTokenCount } from '../../../../shared/tokenEstimate'
 
 
 export interface ActiveToolInfo {
@@ -108,6 +106,49 @@ export type ThunderAgentPhase =
   | 'compacting'
   | 'done'
   | 'error'
+
+/**
+ * 快速 token 估算，与 thunder 内核 `core::token_estimator` 同一口径：
+ * CJK/假名/谚文约 1.5 token/字，ASCII（空白半权）约 3.7 字符/token，标点 +0.2。
+ *
+ * 只用于**降级路径**——没收到 `metrics_update`（旧版 daemon）时的流式计数。
+ * 权威数值一律以快照为准；ACP 拿不到用量时不估算（见 usage-metrics.ts）。
+ */
+function estimateTokens(text: string): number {
+  if (!text) return 0
+  let cjk = 0
+  let space = 0
+  let punct = 0
+  let total = 0
+  for (const ch of text) {
+    total += 1
+    const u = ch.codePointAt(0) ?? 0
+    if (
+      (u >= 0x4e00 && u <= 0x9fff) ||
+      (u >= 0x3400 && u <= 0x4dbf) ||
+      (u >= 0x3040 && u <= 0x30ff) ||
+      (u >= 0xac00 && u <= 0xd7af)
+    ) {
+      cjk += 1
+    } else if (u === 0x20 || u === 0x09 || u === 0x0a || u === 0x0d) {
+      space += 1
+    } else if (
+      (u >= 0x21 && u <= 0x2f) ||
+      (u >= 0x3a && u <= 0x40) ||
+      (u >= 0x5b && u <= 0x60) ||
+      (u >= 0x7b && u <= 0x7e) ||
+      (u >= 0x3000 && u <= 0x303f) ||
+      (u >= 0xff00 && u <= 0xffef)
+    ) {
+      punct += 1
+    } else if (/\s/.test(ch)) {
+      space += 1
+    }
+  }
+  const ascii = Math.max(0, total - cjk)
+  const effAscii = Math.max(0, ascii - Math.floor(space / 2))
+  return Math.max(1, Math.ceil((cjk * 15) / 10) + Math.ceil((effAscii * 10) / 37) + Math.ceil((punct * 2) / 10))
+}
 
 export interface ThunderAgentStatus {
   session_id: string
@@ -401,7 +442,7 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
           if (!hasSnapshotRef.current) {
             if (turnFirstTokenAtRef.current === null) turnFirstTokenAtRef.current = Date.now()
             setStreamTokensCount(
-              estimateTokenCount(textBufRef.current) + estimateTokenCount(reasoningBufRef.current)
+              estimateTokens(textBufRef.current) + estimateTokens(reasoningBufRef.current)
             )
           }
           publishSegments()
@@ -414,9 +455,9 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
           reasoningBufRef.current += delta
           if (!hasSnapshotRef.current) {
             if (turnFirstTokenAtRef.current === null) turnFirstTokenAtRef.current = Date.now()
-            setStreamReasoningCount(estimateTokenCount(reasoningBufRef.current))
+            setStreamReasoningCount(estimateTokens(reasoningBufRef.current))
             setStreamTokensCount(
-              estimateTokenCount(textBufRef.current) + estimateTokenCount(reasoningBufRef.current)
+              estimateTokens(textBufRef.current) + estimateTokens(reasoningBufRef.current)
             )
           }
           publishSegments()

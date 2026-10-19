@@ -13,7 +13,7 @@ import { setFileWriteListener } from './handlers/fs'
 import { setTerminalExitListener } from './handlers/terminal'
 import { setPermissionPromptHandler } from './handlers/permission'
 import { subscribeSessionUpdates, clearSessionUpdateListeners } from './session-update-bus'
-import { AcpRunMetrics } from './run-metrics'
+import { usageMetricsPayload } from './usage-metrics'
 import type {
   AcpAgentLaunchConfig,
   AcpAvailableCommand,
@@ -144,13 +144,6 @@ export class AcpRuntimeManager {
     { resolve: (value: RequestPermissionResponse) => void }
   >()
   private readonly alwaysAllowedOptions = new Set<string>()
-  /**
-   * 每个 ACP 会话已累计的 token（我们自己估的）。
-   *
-   * 协议不回「这个会话一共花了多少」，而 thunder 那边有 `session_total_tokens`
-   * 绝对值可读；这里只能把每次 run 的估算值按会话累加，让「总消耗」跨轮不归零。
-   */
-  private readonly sessionTokenTotals = new Map<string, number>()
 
   static getInstance(): AcpRuntimeManager {
     if (!AcpRuntimeManager.instance) {
@@ -469,32 +462,19 @@ export class AcpRuntimeManager {
       }
     })
 
-    // ACP 不告诉我们本轮多少 token、多快，只能在主进程按 thunder 同一套口径估；
-    // 发出去的快照形状与 daemon 的 `metrics_update` 一致，面板不用区分引擎。
-    const metrics = new AcpRunMetrics(this.sessionTokenTotals.get(key) ?? 0)
+    // ACP 能给的用量只有 `usage_update`（上下文占用 / 窗口上限）。本轮多少
+    // token、多快、缓存、会话累计 —— 协议不回，也就不算、不发（见 usage-metrics.ts）。
     const thoughtOption = sessionState.configOptions.find(
-      (opt) => opt.type === 'select' && (opt.category === 'thought_level' || opt.id === 'reasoning_effort')
+      (opt) =>
+        opt.type === 'select' && (opt.category === 'thought_level' || opt.id === 'reasoning_effort')
     )
     const metricLabels = {
       sessionId: sessionState.acpSessionId,
       model: sessionState.models?.currentModelId,
       thinkingLevel:
-        thoughtOption && thoughtOption.type === 'select' ? String(thoughtOption.currentValue) : undefined
-    }
-    let lastMetricsAt = 0
-
-    const emitMetrics = (isRunning: boolean) => {
-      lastMetricsAt = Date.now()
-      params.onEvent({
-        type: 'custom',
-        kind: 'metrics_update',
-        payload: metrics.snapshot({ turn: currentTurn, isRunning, ...metricLabels })
-      })
-    }
-
-    /** 逐 delta 的高频事件里节流：每秒两三帧已经比数字变化更快。 */
-    const emitMetricsThrottled = () => {
-      if (Date.now() - lastMetricsAt >= 400) emitMetrics(true)
+        thoughtOption && thoughtOption.type === 'select'
+          ? String(thoughtOption.currentValue)
+          : undefined
     }
 
     const handleUpdate = (payload: SessionUpdatePayload) => {
@@ -511,8 +491,6 @@ export class AcpRuntimeManager {
         }
         if (thought) {
           params.onEvent({ type: 'reasoning_delta', turn: currentTurn, delta: thought })
-          metrics.noteReasoning(thought)
-          emitMetricsThrottled()
           params.onEvent({
             type: 'custom',
             kind: 'agent_status',
@@ -529,13 +507,10 @@ export class AcpRuntimeManager {
         const extracted = extractChunkContent(update.content)
         if (extracted.thinking) {
           params.onEvent({ type: 'reasoning_delta', turn: currentTurn, delta: extracted.thinking })
-          metrics.noteReasoning(extracted.thinking)
         }
         if (extracted.text) {
           finalText += extracted.text
           params.onEvent({ type: 'token_delta', turn: currentTurn, delta: extracted.text })
-          metrics.noteText(extracted.text)
-          emitMetricsThrottled()
           params.onEvent({
             type: 'custom',
             kind: 'agent_status',
@@ -555,9 +530,6 @@ export class AcpRuntimeManager {
             : crypto.randomUUID()
         const toolName = resolveAcpToolName(update)
         const toolArgs = extractToolArgs(update)
-
-        // 工具执行不计入生成时长：速率的分母只算真正在吐 token 的那段。
-        metrics.noteToolStart(toolCallId)
 
         params.onEvent({
           type: 'tool_exec_start',
@@ -585,7 +557,6 @@ export class AcpRuntimeManager {
         const toolName = resolveAcpToolName(update)
 
         if (status === 'completed' || status === 'failed') {
-          metrics.noteToolEnd(toolCallId)
           const formatted = formatToolOutput(update)
           params.onEvent({
             type: 'tool_exec_result',
@@ -611,62 +582,44 @@ export class AcpRuntimeManager {
           }
         }
       } else if (kind === 'usage_update') {
-        // 协议里唯一的权威 token 数字：上下文占用与窗口上限。
-        // 低频事件，不必等节流 —— 它一变就该立刻反映到上下文条上。
+        // ACP 唯一的用量数字：上下文占了多少 / 窗口多大。一来就转发。
         const used = typeof update.used === 'number' ? update.used : 0
         const size = typeof update.size === 'number' ? update.size : 0
         if (used > 0 || size > 0) {
-          metrics.noteUsage({ used, size })
-          emitMetrics(true)
+          params.onEvent({
+            type: 'custom',
+            kind: 'metrics_update',
+            payload: usageMetricsPayload({
+              isRunning: true,
+              turn: currentTurn,
+              used,
+              size,
+              ...metricLabels
+            })
+          })
         }
       }
     }
 
     const unsubRun = subscribeSessionUpdates(sessionState.acpSessionId, handleUpdate)
-    /** 正常结束时已经发过快照；取消 / 报错走 finally 的兼底。 */
-    let metricsClosed = false
 
     try {
       const res = await entry.connection.prompt(sessionState.acpSessionId, blocks)
       const durationMs = Date.now() - startTime
-      const finalMetrics = metrics.snapshot({
-        turn: currentTurn,
-        isRunning: false,
-        ...metricLabels
-      })
 
       params.onEvent({
         type: 'turn_end',
         turn: currentTurn,
         finish_reason: res.stopReason || 'done',
-        // 本轮 token 明细：面板的「本轮」数字与每轮的账都靠它，
-        // 否则 ACP 下 turn_end 只有个时长。
-        stats: {
-          duration_ms: durationMs,
-          completion_tokens: finalMetrics.live_tokens,
-          reasoning_tokens: finalMetrics.live_reasoning_tokens,
-          tokens_per_second: finalMetrics.live_tps
-        }
+        // 只报我们真的测得到的：这一轮用了多久。token 用量协议不回。
+        stats: { duration_ms: durationMs }
       })
-
-      // 收口快照放在 `turn_end` 之后：渲染层收 turn_end 时会按自己的账加一次
-      // 总量，这条绝对值随后把它校正回来（同一会话的累计以这里为准）。
-      this.sessionTokenTotals.set(key, finalMetrics.session_total_tokens)
-      params.onEvent({ type: 'custom', kind: 'metrics_update', payload: finalMetrics })
-      metricsClosed = true
 
       return {
         finishReason: res.stopReason || 'done',
         finalContent: finalText
       }
     } finally {
-      // 取消 / 报错时也要收口：已经吐出去的 token 仍是这个会话的账，
-      // 不收就会在下一轮里凭空消失。
-      if (!metricsClosed) {
-        const closing = metrics.snapshot({ turn: currentTurn, isRunning: false, ...metricLabels })
-        this.sessionTokenTotals.set(key, closing.session_total_tokens)
-        params.onEvent({ type: 'custom', kind: 'metrics_update', payload: closing })
-      }
       unsubRun()
       if (fileChangeTimer) {
         clearTimeout(fileChangeTimer)

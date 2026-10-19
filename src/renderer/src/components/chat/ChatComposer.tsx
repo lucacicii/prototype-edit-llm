@@ -261,25 +261,27 @@ export function ChatComposer({
         <div className="pc-metrics">
           <div className="pc-metrics-group">
             {isStreaming ? (
-              <>
-                <span className="pc-metrics-pulse" />
-                <span className="pc-metrics-speed">
-                  ⚡ {streamingMetrics.tps > 0 ? streamingMetrics.tps.toFixed(1) : '0.0'} tok/s
-                </span>
-                <span className="pc-metrics-divider" />
-                <span
-                  title={
-                    isAcp
-                      ? 'ACP 下本轮 token 由流出的正文与思考估算，速率不含工具执行时间'
-                      : '本轮流式生成量'
-                  }
-                >
-                  {streamingMetrics.tokensCount} tokens
-                  {streamingMetrics.reasoningCount
-                    ? `（含思考 ${streamingMetrics.reasoningCount}）`
-                    : ''}
-                </span>
-              </>
+              isAcp ? (
+                // ACP 不回 token 用量，也就没有 tok/s 可报：只表明「在跑」。
+                <>
+                  <span className="pc-metrics-pulse" />
+                  <span className="pc-metrics-speed">⚡ 生成中</span>
+                </>
+              ) : (
+                <>
+                  <span className="pc-metrics-pulse" />
+                  <span className="pc-metrics-speed">
+                    ⚡ {streamingMetrics.tps > 0 ? streamingMetrics.tps.toFixed(1) : '0.0'} tok/s
+                  </span>
+                  <span className="pc-metrics-divider" />
+                  <span title="本轮流式生成量">
+                    {streamingMetrics.tokensCount} tokens
+                    {streamingMetrics.reasoningCount
+                      ? `（含思考 ${streamingMetrics.reasoningCount}）`
+                      : ''}
+                  </span>
+                </>
+              )
             ) : metrics && (metrics.totalTokens || metrics.tps) ? (
               <>
                 {metrics.tps && metrics.tps > 0 ? (
@@ -288,7 +290,7 @@ export function ChatComposer({
                     <span className="pc-metrics-divider" />
                   </>
                 ) : null}
-                <span title={isAcp ? 'ACP 下本轮 token 由流出的正文与思考估算，速率不含工具执行时间' : undefined}>
+                <span>
                   本轮 {metrics.totalTokens?.toLocaleString() ?? '—'}
                   {metrics.promptTokens !== undefined && metrics.completionTokens !== undefined ? (
                     <>
@@ -327,40 +329,43 @@ export function ChatComposer({
           </div>
 
           <div className="pc-metrics-group">
-            <span
-              title={`当前上下文占用 / 模型窗口：${contextTokensWithDraft.toLocaleString()}${
-                contextLimit ? ` / ${contextLimit.toLocaleString()}` : ''
-              }`}
-            >
-              上下文{' '}
-              <span className="pc-metrics-value">
-                {contextTokensWithDraft.toLocaleString()}
-                {contextLimit ? ` / ${formatCompactTokens(contextLimit)}` : ''}
-              </span>
-              {contextPercent !== null && (
-                <span className={`pc-metrics-percent${contextPercent >= 80 ? ' is-warning' : ''}`}>
-                  {' '}
-                  ({contextPercent}%)
-                </span>
-              )}
-            </span>
-            <span className="pc-metrics-divider" />
-            <span
-              title={
-                isAcp
-                  ? '当前会话累计消耗：ACP 协议不回 token 用量，按流出的正文与思考估算'
-                  : '当前会话全部轮次累计消耗的总 Token 数'
-              }
-            >
-              总消耗 <span className="pc-metrics-value">{sessionTotalTokens.toLocaleString()}</span>
-            </span>
-            {metrics?.durationMs ? (
+            {/* 上下文占用：thunder 从快照里拿，ACP 从 `usage_update` 里拿；
+                两边都没数字时（ACP 的 agent 不报），整块就不显示，不报 0。 */}
+            {(!isAcp || contextLimit > 0 || contextTokensWithDraft > 0) && (
               <>
-                <span className="pc-metrics-divider" />
-                <span title="本轮总耗时">
-                  总耗时 <span className="pc-metrics-value">{formatDuration(metrics.durationMs)}</span>
+                <span
+                  title={`当前上下文占用 / 模型窗口：${contextTokensWithDraft.toLocaleString()}${
+                    contextLimit ? ` / ${contextLimit.toLocaleString()}` : ''
+                  }`}
+                >
+                  上下文{' '}
+                  <span className="pc-metrics-value">
+                    {contextTokensWithDraft.toLocaleString()}
+                    {contextLimit ? ` / ${formatCompactTokens(contextLimit)}` : ''}
+                  </span>
+                  {contextPercent !== null && (
+                    <span className={`pc-metrics-percent${contextPercent >= 80 ? ' is-warning' : ''}`}>
+                      {' '}
+                      ({contextPercent}%)
+                    </span>
+                  )}
                 </span>
+                <span className="pc-metrics-divider" />
               </>
+            )}
+            {/* 总消耗只有 thunder 有（`session_total_tokens` 绝对值）；ACP 不回，不显示也不猜。 */}
+            {!isAcp && (
+              <>
+                <span title="当前会话全部轮次累计消耗的总 Token 数">
+                  总消耗 <span className="pc-metrics-value">{sessionTotalTokens.toLocaleString()}</span>
+                </span>
+                <span className="pc-metrics-divider" />
+              </>
+            )}
+            {metrics?.durationMs ? (
+              <span title="本轮总耗时">
+                总耗时 <span className="pc-metrics-value">{formatDuration(metrics.durationMs)}</span>
+              </span>
             ) : null}
           </div>
         </div>
