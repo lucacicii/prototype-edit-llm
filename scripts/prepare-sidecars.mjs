@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 /**
- * 把打包版必须随包的「外部产物」收拢到 build/sidecars/，供 electron-builder
- * 作为 extraResources 发到 Resources/ 下。
+ * 把打包版必须随包的「外部产物」收拢到 build/sidecars-<arch>/，供
+ * electron-builder 作为 extraResources 发到 Resources/ 下。
+ *
+ * 默认取本机架构；交叉构建另一个架构时用 `--arch <platform>-<arch>`
+ * （例如在 Apple Silicon 上打 x64 包：`--arch darwin-x64`）。目录名取 key 的
+ * 后半段，与 electron-builder 的 `${arch}` 宏一致（arm64 / x64）。
  *
  * 两样东西，一行都不在本仓库里构建：
  *   thunder-runtime   agent 内核（Rust，stdio NDJSON）      → Resources/bin/
@@ -26,7 +30,17 @@ import { fileURLToPath } from 'url'
 import { archKey, BINARIES, readLock, resolveBinary, sha256 } from './thunder-binaries.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const sidecarRoot = join(repoRoot, 'build', 'sidecars')
+
+const args = process.argv.slice(2)
+const archFlag = args.indexOf('--arch')
+const key = archFlag >= 0 ? args[archFlag + 1] : archKey()
+if (!key || !/^[a-z0-9]+-[a-z0-9]+$/.test(key)) {
+  console.error(`--arch 需要形如 darwin-arm64 / darwin-x64，收到：${key ?? '(缺失)'}`)
+  process.exit(1)
+}
+// `darwin-arm64` → `arm64`；与 extraResources 里的 ${arch} 展开值一致。
+const archName = key.split('-')[1]
+const sidecarRoot = join(repoRoot, 'build', `sidecars-${archName}`)
 
 const staged = []
 const problems = []
@@ -45,7 +59,7 @@ async function stage(from, to, { executable = false } = {}) {
 }
 
 async function stageBinary(bin) {
-  const resolved = resolveBinary(bin)
+  const resolved = resolveBinary(bin, { archKey: key })
   if (resolved.problem) {
     problems.push(resolved.problem)
     return
@@ -105,7 +119,7 @@ async function stageRevision() {
 async function main() {
   await fsp.rm(sidecarRoot, { recursive: true, force: true })
 
-  console.log(`侧车来源：${archKey()}（$THUNDER_*_BIN 优先，否则 sidecars.lock.json 校验过的缓存）`)
+  console.log(`侧车来源：${key}（$THUNDER_*_BIN 优先，否则 sidecars.lock.json 校验过的缓存）`)
   for (const bin of BINARIES) await stageBinary(bin)
   if (!problems.length) await stageRevision()
 

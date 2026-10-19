@@ -91,8 +91,11 @@
 当你只开发前端或 Electron 宿主逻辑时，直接从 GitHub Releases 拉取已锁定的 `thunder` 二进制即可：
 
 ```bash
-# 1. 根据 sidecars.lock.json 从 GitHub Release 下载对应架构二进制并校验 SHA256
+# 1. 根据 sidecars.lock.json 从 GitHub Release 下载本机架构的二进制并校验 SHA256
 npm run fetch:thunder
+
+# 1b. 如果要打双架构包（arm64 + x64），把另一个架构也拉下来
+npm run fetch:thunder:all
 
 # 2. 校验本地侧车缓存是否与 sidecars.lock.json 一致
 npm run verify:sidecars
@@ -100,6 +103,9 @@ npm run verify:sidecars
 # 3. 启动开发环境
 npm run dev
 ```
+
+`sidecars.lock.json` 现在同时 pin 了 `darwin-arm64` 与 `darwin-x64`（thunder 0.6.0），
+`source` 也写进了 release 地址，所以 `fetch:thunder` 不再需要额外参数。
 
 ---
 
@@ -149,24 +155,24 @@ npm run sync:thunder:local
 
 ### 4. 场景 C：`thunder` 发布新 GitHub Release 后正式升级版本
 
-当 `thunder` 仓库修改完毕、推送到 GitHub 并发布了新的 Release Tag（例如 `v0.5.0`）后，在 `prototype-edit-llm` 中执行：
+当 `thunder` 仓库修改完毕、推送到 GitHub 并发布了新的 Release Tag（例如 `v0.6.0`）后，在 `prototype-edit-llm` 中执行：
 
 ```bash
+# arm64（本机），同时把 source / version / commit 写进 lock
 node scripts/fetch-thunder-binaries.mjs \
   --from-release \
-  --version 0.5.0 \
-  --source https://github.com/lucacicii/thunder/releases/download/v0.5.0 \
-  --bless
-```
+  --version 0.6.0 \
+  --source https://github.com/lucacicii/thunder/releases/download/v0.6.0 \
+  --arch darwin-arm64 --bless
 
-如果还需要同步锁定其他架构（例如在 Mac 上把 `linux-x64` 或 `darwin-x64` 的 SHA256 也写入 `sidecars.lock.json`）：
-
-```bash
+# x64（可在 Apple Silicon 上直接下载，本机跑不了但打包用得上）
 node scripts/fetch-thunder-binaries.mjs --from-release --arch darwin-x64 --bless
+
+# 如需 linux-x64
 node scripts/fetch-thunder-binaries.mjs --from-release --arch linux-x64 --bless
 ```
 
-完成后提交更新后的 `sidecars.lock.json` 即可。
+`--bless` 会保留已有架构的 artifacts，只更新本次架构的 SHA256。完成后提交更新后的 `sidecars.lock.json` 即可。
 
 ---
 
@@ -248,8 +254,11 @@ npm run dev:clean
 # 仅编译主进程、Preload 与渲染层代码（验证 TypeScript 与打包）
 npm run build
 
-# 从 GitHub Release 拉取锁定的 thunder 二进制
+# 从 GitHub Release 拉取锁定的 thunder 二进制（本机架构）
 npm run fetch:thunder
+
+# 同时拉取 darwin-arm64 与 darwin-x64（打双架构包前执行一次）
+npm run fetch:thunder:all
 
 # 从本地 /Users/lucas/wz/GitHub/thunder 同步最新编译的二进制并更新 sidecars.lock.json
 npm run sync:thunder:local
@@ -257,12 +266,31 @@ npm run sync:thunder:local
 # 校验本地 thunder 二进制缓存与 sidecars.lock.json 的 SHA256 是否一致
 npm run verify:sidecars
 
-# 准备打包侧车（将二进制与版本溯源戳 thunder-revision.txt 整理到 build/sidecars/）
+# 准备打包侧车（将二进制与版本溯源戳 thunder-revision.txt 整理到
+# build/sidecars-<arch>/；默认本机架构，加 --arch darwin-x64 则准备另一个）
 npm run build:sidecars
 
-# 构建 macOS 未签名解压目录包（用于本地快速验证打包产物）
+# 构建 macOS 未签名解压目录包（只构建本机架构，用于本地快速验证）
 npm run build:unpack
 
-# 构建正式 macOS .dmg 安装包
+# 构建正式 macOS .dmg 安装包：一次产出 arm64 与 x64 两个包
+#   dist/Prototype Studio-<version>-arm64.dmg
+#   dist/Prototype Studio-<version>-x64.dmg
 npm run build:mac
 ```
+
+### Intel (x64) 打包说明
+
+- 双架构构建依赖两份侧车缓存：先跑 `npm run fetch:thunder:all`，`prebuild:mac`
+  会分别执行 `prepare-sidecars.mjs --arch darwin-arm64` 与 `--arch darwin-x64`。
+- `runtime-host/node_modules` 里同时装着 `@esbuild/darwin-arm64`、`@esbuild/darwin-x64`
+  与对应的 rollup 原生包（`runtime-host/pnpm-workspace.yaml` 的
+  `supportedArchitectures`）。打包态用应用自带的 Electron 以 Node 模式跑 Vite，
+  它会按 `process.arch` 选对那一份。
+- 未打包目录：x64 在 `dist/mac/`，arm64 在 `dist/mac-arm64/`（x64 是
+  electron-builder 的默认架构，目录名不带后缀）。
+- 在 Apple Silicon 上验证 x64 包可借助 Rosetta：
+  `"dist/mac/Prototype Studio.app/Contents/MacOS/Prototype Studio"`，
+  然后 `curl http://127.0.0.1:4321` 应返回 200。
+- Electron 44 要求 macOS 13+；Intel 机型需能升级到 Ventura（2017 年及以后）。
+- 产物未签名：拷给别人后仍需 `xattr -dr com.apple.quarantine <app>`。

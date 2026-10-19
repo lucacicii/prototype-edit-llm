@@ -4,7 +4,9 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig(({ command }) => ({
   main: {
-    plugins: [externalizeDepsPlugin()],
+    // ACP SDK 必须打进 bundle：electron-builder 的 files 排除了 node_modules，
+    // 留在外面的话打包版一启动就是 `Cannot find module '@agentclientprotocol/sdk'`。
+    plugins: [externalizeDepsPlugin({ exclude: ['@agentclientprotocol/sdk'] })],
     ...(command === 'serve' ? { build: { watch: {} } } : {})
   },
   preload: {
