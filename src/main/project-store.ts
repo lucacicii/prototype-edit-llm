@@ -56,6 +56,7 @@ export interface ProjectMetaFile {
   techStack: TechStack
   entryFile: string
   sessionId: string
+  acpSessions?: Partial<Record<'claude' | 'codex', string>>
   createdAt: number
   updatedAt: number
 }
@@ -216,9 +217,9 @@ async function listProjectSourceFiles(dir: string, prefix = ''): Promise<string[
         entry.name === 'node_modules' ||
         entry.name === 'dist' ||
         entry.name === 'materials' ||
-        entry.name === 'AGENTS.md'
+        entry.name === 'AGENTS.md' ||
+        entry.name === 'CLAUDE.md'
       ) {
-        continue
       }
       const rel = prefix ? `${prefix}/${entry.name}` : entry.name
       if (entry.isDirectory()) {
@@ -450,17 +451,15 @@ export async function createProjectOnDisk(params: {
   ]
 
   await fs.writeFile(path.join(dir, entryFile), code, 'utf-8')
-  await fs.writeFile(
-    path.join(dir, 'AGENTS.md'),
-    buildProjectAgentsMd({
-      name: meta.name,
-      description: meta.description,
-      scenario: meta.scenario,
-      preferredStack: meta.preferredStack,
-      entryFile: meta.entryFile
-    }),
-    'utf-8'
-  )
+  const instructions = buildProjectAgentsMd({
+    name: meta.name,
+    description: meta.description,
+    scenario: meta.scenario,
+    preferredStack: meta.preferredStack,
+    entryFile: meta.entryFile
+  })
+  await fs.writeFile(path.join(dir, 'AGENTS.md'), instructions, 'utf-8')
+  await fs.writeFile(path.join(dir, 'CLAUDE.md'), instructions, 'utf-8')
   await fs.writeFile(path.join(metaDir, PROJECT_JSON), JSON.stringify(meta, null, 2), 'utf-8')
   await fs.writeFile(
     path.join(metaDir, CHAT_JSON),
@@ -469,6 +468,49 @@ export async function createProjectOnDisk(params: {
   )
 
   return (await loadProjectItem(dir))!
+}
+
+export async function ensureProjectInstructionFiles(projectId: string): Promise<void> {
+  const dir = projectDirFor(projectId)
+  const metaPath = path.join(dir, META_DIR, PROJECT_JSON)
+  if (!existsSync(metaPath)) return
+  try {
+    const raw = await fs.readFile(metaPath, 'utf-8')
+    const meta = JSON.parse(raw) as ProjectMetaFile
+    const instructions = buildProjectAgentsMd({
+      name: meta.name,
+      description: meta.description,
+      scenario: meta.scenario,
+      preferredStack: meta.preferredStack,
+      entryFile: meta.entryFile
+    })
+    await fs.writeFile(path.join(dir, 'AGENTS.md'), instructions, 'utf-8')
+    await fs.writeFile(path.join(dir, 'CLAUDE.md'), instructions, 'utf-8')
+  } catch (err) {
+    console.warn('[project-store] ensureProjectInstructionFiles error:', err)
+  }
+}
+
+export async function saveProjectAcpSession(
+  projectId: string,
+  provider: 'claude' | 'codex',
+  acpSessionId: string
+): Promise<void> {
+  const dir = projectDirFor(projectId)
+  const metaPath = path.join(dir, META_DIR, PROJECT_JSON)
+  if (!existsSync(metaPath)) return
+  try {
+    const raw = await fs.readFile(metaPath, 'utf-8')
+    const meta = JSON.parse(raw) as ProjectMetaFile
+    if (!meta.acpSessions) {
+      meta.acpSessions = {}
+    }
+    meta.acpSessions[provider] = acpSessionId
+    meta.updatedAt = Date.now()
+    await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf-8')
+  } catch (err) {
+    console.warn('[project-store] saveProjectAcpSession error:', err)
+  }
 }
 
 export async function listAllProjects(): Promise<{

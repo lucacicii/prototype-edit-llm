@@ -12,7 +12,7 @@ import {
   Zhipu,
   Qwen
 } from '@lobehub/icons'
-import { Bot } from 'lucide-react'
+import { Bot, Zap } from 'lucide-react'
 
 /** 按服务商名匹配品牌图标；认不出来就退回通用机器人图标。 */
 export function getProviderIcon(provider: string, size = 14) {
@@ -30,4 +30,12 @@ export function getProviderIcon(provider: string, size = 14) {
   if (p.includes('zhipu') || p.includes('glm')) return <Zhipu size={size} />
   if (p.includes('qwen') || p.includes('aliyun')) return <Qwen size={size} />
   return <Bot size={size} />
+}
+
+/** 引擎图标：ACP 两家用品牌标，thunder 内置引擎用闪电（与对话标题同色）。 */
+export function getEngineIcon(engine: string, size = 12) {
+  const e = engine.toLowerCase()
+  if (e === 'claude') return <Anthropic size={size} />
+  if (e === 'codex') return <OpenAI size={size} />
+  return <Zap size={size} className="pc-engine-icon" />
 }

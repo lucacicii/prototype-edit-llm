@@ -16,6 +16,8 @@ import { setupMaterialStoreIpc } from './material-store'
 import { workspaceDir } from './app-paths'
 import { applyPackagedRuntimeEnv } from './runtime-env'
 import { syncThunderModelConfig } from './agent/thunder-model-config'
+import { AcpRuntimeManager } from './acp/acp-runtime-manager'
+import { killAllTerminals } from './acp/handlers/terminal'
 
 // 打包版的 userData 必须与 dev 分开，否则两边共用一份 localStorage、一份工作区；
 // 而 Electron 的 app.getName() 取自 package.json 的 name（prototype-edit-llm），
@@ -171,6 +173,8 @@ app.on('window-all-closed', () => {
   BrowserViewManager.getInstance().destroy()
   HostServerManager.getInstance().stopServer()
   ProjectRunner.getInstance().stop()
+  AcpRuntimeManager.getInstance().disposeAll()
+  killAllTerminals()
   if (process.platform !== 'darwin') {
     app.quit()
   }
@@ -180,4 +184,6 @@ app.on('before-quit', () => {
   BrowserViewManager.getInstance().destroy()
   HostServerManager.getInstance().stopServer()
   ProjectRunner.getInstance().stop()
+  AcpRuntimeManager.getInstance().disposeAll()
+  killAllTerminals()
 })

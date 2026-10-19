@@ -21,8 +21,10 @@ import { ChatContextBanners } from './ChatContextBanners'
 import { ChatFeed } from './ChatFeed'
 import { ChatComposer } from './ChatComposer'
 import { ChatQuestionBubble } from './ChatQuestionBubble'
+import { AcpPermissionBubble } from './AcpPermissionBubble'
 import { useChatAttachments } from './useChatAttachments'
 import { useFileSuggestions } from './useFileSuggestions'
+import { useAcpControls } from './useAcpControls'
 import { TurnDots, TurnDetailOverlay } from './TurnDots'
 import { getProviderIcon } from './providerIcon'
 import {
@@ -84,6 +86,22 @@ interface ChatPanelProps {
   onStreamingChange?: (streaming: boolean) => void
 }
 
+/** 取光标处的 `/命令` token（仅限单行未带空格），没有则返回 null。 */
+function slashTokenAtCursor(
+  text: string,
+  cursor: number
+): { start: number; query: string } | null {
+  const lineStart = text.lastIndexOf('\n', cursor - 1) + 1
+  const lineText = text.slice(lineStart, cursor)
+  if (lineText.startsWith('/')) {
+    const spaceIdx = lineText.indexOf(' ')
+    if (spaceIdx === -1) {
+      return { start: lineStart, query: lineText.slice(1).toLowerCase() }
+    }
+  }
+  return null
+}
+
 export const ChatPanel: React.FC<ChatPanelProps> = ({
   currentWorkspace,
   onOpenSettings,
@@ -135,8 +153,29 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     thinkingLevel,
     configured,
     selectModel,
-    selectThinkingLevel
+    selectThinkingLevel,
+    engine,
+    acpStates,
+    connectAcp,
+    applyAcpState
   } = useAgentModelConfigStore()
+
+  /** ACP 会话状态按 `引擎:会话键` 存，和 store 的键一致。 */
+  const currentAcpState = acpStates[`${engine}:${runKey || 'default'}`]
+
+  useEffect(() => {
+    const off = window.agent?.onAcpState?.((st) => {
+      applyAcpState(st)
+    })
+    return () => off?.()
+  }, [applyAcpState])
+
+  // 切到 ACP 引擎（或换项目）时连上对应 worktree 里的 Claude Code / Codex。
+  useEffect(() => {
+    if ((engine === 'claude' || engine === 'codex') && runKey) {
+      void connectAcp(engine, runKey)
+    }
+  }, [engine, runKey, connectAcp])
 
   const groupedModels = useGroupedModels()
   const selectedModel = useSelectedModel()
@@ -299,6 +338,51 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     }
   })
 
+  // ============ ACP 斜杠命令补全 ============
+  // Thunder 引擎没有这套命令，只在 ACP（Claude Code / Codex）下启用。
+  const slashToken = useMemo(
+    () => (engine !== 'thunder' ? slashTokenAtCursor(promptInput, cursorPos) : null),
+    [engine, promptInput, cursorPos]
+  )
+
+  const slashSuggestions = useMemo(() => {
+    if (!slashToken) return []
+    const q = slashToken.query
+    const cmds = currentAcpState?.availableCommands || []
+    return cmds.filter((c) => !q || c.name.toLowerCase().includes(q))
+  }, [slashToken, currentAcpState?.availableCommands])
+
+  const [slashSuggestActive, setSlashSuggestActive] = useState(0)
+  const [slashSuggestDismissed, setSlashSuggestDismissed] = useState(false)
+
+  const slashSuggestOpen =
+    Boolean(slashToken) &&
+    !slashSuggestDismissed &&
+    slashSuggestions.length > 0 &&
+    !stream.isStreaming
+
+  useEffect(() => {
+    setSlashSuggestActive(0)
+    setSlashSuggestDismissed(false)
+  }, [slashToken?.start, slashToken?.query])
+
+  const acceptSlashCommand = (cmdName: string) => {
+    if (!slashToken) return
+    const inserted = `/${cmdName} `
+    const next = `${promptInput.slice(0, slashToken.start)}${inserted}${promptInput.slice(cursorPos)}`
+    const nextCursor = slashToken.start + inserted.length
+    setPromptInput(next)
+    setSlashSuggestDismissed(true)
+    requestAnimationFrame(() => {
+      const el = textareaRef.current
+      if (el) {
+        el.focus()
+        el.setSelectionRange(nextCursor, nextCursor)
+      }
+      setCursorPos(nextCursor)
+    })
+  }
+
   // ============ 发送 ============
   const doSend = async (rawText?: string, directPrompt?: string) => {
     if (stream.isStreaming || !currentPrototype) return
@@ -360,7 +444,13 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         : undefined
     })
 
-    const outgoingImages = selectedModel?.input?.includes('image')
+    // 图片能不能随消息发，取决于引擎：thunder 看模型能力，ACP 看 agent 是否声明支持。
+    const allowsImages =
+      engine === 'thunder'
+        ? Boolean(selectedModel?.input?.includes('image'))
+        : (currentAcpState?.imageUpload ?? true)
+
+    const outgoingImages = allowsImages
       ? images.map((a) => ({ name: a.name, mimeType: a.mimeType, data: a.data ?? '' }))
       : []
 
@@ -375,6 +465,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     const res = await stream.startRun({
       runId,
       prototypeId: runKey ?? currentPrototype.id,
+      engine,
       prompt: instruction,
       code: externalWs ? '' : currentPrototype.vueCode,
       history,
@@ -448,6 +539,31 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // 斜杠命令补全优先：它出现时行内必然只有「/xxx」，不可能同时在补文件路径。
+    if (slashSuggestOpen && slashSuggestions.length > 0) {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setSlashSuggestDismissed(true)
+        return
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setSlashSuggestActive((prev) => (prev + 1) % slashSuggestions.length)
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setSlashSuggestActive((prev) => (prev - 1 + slashSuggestions.length) % slashSuggestions.length)
+        return
+      }
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+        e.preventDefault()
+        const pick = slashSuggestions[slashSuggestActive] ?? slashSuggestions[0]
+        if (pick) acceptSlashCommand(pick.name)
+        return
+      }
+    }
+
     // 补全打开时方向键/Tab/Enter 属于补全，不是发送。
     if (fileSuggest.handleKeyDown(e)) return
 
@@ -505,6 +621,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     await new Promise((r) => setTimeout(r, 150))
     await doSend(undefined, content)
   }
+
+  // ============ ACP 引擎 / 模型 / 模式菜单 ============
+  const acp = useAcpControls(runKey)
 
   // ============ 指标条数值 ============
   const { lastRunMetrics: metrics, streamingMetrics } = stream
@@ -574,6 +693,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         providerIcon={selectedModel ? getProviderIcon(selectedModel.provider, 11) : undefined}
         configured={configured}
         agentStatus={stream.isStreaming ? stream.agentStatus : null}
+        acp={acp}
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={onToggleSidebar}
         onOpenSettings={onOpenSettings}
@@ -581,6 +701,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
       <ChatContextBanners
         configured={configured}
+        acpEngine={acp.engine !== 'thunder'}
         inspectTarget={inspectTarget}
         markupAnnotations={markupAnnotations}
         onOpenSettings={onOpenSettings}
@@ -608,12 +729,23 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
       <ChatComposer
         docked={
-          streamHere && hasQuestion && stream.pendingQuestion ? (
-            <ChatQuestionBubble
-              question={stream.pendingQuestion}
-              onAnswer={(answers, cancelled) => void stream.answerQuestion(answers, cancelled)}
-              onDismiss={() => void stream.dismissQuestion()}
-            />
+          streamHere && ((hasQuestion && stream.pendingQuestion) || stream.pendingPermission) ? (
+            <>
+              {hasQuestion && stream.pendingQuestion && (
+                <ChatQuestionBubble
+                  question={stream.pendingQuestion}
+                  onAnswer={(answers, cancelled) => void stream.answerQuestion(answers, cancelled)}
+                  onDismiss={() => void stream.dismissQuestion()}
+                />
+              )}
+              {stream.pendingPermission && (
+                <AcpPermissionBubble
+                  permission={stream.pendingPermission}
+                  onRespond={stream.respondPermission}
+                  onDismiss={stream.dismissPermission}
+                />
+              )}
+            </>
           ) : null
         }
         queuedCount={streamHere ? stream.queuedCount : 0}
@@ -632,6 +764,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         selectedModel={selectedModel}
         thinkingLevel={thinkingLevel}
         thinkingLevels={thinkingLevels}
+        acp={acp}
+        slashSuggestOpen={slashSuggestOpen}
+        slashSuggestions={slashSuggestions}
+        slashSuggestActive={slashSuggestActive}
         metrics={metrics}
         streamingMetrics={streamingMetrics}
         contextTokensWithDraft={contextTokensWithDraft}
@@ -655,6 +791,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         onCancel={() => void stream.cancelRun()}
         onSelectModel={selectModel}
         onSelectThinkingLevel={selectThinkingLevel}
+        onAcceptSlashCommand={acceptSlashCommand}
       />
 
       {/* 单轮详情抽屉：浮在面板之上，不挤压消息流 */}

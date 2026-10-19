@@ -105,6 +105,23 @@ const agentApi = {
     ipcRenderer.invoke('agent:steer-task', params),
   run: (params: any) => ipcRenderer.invoke('agent:run', params),
   cancel: (runId: string) => ipcRenderer.invoke('agent:cancel', runId),
+  acpConnect: (params: { provider: string; prototypeId: string; force?: boolean }) =>
+    ipcRenderer.invoke('agent:acp-connect', params),
+  acpDisconnect: (params: { provider: string; prototypeId: string }) =>
+    ipcRenderer.invoke('agent:acp-disconnect', params),
+  acpGetState: (params: { provider: string; prototypeId: string }) =>
+    ipcRenderer.invoke('agent:acp-get-state', params),
+  acpSetMode: (params: { provider: string; prototypeId: string; modeId: string }) =>
+    ipcRenderer.invoke('agent:acp-set-mode', params),
+  acpSetConfigOption: (params: {
+    provider: string
+    prototypeId: string
+    configId: string
+    value: string | boolean
+  }) => ipcRenderer.invoke('agent:acp-set-config-option', params),
+  acpRespondPermission: (params: { requestId: string; optionId?: string; cancelled?: boolean }) =>
+    ipcRenderer.invoke('agent:acp-respond-permission', params),
+  acpCheckHealth: (provider: string) => ipcRenderer.invoke('agent:acp-check-health', provider),
   onStreamEvent: (callback: (frame: any) => void) => {
     const handler = (_: any, frame: any) => callback(frame)
     ipcRenderer.on('agent:stream-event', handler)
@@ -143,6 +160,21 @@ const agentApi = {
     const handler = (_: any, data: any) => callback(data)
     ipcRenderer.on('agent:ui-notice', handler)
     return () => ipcRenderer.removeListener('agent:ui-notice', handler)
+  },
+  onAcpState: (callback: (state: any) => void) => {
+    const handler = (_: any, data: any) => callback(data)
+    ipcRenderer.on('agent:acp-state', handler)
+    return () => ipcRenderer.removeListener('agent:acp-state', handler)
+  },
+  onAcpPermissionRequest: (callback: (data: any) => void) => {
+    const handler = (_: any, data: any) => callback(data)
+    ipcRenderer.on('agent:acp-permission-request', handler)
+    return () => ipcRenderer.removeListener('agent:acp-permission-request', handler)
+  },
+  onAcpPermissionResolved: (callback: (data: any) => void) => {
+    const handler = (_: any, data: any) => callback(data)
+    ipcRenderer.on('agent:acp-permission-resolved', handler)
+    return () => ipcRenderer.removeListener('agent:acp-permission-resolved', handler)
   }
 }
 

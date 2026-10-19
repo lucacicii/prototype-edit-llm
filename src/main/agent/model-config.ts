@@ -49,6 +49,9 @@ export type AgentModelConfig = ModelReference
 
 export interface AgentConfigFile {
   model?: AgentModelConfig
+  engine?: 'thunder' | 'claude' | 'codex'
+  acpPermissionPolicy?: 'allowAll' | 'ask'
+  acpAgents?: Partial<Record<'claude' | 'codex', { command?: string; args?: string[]; env?: Record<string, string> }>>
   systemPrompt?: string
   maxTurns?: number
   temperature?: number
@@ -123,6 +126,33 @@ export function normalizeConfig(config?: AgentConfigFile | null): AgentConfigFil
   if (thinkingLevel) clean.thinkingLevel = thinkingLevel
   if (Number.isFinite(config.requestTimeoutMs) && config.requestTimeoutMs) {
     clean.requestTimeoutMs = config.requestTimeoutMs
+  }
+  if (config.engine === 'thunder' || config.engine === 'claude' || config.engine === 'codex') {
+    clean.engine = config.engine
+  }
+  if (config.acpPermissionPolicy === 'allowAll' || config.acpPermissionPolicy === 'ask') {
+    clean.acpPermissionPolicy = config.acpPermissionPolicy
+  }
+  if (config.acpAgents && typeof config.acpAgents === 'object') {
+    const agents: NonNullable<AgentConfigFile['acpAgents']> = {}
+    for (const key of ['claude', 'codex'] as const) {
+      const item = config.acpAgents[key]
+      if (item && typeof item === 'object') {
+        const cmd = trimmed(item.command)
+        const args = Array.isArray(item.args) ? item.args.filter((a): a is string => typeof a === 'string') : undefined
+        const env = item.env && typeof item.env === 'object' ? (item.env as Record<string, string>) : undefined
+        if (cmd || (args && args.length > 0) || env) {
+          agents[key] = {
+            ...(cmd ? { command: cmd } : {}),
+            ...(args && args.length > 0 ? { args } : {}),
+            ...(env ? { env } : {})
+          }
+        }
+      }
+    }
+    if (Object.keys(agents).length > 0) {
+      clean.acpAgents = agents
+    }
   }
 
   return clean

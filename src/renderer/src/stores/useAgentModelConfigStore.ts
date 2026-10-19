@@ -1,5 +1,13 @@
 import { create } from 'zustand'
 import { message } from 'antd'
+import type {
+  AgentEngine,
+  AcpProvider,
+  AcpPermissionPolicy,
+  AcpSessionState
+} from '../../../main/acp/types'
+
+export type { AgentEngine, AcpProvider, AcpPermissionPolicy, AcpSessionState }
 
 export interface AgentModelView {
   selectionId: string
@@ -98,6 +106,25 @@ interface AgentModelConfigState {
   keyStoreEncrypted: boolean
   vocabularies: AgentModelVocabularies
 
+  engine: AgentEngine
+  acpPermissionPolicy: AcpPermissionPolicy
+  acpAgents: Partial<Record<AcpProvider, { command?: string; args?: string[]; env?: Record<string, string> }>>
+  acpStates: Record<string, AcpSessionState>
+
+  selectEngine: (engine: AgentEngine) => Promise<void>
+  selectAcpPermissionPolicy: (policy: AcpPermissionPolicy) => Promise<void>
+  saveAcpAgents: (
+    acpAgents: Partial<Record<AcpProvider, { command?: string; args?: string[]; env?: Record<string, string> }>>
+  ) => Promise<{ ok: boolean; error?: string }>
+  connectAcp: (provider: AcpProvider, prototypeId: string, force?: boolean) => Promise<AcpSessionState | null>
+  setAcpMode: (provider: AcpProvider, prototypeId: string, modeId: string) => Promise<void>
+  setAcpConfigOption: (
+    provider: AcpProvider,
+    prototypeId: string,
+    configId: string,
+    value: string | boolean
+  ) => Promise<void>
+  applyAcpState: (state: AcpSessionState) => void
   refresh: () => Promise<void>
   selectModel: (value: string) => Promise<void>
   selectThinkingLevel: (value: string) => Promise<void>
@@ -115,6 +142,10 @@ export const useAgentModelConfigStore = create<AgentModelConfigState>((set, get)
   libraryPath: '',
   keyStoreEncrypted: true,
   vocabularies: EMPTY_VOCABULARIES,
+  engine: 'thunder',
+  acpPermissionPolicy: 'allowAll',
+  acpAgents: {},
+  acpStates: {},
 
   refresh: async () => {
     if (!window.agent?.getConfig) return
@@ -140,6 +171,11 @@ export const useAgentModelConfigStore = create<AgentModelConfigState>((set, get)
       const selectionId = match?.selectionId ?? ''
       const thinkingLevel = res.config?.thinkingLevel ?? match?.defaultThinkingLevel ?? ''
 
+      const engine = (res.config?.engine as AgentEngine) || 'thunder'
+      const acpPermissionPolicy = (res.config?.acpPermissionPolicy as AcpPermissionPolicy) || 'allowAll'
+      const acpAgents = (res.config?.acpAgents ?? {}) as Partial<
+        Record<AcpProvider, { command?: string; args?: string[]; env?: Record<string, string> }>
+      >
       set({
         models,
         envLocked,
@@ -150,7 +186,10 @@ export const useAgentModelConfigStore = create<AgentModelConfigState>((set, get)
         vocabularies,
         selectionId,
         thinkingLevel,
-        loaded: true
+        loaded: true,
+        engine,
+        acpPermissionPolicy,
+        acpAgents
       })
 
       if (res.migrated?.length) {
@@ -228,6 +267,88 @@ export const useAgentModelConfigStore = create<AgentModelConfigState>((set, get)
     })
     if (res?.ok) await get().refresh()
     return res ?? { ok: false, error: '未知错误' }
+  },
+
+  selectEngine: async (engine: AgentEngine) => {
+    set({ engine })
+    if (window.agent?.getConfig && window.agent?.setConfig) {
+      const current = await window.agent.getConfig()
+      await window.agent.setConfig({
+        ...(current.config ?? {}),
+        engine
+      })
+      await get().refresh()
+    }
+  },
+
+  selectAcpPermissionPolicy: async (policy: AcpPermissionPolicy) => {
+    set({ acpPermissionPolicy: policy })
+    if (window.agent?.getConfig && window.agent?.setConfig) {
+      const current = await window.agent.getConfig()
+      await window.agent.setConfig({
+        ...(current.config ?? {}),
+        acpPermissionPolicy: policy
+      })
+      await get().refresh()
+    }
+  },
+
+  saveAcpAgents: async (acpAgents) => {
+    if (!window.agent?.getConfig || !window.agent?.setConfig) {
+      return { ok: false, error: 'agent 桥接不可用' }
+    }
+    const current = await window.agent.getConfig()
+    const res = await window.agent.setConfig({
+      ...(current.config ?? {}),
+      acpAgents
+    })
+    if (res?.ok) await get().refresh()
+    return res ?? { ok: false, error: '未知错误' }
+  },
+
+  connectAcp: async (provider: AcpProvider, prototypeId: string, force?: boolean) => {
+    if (!window.agent?.acpConnect) return null
+    try {
+      const res = await window.agent.acpConnect({ provider, prototypeId, force })
+      if (res?.ok && res.state) {
+        const state = res.state as AcpSessionState
+        set((prev) => ({
+          acpStates: {
+            ...prev.acpStates,
+            [`${provider}:${prototypeId}`]: state
+          }
+        }))
+        return state
+      }
+      return null
+    } catch (err) {
+      console.warn('[ACP Store] connectAcp error:', err)
+      return null
+    }
+  },
+
+  setAcpMode: async (provider: AcpProvider, prototypeId: string, modeId: string) => {
+    if (!window.agent?.acpSetMode) return
+    await window.agent.acpSetMode({ provider, prototypeId, modeId })
+  },
+
+  setAcpConfigOption: async (
+    provider: AcpProvider,
+    prototypeId: string,
+    configId: string,
+    value: string | boolean
+  ) => {
+    if (!window.agent?.acpSetConfigOption) return
+    await window.agent.acpSetConfigOption({ provider, prototypeId, configId, value })
+  },
+
+  applyAcpState: (state: AcpSessionState) => {
+    set((prev) => ({
+      acpStates: {
+        ...prev.acpStates,
+        [`${state.provider}:${state.workspaceKey}`]: state
+      }
+    }))
   }
 }))
 

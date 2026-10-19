@@ -19,6 +19,7 @@ function targetLabel(target: PointedTarget): string {
  */
 export function ChatContextBanners({
   configured,
+  acpEngine,
   inspectTarget,
   markupAnnotations,
   onOpenSettings,
@@ -26,6 +27,8 @@ export function ChatContextBanners({
   onRemoveMarkupAnnotation
 }: {
   configured: boolean
+  /** 非 thunder 引擎（ACP）不走本应用的模型配置，所以不提醒「未配置模型」。 */
+  acpEngine: boolean
   inspectTarget: PointedTarget | null
   markupAnnotations: MarkupAnnotation[]
   onOpenSettings: () => void
@@ -34,7 +37,7 @@ export function ChatContextBanners({
 }) {
   return (
     <>
-      {!configured && (
+      {!configured && !acpEngine && (
         <div className="pc-banner is-warning">
           <div className="pc-banner-body">
             <div className="pc-banner-title">
