@@ -267,7 +267,13 @@ export function ChatComposer({
                   ⚡ {streamingMetrics.tps > 0 ? streamingMetrics.tps.toFixed(1) : '0.0'} tok/s
                 </span>
                 <span className="pc-metrics-divider" />
-                <span>
+                <span
+                  title={
+                    isAcp
+                      ? 'ACP 下本轮 token 由流出的正文与思考估算，速率不含工具执行时间'
+                      : '本轮流式生成量'
+                  }
+                >
                   {streamingMetrics.tokensCount} tokens
                   {streamingMetrics.reasoningCount
                     ? `（含思考 ${streamingMetrics.reasoningCount}）`
@@ -282,7 +288,7 @@ export function ChatComposer({
                     <span className="pc-metrics-divider" />
                   </>
                 ) : null}
-                <span>
+                <span title={isAcp ? 'ACP 下本轮 token 由流出的正文与思考估算，速率不含工具执行时间' : undefined}>
                   本轮 {metrics.totalTokens?.toLocaleString() ?? '—'}
                   {metrics.promptTokens !== undefined && metrics.completionTokens !== undefined ? (
                     <>
@@ -301,7 +307,8 @@ export function ChatComposer({
               <span className="pc-metrics-speed">⚡ 就绪</span>
             )}
 
-            {metrics ? (
+            {/* Prompt Cache 只有 thunder 报；ACP 协议不回，宁可不显示也不显示 0。 */}
+            {metrics && !isAcp ? (
               <>
                 <span className="pc-metrics-divider" />
                 <span
@@ -338,7 +345,13 @@ export function ChatComposer({
               )}
             </span>
             <span className="pc-metrics-divider" />
-            <span title="当前会话累计消耗">
+            <span
+              title={
+                isAcp
+                  ? '当前会话累计消耗：ACP 协议不回 token 用量，按流出的正文与思考估算'
+                  : '当前会话全部轮次累计消耗的总 Token 数'
+              }
+            >
               总消耗 <span className="pc-metrics-value">{sessionTotalTokens.toLocaleString()}</span>
             </span>
             {metrics?.durationMs ? (

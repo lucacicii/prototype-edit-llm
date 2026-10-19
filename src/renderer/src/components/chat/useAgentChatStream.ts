@@ -12,6 +12,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AgentEngine, AcpPermissionRequestPayload } from '../../../../main/acp/types'
+/** token 估算与主进程（ACP 指标）共用同一份实现，数字才对得上。 */
+import { estimateTokenCount } from '../../../../shared/tokenEstimate'
 
 
 export interface ActiveToolInfo {
@@ -115,49 +117,6 @@ export interface ThunderAgentStatus {
   detail?: string
   started_at_ms: number
   seq: number
-}
-
-/**
- * 快速 token 估算，与 thunder 内核 `core::token_estimator` 同一口径：
- * CJK/假名/谚文约 1.5 token/字，ASCII（空白半权）约 3.7 字符/token，标点 +0.2。
- *
- * 只用于**降级路径**——没收到 `metrics_update`（旧版 daemon）时的流式计数。
- * 权威数值一律以快照为准。
- */
-function estimateTokens(text: string): number {
-  if (!text) return 0
-  let cjk = 0
-  let space = 0
-  let punct = 0
-  let total = 0
-  for (const ch of text) {
-    total += 1
-    const u = ch.codePointAt(0) ?? 0
-    if (
-      (u >= 0x4e00 && u <= 0x9fff) ||
-      (u >= 0x3400 && u <= 0x4dbf) ||
-      (u >= 0x3040 && u <= 0x30ff) ||
-      (u >= 0xac00 && u <= 0xd7af)
-    ) {
-      cjk += 1
-    } else if (u === 0x20 || u === 0x09 || u === 0x0a || u === 0x0d) {
-      space += 1
-    } else if (
-      (u >= 0x21 && u <= 0x2f) ||
-      (u >= 0x3a && u <= 0x40) ||
-      (u >= 0x5b && u <= 0x60) ||
-      (u >= 0x7b && u <= 0x7e) ||
-      (u >= 0x3000 && u <= 0x303f) ||
-      (u >= 0xff00 && u <= 0xffef)
-    ) {
-      punct += 1
-    } else if (/\s/.test(ch)) {
-      space += 1
-    }
-  }
-  const ascii = Math.max(0, total - cjk)
-  const effAscii = Math.max(0, ascii - Math.floor(space / 2))
-  return Math.max(1, Math.ceil((cjk * 15) / 10) + Math.ceil((effAscii * 10) / 37) + Math.ceil((punct * 2) / 10))
 }
 
 /** 快照 → 本轮指标（面板的 `ChatRunMetrics`）。 */
@@ -315,6 +274,8 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
   const [snapshotLiveTps, setSnapshotLiveTps] = useState(0)
   const [sessionTotalTokens, setSessionTotalTokens] = useState(0)
   const [currentContextTokens, setCurrentContextTokens] = useState(0)
+  /** 快照里的模型窗口：ACP 下本地模型库里根本没有对面那个 agent 的窗口。 */
+  const [snapshotContextLimit, setSnapshotContextLimit] = useState(0)
 
   // 交互
   const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null)
@@ -338,6 +299,10 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
   /** 降级路径的累计正文/思考文本（快照缺席时按文本估算 token）。 */
   const textBufRef = useRef('')
   const reasoningBufRef = useRef('')
+  /** 当前轮第一个 token 的时刻；速率的分子分母都从这里开始算。 */
+  const turnFirstTokenAtRef = useRef<number | null>(null)
+  /** 已结束轮次的累计生成时长（毫秒），不含工具与停等。 */
+  const completedGenMsRef = useRef(0)
   const onCodeUpdatedRef = useRef(options.onCodeUpdated)
   onCodeUpdatedRef.current = options.onCodeUpdated
 
@@ -407,6 +372,8 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
     hasSnapshotRef.current = false
     textBufRef.current = ''
     reasoningBufRef.current = ''
+    turnFirstTokenAtRef.current = null
+    completedGenMsRef.current = 0
     // 「本轮」的数字随新消息重算：不清掉的话，上一次 run 的总耗时/瞬时值会
     // 一直挂到新 run 的第一轮结束。快照会在第一帧把它填回来。
     applyMetrics(null)
@@ -432,8 +399,9 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
           textBufRef.current += delta
           // 快照在跑就交给它：权威值随后会覆盖同一位置。
           if (!hasSnapshotRef.current) {
+            if (turnFirstTokenAtRef.current === null) turnFirstTokenAtRef.current = Date.now()
             setStreamTokensCount(
-              estimateTokens(textBufRef.current) + estimateTokens(reasoningBufRef.current)
+              estimateTokenCount(textBufRef.current) + estimateTokenCount(reasoningBufRef.current)
             )
           }
           publishSegments()
@@ -445,9 +413,10 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
           appendDelta(segmentsRef.current, 'reasoning', delta)
           reasoningBufRef.current += delta
           if (!hasSnapshotRef.current) {
-            setStreamReasoningCount(estimateTokens(reasoningBufRef.current))
+            if (turnFirstTokenAtRef.current === null) turnFirstTokenAtRef.current = Date.now()
+            setStreamReasoningCount(estimateTokenCount(reasoningBufRef.current))
             setStreamTokensCount(
-              estimateTokens(textBufRef.current) + estimateTokens(reasoningBufRef.current)
+              estimateTokenCount(textBufRef.current) + estimateTokenCount(reasoningBufRef.current)
             )
           }
           publishSegments()
@@ -505,6 +474,10 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
           if (typeof snap.context_tokens === 'number' && snap.context_tokens > 0) {
             setCurrentContextTokens(snap.context_tokens)
           }
+          // ACP 的窗口上限只存在快照里（本地模型库没有对面那个 agent 的模型）。
+          if (typeof snap.context_window_limit === 'number' && snap.context_window_limit > 0) {
+            setSnapshotContextLimit(snap.context_window_limit)
+          }
           // 总消耗 是计数器：以快照的绝对值为准，而不是只靠本地累加 ——
           // 本地那份只看得到自己收到的轮次，与 daemon 的累计值会漂移。
           if (typeof snap.session_total_tokens === 'number' && snap.session_total_tokens > 0) {
@@ -519,6 +492,12 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
         case 'turn_end': {
           // 轮结束：把这一轮冻住（圆点由此从 running 变 done），并记下它的账。
           {
+            // 降级路径的速率分母：把这一轮的生成时长结转掉，下一轮从自己的
+            // 第一个 token 重新起算（不能拿整 run 的墙钟当分母）。
+            if (turnFirstTokenAtRef.current !== null) {
+              completedGenMsRef.current += Date.now() - turnFirstTokenAtRef.current
+              turnFirstTokenAtRef.current = null
+            }
             const turn = ensureTurn(typeof ev.turn === 'number' ? ev.turn : 0)
             turn.status = ev.finish_reason === 'error' ? 'error' : 'done'
             turn.finishReason = typeof ev.finish_reason === 'string' ? ev.finish_reason : undefined
@@ -849,8 +828,16 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
     if (!isStreaming) return 0
     // 权威速率优先；没有快照（旧版 daemon）才退回本地估算。
     if (snapshotLiveTps > 0) return snapshotLiveTps
-    if (elapsedMs <= 200 || streamTokensCount === 0) return 0
-    return streamTokensCount / (elapsedMs / 1000)
+    if (streamTokensCount === 0) return 0
+    // 分母是**生成时长**（已收口轮次 + 当前轮从第一个 token 起），不是墙钟：
+    // 工具执行与停等不产 token，算进去只会把速率拉低。
+    const turnStartedAt = turnFirstTokenAtRef.current
+    const genSec =
+      (completedGenMsRef.current + (turnStartedAt === null ? 0 : Date.now() - turnStartedAt)) / 1000
+    if (genSec <= 0.2) return 0
+    return streamTokensCount / genSec
+    // elapsedMs 只是每 500ms 一次的重算节拍，不参与计算。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isStreaming, snapshotLiveTps, elapsedMs, streamTokensCount])
 
   return {
@@ -872,7 +859,8 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
     agentStatus,
     sessionTotalTokens,
     currentContextTokens,
-    contextWindowLimit: options.contextWindowLimit,
+    /** 模型窗口：本地模型库优先（thunder），其次快照（ACP 只能从协议里得到）。 */
+    contextWindowLimit: options.contextWindowLimit || snapshotContextLimit || 0,
     pendingQuestion,
     answerQuestion,
     dismissQuestion,
