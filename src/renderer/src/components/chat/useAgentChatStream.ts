@@ -11,6 +11,8 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { AgentEngine, AcpPermissionRequestPayload } from '../../../../main/acp/types'
+
 
 export interface ActiveToolInfo {
   toolCallId: string
@@ -186,6 +188,7 @@ export interface PendingQuestion {
 export interface StartRunParams {
   runId: string
   prototypeId: string
+  engine?: AgentEngine
   prompt: string
   code: string
   history?: Array<{ role: string; content: string | null }>
@@ -315,6 +318,7 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
 
   // 交互
   const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null)
+  const [pendingPermission, setPendingPermission] = useState<AcpPermissionRequestPayload | null>(null)
   const [queuedMessages, setQueuedMessages] = useState<string[]>([])
   const [agentStatus, setAgentStatus] = useState<ThunderAgentStatus | null>(null)
 
@@ -646,6 +650,22 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
             })
           })
         : undefined
+      const offPermission = window.agent.onAcpPermissionRequest
+        ? window.agent.onAcpPermissionRequest((payload: any) => {
+            if (payload?.runId && payload.runId !== params.runId) return
+            setPendingPermission(payload as AcpPermissionRequestPayload)
+          })
+        : undefined
+
+      const offPermissionResolved = window.agent.onAcpPermissionResolved
+        ? window.agent.onAcpPermissionResolved((payload: any) => {
+            setPendingPermission((current) => {
+              if (current?.requestId === payload?.requestId) return null
+              return current
+            })
+          })
+        : undefined
+
 
       const offCode = window.agent.onCodeUpdated
         ? window.agent.onCodeUpdated((data: any) => {
@@ -663,6 +683,7 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
         const res = await window.agent.run({
           runId: params.runId,
           prototypeId: params.prototypeId,
+          engine: params.engine,
           prompt: params.prompt,
           code: params.code,
           history: params.history,
@@ -718,6 +739,9 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
         offStream?.()
         offQuestion?.()
         offCode?.()
+        offPermission?.()
+        offPermissionResolved?.()
+        setPendingPermission(null)
         setIsStreaming(false)
         setActiveRunId(null)
         setRunPrototypeId(null)
@@ -799,6 +823,25 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
     applyMetrics(null)
   }, [applyMetrics])
 
+  const respondPermission = useCallback(
+    async (optionId?: string, cancelled = false) => {
+      if (!pendingPermission) return
+      if (window.agent?.acpRespondPermission) {
+        await window.agent.acpRespondPermission({
+          requestId: pendingPermission.requestId,
+          optionId,
+          cancelled
+        })
+      }
+      setPendingPermission(null)
+    },
+    [pendingPermission]
+  )
+
+  const dismissPermission = useCallback(() => {
+    void respondPermission(undefined, true)
+  }, [respondPermission])
+
   // 组件卸载时清计时器
   useEffect(() => stopTimer, [stopTimer])
 
@@ -833,6 +876,9 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
     pendingQuestion,
     answerQuestion,
     dismissQuestion,
+    pendingPermission,
+    respondPermission,
+    dismissPermission,
     queuedCount: queuedMessages.length,
     steer,
     followUp,

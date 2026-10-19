@@ -289,6 +289,9 @@ export interface IAgentAPI {
       temperature?: number
       thinkingLevel?: string
       requestTimeoutMs?: number
+      engine?: 'thunder' | 'claude' | 'codex'
+      acpPermissionPolicy?: 'allowAll' | 'ask'
+      acpAgents?: Record<string, any>
     }
     source?: 'env' | 'workspace' | 'home' | 'none'
     path?: string
@@ -458,6 +461,7 @@ export interface IAgentAPI {
     /** 渲染层生成并传入，让「停止」按钮能按 run 取消（main 端不传则自己生成）。 */
     runId?: string
     prototypeId: string
+    engine?: 'thunder' | 'claude' | 'codex'
     prompt: string
     code: string
     history?: Array<{ role: string; content: string | null }>
@@ -493,6 +497,13 @@ export interface IAgentAPI {
     behavior?: 'steer' | 'follow_up'
   }) => Promise<{ ok: boolean; error?: string }>
   cancel: (runId: string) => Promise<boolean>
+  acpConnect: (params: { provider: string; prototypeId: string; force?: boolean }) => Promise<{ ok: boolean; state?: any; error?: string }>
+  acpDisconnect: (params: { provider: string; prototypeId: string }) => Promise<{ ok: boolean }>
+  acpGetState: (params: { provider: string; prototypeId: string }) => Promise<{ ok: boolean; state?: any }>
+  acpSetMode: (params: { provider: string; prototypeId: string; modeId: string }) => Promise<{ ok: boolean; error?: string }>
+  acpSetConfigOption: (params: { provider: string; prototypeId: string; configId: string; value: string | boolean }) => Promise<{ ok: boolean; error?: string }>
+  acpRespondPermission: (params: { requestId: string; optionId?: string; cancelled?: boolean }) => Promise<{ ok: boolean }>
+  acpCheckHealth: (provider: string) => Promise<{ ok: boolean; provider?: string; command?: string; resolvedPath?: string | null; isResolved?: boolean; error?: string }>
   onStreamEvent: (callback: (frame: any) => void) => () => void
   onUserQuestion: (
     callback: (data: {
@@ -519,6 +530,9 @@ export interface IAgentAPI {
   ) => () => void
   onModeChanged?: (callback: (data: { session_id: string; mode: string; previous?: string; source: string; task_id?: string }) => void) => () => void
   onUiNotice?: (callback: (data: { source: string; message: string; level: string }) => void) => () => void
+  onAcpState?: (callback: (state: any) => void) => () => void
+  onAcpPermissionRequest?: (callback: (payload: any) => void) => () => void
+  onAcpPermissionResolved?: (callback: (payload: any) => void) => () => void
 }
 
 export interface IMaterialAPI {

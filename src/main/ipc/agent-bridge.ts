@@ -21,11 +21,17 @@ import { ThunderClient, getSharedThunderClient } from './thunder-client'
 import { syncThunderModelConfig } from '../agent/thunder-model-config'
 import { ProjectRunner } from '../project-runner'
 import {
+  ensureProjectInstructionFiles,
   loadProjectItem,
   projectDirFor,
+  saveProjectAcpSession,
   syncProjectEntryAndStack,
   topologyPathsFor
 } from '../project-store'
+import { AcpRuntimeManager } from '../acp/acp-runtime-manager'
+import { resolveAcpLaunchConfig } from '../acp/agent-registry'
+import { resolveSpawnCommand } from '../acp/process-path'
+import type { AcpProvider } from '../acp/types'
 import { ProjectWorkspaceManager } from '../project-workspace-manager'
 import {
   buildSpecPrompt,
@@ -77,6 +83,7 @@ export interface AgentRunParams {
   prompt: string
   code: string
   prototypeId: string
+  engine?: 'thunder' | 'claude' | 'codex'
   history?: { role: 'user' | 'assistant' | 'tool' | 'system'; content: string | null }[]
   /**
    * 圈选点中的元素。走的是同一个 PointedTarget —— 以前这里是内联的
@@ -1002,9 +1009,18 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
   )
 
   ipcMain.handle('agent:run', async (_, params: AgentRunParams) => {
-    const resolved = await resolveAgentModel(options.workspaceDir)
-    if (!resolved.model) {
-      return { ok: false, error: `尚未配置模型。${resolved.reason ?? ''}`.trim() }
+    const loaded = loadModelConfig(options.workspaceDir)
+    const effectiveEngine = params.engine ?? loaded.config.engine ?? 'thunder'
+
+    let resolvedModel: LibraryModel | undefined
+    let resolvedConfig = loaded.config
+    if (effectiveEngine === 'thunder') {
+      const resolved = await resolveAgentModel(options.workspaceDir)
+      if (!resolved.model) {
+        return { ok: false, error: `尚未配置模型。${resolved.reason ?? ''}`.trim() }
+      }
+      resolvedModel = resolved.model
+      resolvedConfig = resolved.config
     }
 
     active = params
@@ -1147,6 +1163,84 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
       }
     }
 
+    if (!isExternalWorkspace && params.prototypeId) {
+      await ensureProjectInstructionFiles(params.prototypeId)
+    }
+
+    if (effectiveEngine === 'claude' || effectiveEngine === 'codex') {
+      try {
+        const savedSessionId = projectItem?.acpSessions?.[effectiveEngine]
+        const acpResult = await AcpRuntimeManager.getInstance().runPrompt({
+          runId,
+          provider: effectiveEngine,
+          workspaceKey: params.prototypeId || 'default',
+          projectPath: projectDir,
+          prompt: fullPrompt,
+          attachments: params.attachments,
+          savedSessionId,
+          launchOverrides: loaded.config.acpAgents,
+          permissionPolicy: loaded.config.acpPermissionPolicy || 'allowAll',
+          onEvent: (ev) => {
+            for (const win of BrowserWindow.getAllWindows()) {
+              win.webContents.send('agent:stream-event', {
+                type: 'observation',
+                run_id: runId,
+                event: ev
+              })
+            }
+          },
+          onFileChange: () => {
+            void broadcastSyncProject()
+          },
+          onSessionIdChanged: async (newSessionId) => {
+            if (!isExternalWorkspace && params.prototypeId) {
+              await saveProjectAcpSession(params.prototypeId, effectiveEngine, newSessionId)
+            }
+          }
+        })
+
+        await broadcastSyncProject()
+
+        for (const win of BrowserWindow.getAllWindows()) {
+          win.webContents.send('agent:stream-event', {
+            type: 'run_finished',
+            run_id: runId,
+            finish_reason: (acpResult.finishReason || 'done').toLowerCase(),
+            final_content: acpResult.finalContent ?? null,
+            messages: [],
+            stats: {}
+          })
+        }
+
+        const latestItem = !isExternalWorkspace
+          ? await syncProjectEntryAndStack(params.prototypeId)
+          : null
+
+        return {
+          ok: true,
+          runId,
+          finishReason: (acpResult.finishReason || 'done').toLowerCase(),
+          finalContent: acpResult.finalContent ?? null,
+          code: latestItem?.vueCode ?? activeCode,
+          techStack: latestItem?.techStack ?? activeStack
+        }
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err)
+        if (errMsg.includes('Cancelled') || errMsg.includes('cancelled')) {
+          return {
+            ok: true,
+            runId,
+            finishReason: 'cancelled',
+            finalContent: null,
+            code: activeCode
+          }
+        }
+        return { ok: false, runId, error: errMsg }
+      } finally {
+        active = null
+      }
+    }
+
     try {
       // thunder resolves its background/utility model (auto-titles) from its own
       // models.json, not from the per-task descriptor we pass below. Refresh it
@@ -1157,9 +1251,9 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
         taskId: runId,
         prompt: fullPrompt,
         sessionId,
-        model: selectionId(resolved.model),
-        modelDescriptor: resolved.model as unknown as Record<string, any>,
-        thinkingLevel: resolved.config.thinkingLevel,
+        model: selectionId(resolvedModel!),
+        modelDescriptor: resolvedModel as unknown as Record<string, unknown>,
+        thinkingLevel: resolvedConfig.thinkingLevel,
         workspaceDir: projectDir,
         extraWorkspaceDirs: extraWorkspaceDirs.length ? extraWorkspaceDirs : undefined,
         headless: false,
@@ -1249,11 +1343,130 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
 
   ipcMain.handle('agent:cancel', async (_, runId: string) => {
     try {
+      const acpCancelled = await AcpRuntimeManager.getInstance().cancelRun(runId)
+      if (acpCancelled) return true
+    } catch {
+      // ignore
+    }
+    try {
       await daemonClient.cancelTask(runId)
     } catch {
       agent.cancel(runId)
     }
     return true
+  })
+
+  ipcMain.handle(
+    'agent:acp-connect',
+    async (
+      _,
+      params: { provider: AcpProvider; prototypeId: string; force?: boolean }
+    ) => {
+      try {
+        const loaded = loadModelConfig(options.workspaceDir)
+        const wsManager = ProjectWorkspaceManager.getInstance()
+        const currentWs = wsManager.getCurrentWorkspace()
+        const isExternal = Boolean(currentWs && currentWs.id !== 'default-host')
+        const projectDir = isExternal && currentWs
+          ? currentWs.sharedDir || currentWs.rootPath || projectDirFor(params.prototypeId)
+          : projectDirFor(params.prototypeId)
+        const projectItem = !isExternal ? await loadProjectItem(projectDir) : null
+        const savedSessionId = projectItem?.acpSessions?.[params.provider]
+
+        const state = await AcpRuntimeManager.getInstance().connectSession({
+          provider: params.provider,
+          workspaceKey: params.prototypeId || 'default',
+          projectPath: projectDir,
+          savedSessionId,
+          launchOverrides: loaded.config.acpAgents,
+          force: params.force
+        })
+        return { ok: true, state }
+      } catch (err: unknown) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'agent:acp-disconnect',
+    async (_, params: { provider: AcpProvider; prototypeId: string }) => {
+      AcpRuntimeManager.getInstance().disconnectSession(params.provider, params.prototypeId || 'default')
+      return { ok: true }
+    }
+  )
+
+  ipcMain.handle(
+    'agent:acp-get-state',
+    async (_, params: { provider: AcpProvider; prototypeId: string }) => {
+      const state = AcpRuntimeManager.getInstance().getState(params.provider, params.prototypeId || 'default')
+      return { ok: true, state }
+    }
+  )
+
+  ipcMain.handle(
+    'agent:acp-set-mode',
+    async (_, params: { provider: AcpProvider; prototypeId: string; modeId: string }) => {
+      try {
+        await AcpRuntimeManager.getInstance().setMode(
+          params.provider,
+          params.prototypeId || 'default',
+          params.modeId
+        )
+        return { ok: true }
+      } catch (err: unknown) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'agent:acp-set-config-option',
+    async (
+      _,
+      params: { provider: AcpProvider; prototypeId: string; configId: string; value: string | boolean }
+    ) => {
+      try {
+        await AcpRuntimeManager.getInstance().setConfigOption(
+          params.provider,
+          params.prototypeId || 'default',
+          params.configId,
+          params.value
+        )
+        return { ok: true }
+      } catch (err: unknown) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'agent:acp-respond-permission',
+    async (_, params: { requestId: string; optionId?: string; cancelled?: boolean }) => {
+      AcpRuntimeManager.getInstance().respondPermission(
+        params.requestId,
+        params.optionId,
+        params.cancelled
+      )
+      return { ok: true }
+    }
+  )
+
+  ipcMain.handle('agent:acp-check-health', async (_, provider: AcpProvider) => {
+    try {
+      const loaded = loadModelConfig(options.workspaceDir)
+      const launch = resolveAcpLaunchConfig(provider, loaded.config.acpAgents)
+      const res = resolveSpawnCommand(launch.command, process.env, launch.env)
+      return {
+        ok: true,
+        provider,
+        command: launch.command,
+        resolvedPath: res.resolved,
+        isResolved: Boolean(res.resolved)
+      }
+    } catch (err: unknown) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
   })
 
   /**

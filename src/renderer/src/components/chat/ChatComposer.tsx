@@ -1,17 +1,10 @@
 import { Dropdown } from 'antd'
 import type { MenuProps } from 'antd'
-import {
-  ArrowUp,
-  ChevronRight,
-  CornerDownLeft,
-  FileText,
-  Paperclip,
-  Sparkles,
-  X
-} from 'lucide-react'
-import { getProviderIcon } from './providerIcon'
+import { ArrowUp, Bot, ChevronRight, CornerDownLeft, FileText, Paperclip, Sparkles, X } from 'lucide-react'
+import { getEngineIcon, getProviderIcon } from './providerIcon'
 import { formatCompactTokens, formatDuration } from './chatFormat'
 import type { ChatRunMetrics } from './useAgentChatStream'
+import type { AcpControls } from './useAcpControls'
 import type { AgentModelView } from '../../stores/useAgentModelConfigStore'
 
 export interface PendingAttachment {
@@ -51,6 +44,10 @@ export function ChatComposer({
   selectedModel,
   thinkingLevel,
   thinkingLevels,
+  acp,
+  slashSuggestOpen,
+  slashSuggestions,
+  slashSuggestActive,
   metrics,
   streamingMetrics,
   contextTokensWithDraft,
@@ -70,7 +67,8 @@ export function ChatComposer({
   onSendClick,
   onCancel,
   onSelectModel,
-  onSelectThinkingLevel
+  onSelectThinkingLevel,
+  onAcceptSlashCommand
 }: {
   /** 停靠在输入框上方的卡片（问题卡）。 */
   docked?: React.ReactNode
@@ -90,6 +88,11 @@ export function ChatComposer({
   selectedModel?: AgentModelView
   thinkingLevel: string
   thinkingLevels: string[]
+  /** ACP 引擎的菜单与状态（thunder 下只用到 `engine` / `engineMenuItems`）。 */
+  acp: AcpControls
+  slashSuggestOpen: boolean
+  slashSuggestions: { name: string; description?: string; inputHint?: string }[]
+  slashSuggestActive: number
   metrics: ChatRunMetrics | null
   streamingMetrics: { tokensCount: number; tps: number; reasoningCount?: number }
   contextTokensWithDraft: number
@@ -110,6 +113,7 @@ export function ChatComposer({
   onCancel: () => void
   onSelectModel: (selectionId: string) => void
   onSelectThinkingLevel: (level: string) => void
+  onAcceptSlashCommand: (name: string) => void
 }) {
   const modelMenuItems: MenuProps['items'] = groupedModels.flatMap((group) => [
     {
@@ -143,6 +147,7 @@ export function ChatComposer({
   }))
 
   const hasInput = Boolean(promptInput.trim()) || pendingAttachments.length > 0
+  const isAcp = acp.engine !== 'thunder'
 
   return (
     <div className="pc-composer-zone">
@@ -205,10 +210,33 @@ export function ChatComposer({
                 ? '其他项目的 Agent 正在运行，请稍候...'
                 : isStreaming
                   ? '运行中：Enter 插话引导（⌥Enter 待本轮结束后追问）...'
-                  : '描述你的产品需求（输入 # 可引用项目文件）...'
+                  : isAcp
+                    ? '描述你的产品需求（输入 / 调用命令，# 引用项目文件）...'
+                    : '描述你的产品需求（输入 # 可引用项目文件）...'
             }
           />
         </div>
+
+        {slashSuggestOpen && (
+          <ul className="pc-file-suggest" role="listbox" aria-label="ACP 斜杠命令">
+            {slashSuggestions.map((cmd, index) => (
+              <li
+                key={cmd.name}
+                role="option"
+                aria-selected={index === slashSuggestActive}
+                className={index === slashSuggestActive ? 'is-active' : ''}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => onAcceptSlashCommand(cmd.name)}
+              >
+                <Bot size={12} className="pc-command-suggest-icon" />
+                <span className="pc-file-suggest-path">/{cmd.name}</span>
+                {cmd.description && <span className="pc-command-suggest-desc">{cmd.description}</span>}
+                {cmd.inputHint && <span className="pc-command-suggest-hint">{cmd.inputHint}</span>}
+                <span className="pc-file-suggest-kbd">Tab</span>
+              </li>
+            ))}
+          </ul>
+        )}
 
         {fileSuggestOpen && (
           <ul className="pc-file-suggest" role="listbox" aria-label="项目文件">
@@ -346,21 +374,73 @@ export function ChatComposer({
               <Paperclip size={12} />
             </button>
 
-            <Dropdown menu={{ items: modelMenuItems }} trigger={['click']} disabled={isStreaming}>
-              <button type="button" className="pc-composer-chip is-button" title="选择模型">
-                {selectedModel ? getProviderIcon(selectedModel.provider, 11) : <Sparkles size={11} />}
-                <span className="pc-chip-label">
-                  {selectedModel?.name || selectionId || '选择模型'}
-                </span>
+            <Dropdown menu={{ items: acp.engineMenuItems }} trigger={['click']} disabled={isStreaming}>
+              <button type="button" className="pc-composer-chip is-button" title="切换 Agent 引擎">
+                {getEngineIcon(acp.engine, 11)}
+                <span>{acp.engineLabel}</span>
               </button>
             </Dropdown>
 
-            <Dropdown menu={{ items: thinkingMenuItems }} trigger={['click']} disabled={isStreaming}>
-              <button type="button" className="pc-composer-chip is-button" title="思考档位">
-                <Sparkles size={11} />
-                <span>{thinkingLevel ? thinkingLevel.toUpperCase() : 'OFF'}</span>
-              </button>
-            </Dropdown>
+            {isAcp ? (
+              <>
+                {acp.modelMenuItems && (
+                  <Dropdown menu={{ items: acp.modelMenuItems }} trigger={['click']} disabled={isStreaming}>
+                    <button type="button" className="pc-composer-chip is-button" title="ACP 模型">
+                      <span className="pc-chip-label">{acp.modelLabel || '选择模型'}</span>
+                    </button>
+                  </Dropdown>
+                )}
+
+                {acp.modeMenuItems && (
+                  <Dropdown menu={{ items: acp.modeMenuItems }} trigger={['click']} disabled={isStreaming}>
+                    <button type="button" className="pc-composer-chip is-button" title="ACP 模式">
+                      <span className="pc-chip-label">{acp.modeLabel || '默认模式'}</span>
+                    </button>
+                  </Dropdown>
+                )}
+
+                {acp.thoughtMenuItems && (
+                  <Dropdown menu={{ items: acp.thoughtMenuItems }} trigger={['click']} disabled={isStreaming}>
+                    <button type="button" className="pc-composer-chip is-button" title="ACP 思考档位">
+                      <Sparkles size={11} />
+                      <span>{acp.thoughtLabel || '思考档位'}</span>
+                    </button>
+                  </Dropdown>
+                )}
+
+                <button
+                  type="button"
+                  className={`pc-composer-chip is-button${acp.permissionPolicy === 'allowAll' ? ' is-allow' : ' is-ask'}`}
+                  disabled={isStreaming}
+                  title={
+                    acp.permissionPolicy === 'allowAll'
+                      ? '当前：工作区操作自动批准（点击切换为手动审批）'
+                      : '当前：每次操作手动审批（点击切换为自动批准）'
+                  }
+                  onClick={acp.togglePermissionPolicy}
+                >
+                  <span>{acp.permissionPolicy === 'allowAll' ? '⚡ 自动批准' : '✋ 手动审批'}</span>
+                </button>
+              </>
+            ) : (
+              <>
+                <Dropdown menu={{ items: modelMenuItems }} trigger={['click']} disabled={isStreaming}>
+                  <button type="button" className="pc-composer-chip is-button" title="选择模型">
+                    {selectedModel ? getProviderIcon(selectedModel.provider, 11) : <Sparkles size={11} />}
+                    <span className="pc-chip-label">
+                      {selectedModel?.name || selectionId || '选择模型'}
+                    </span>
+                  </button>
+                </Dropdown>
+
+                <Dropdown menu={{ items: thinkingMenuItems }} trigger={['click']} disabled={isStreaming}>
+                  <button type="button" className="pc-composer-chip is-button" title="思考档位">
+                    <Sparkles size={11} />
+                    <span>{thinkingLevel ? thinkingLevel.toUpperCase() : 'OFF'}</span>
+                  </button>
+                </Dropdown>
+              </>
+            )}
           </div>
 
           {isStreaming ? (

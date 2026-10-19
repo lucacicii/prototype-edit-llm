@@ -2292,3 +2292,195 @@
     transform: none;
   }
 }
+
+/* ================= ACP 权限卡片与控制样式 ================= */
+.pc-acp-permission-card {
+  background: linear-gradient(180deg, rgba(99, 102, 241, 0.16), rgba(30, 41, 59, 0.95));
+  border: 1px solid rgba(129, 140, 248, 0.45);
+}
+
+.pc-acp-provider-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  background: rgba(147, 51, 234, 0.2);
+  border: 1px solid rgba(168, 85, 247, 0.4);
+  color: #d8b4fe;
+}
+
+.pc-acp-permission-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pc-acp-permission-title {
+  margin: 0;
+  font-size: 12px;
+  color: #e2e8f0;
+  line-height: 1.45;
+  word-break: break-all;
+}
+
+.pc-acp-permission-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.pc-acp-perm-btn {
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(30, 41, 59, 0.8);
+  color: #cbd5e1;
+  transition: all 0.15s ease;
+}
+
+.pc-acp-perm-btn:hover {
+  background: rgba(51, 65, 85, 0.9);
+  color: #f8fafc;
+}
+
+.pc-acp-perm-btn.is-primary {
+  background: #2563eb;
+  border-color: #3b82f6;
+  color: #ffffff;
+}
+
+.pc-acp-perm-btn.is-primary:hover {
+  background: #1d4ed8;
+}
+
+.pc-acp-perm-btn.is-always {
+  background: rgba(16, 185, 129, 0.15);
+  border-color: rgba(16, 185, 129, 0.4);
+  color: #6ee7b7;
+}
+
+.pc-acp-perm-btn.is-always:hover {
+  background: rgba(16, 185, 129, 0.25);
+  color: #a7f3d0;
+}
+
+.pc-acp-perm-btn.is-reject {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+}
+
+.pc-acp-perm-btn.is-reject:hover {
+  background: rgba(239, 68, 68, 0.25);
+}
+
+.pc-command-suggest-desc {
+  font-size: 10px;
+  color: #94a3b8;
+  margin-left: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pc-command-suggest-hint {
+  font-size: 9px;
+  color: #64748b;
+  margin-left: auto;
+  padding-left: 8px;
+}
+
+/* ---- ACP：header 连接状态（替代模型徽标的位置） ---- */
+.pc-header-acp {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pc-space-1-5);
+  max-width: 170px;
+  padding: 1px var(--pc-space-2);
+  border-radius: var(--pc-radius-xl);
+  border: 1px solid var(--pc-separator);
+  background: var(--pc-fill-secondary);
+  color: var(--pc-label-secondary);
+  font-size: 10px;
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+
+.pc-header-acp:hover {
+  color: var(--pc-label-primary);
+  border-color: var(--pc-separator-strong);
+}
+
+.pc-header-acp span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pc-header-acp-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--pc-label-tertiary);
+}
+
+.pc-header-acp.is-ready {
+  color: var(--pc-success);
+  border-color: color-mix(in srgb, var(--pc-success) 45%, transparent);
+}
+
+.pc-header-acp.is-ready .pc-header-acp-dot {
+  background: var(--pc-success);
+}
+
+.pc-header-acp.is-connecting {
+  color: var(--pc-warning);
+  border-color: color-mix(in srgb, var(--pc-warning) 45%, transparent);
+}
+
+.pc-header-acp.is-connecting .pc-header-acp-dot {
+  background: var(--pc-warning);
+  animation: pcPulse 1.8s infinite;
+}
+
+.pc-header-acp.is-error {
+  color: var(--pc-destructive);
+  border-color: color-mix(in srgb, var(--pc-destructive) 45%, transparent);
+}
+
+.pc-header-acp.is-error .pc-header-acp-dot {
+  background: var(--pc-destructive);
+}
+
+/* ---- ACP：引擎图标 / 菜单行首 / 命令补全 ---- */
+.pc-engine-icon {
+  color: var(--pc-warning);
+}
+
+.pc-menu-leading {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pc-command-suggest-icon {
+  flex: none;
+  color: #a78bfa;
+}
+
+.pc-composer-chip.is-allow {
+  color: var(--pc-success);
+  border-color: color-mix(in srgb, var(--pc-success) 35%, transparent);
+}
+
+.pc-composer-chip.is-ask {
+  color: var(--pc-warning);
+  border-color: color-mix(in srgb, var(--pc-warning) 35%, transparent);
+}
