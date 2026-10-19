@@ -226,13 +226,19 @@ export function ChatMessageItem({
                 hour: '2-digit',
                 minute: '2-digit'
               })}
-              {message.stats
-                ? ` · ${message.stats.totalTurns > 0 ? `${message.stats.totalTurns} 轮 · ` : ''}${(
-                    message.stats.promptTokens + message.stats.completionTokens
-                  ).toLocaleString()} tok${
-                    message.stats.durationMs ? ` · ${(message.stats.durationMs / 1000).toFixed(1)}s` : ''
-                  }`
-                : ''}
+              {(() => {
+                const stats = message.stats
+                if (!stats) return ''
+                const turns = stats.totalTurns > 0 ? `${stats.totalTurns} 轮 · ` : ''
+                // token 用量拿不到时（ACP 协议不回）就只报时长，不报一个 0 tok。
+                const tokens =
+                  stats.promptTokens + stats.completionTokens > 0
+                    ? `${(stats.promptTokens + stats.completionTokens).toLocaleString()} tok`
+                    : ''
+                const duration = stats.durationMs ? `${(stats.durationMs / 1000).toFixed(1)}s` : ''
+                const detail = [turns.replace(/ · $/, ''), tokens, duration].filter(Boolean).join(' · ')
+                return detail ? ` · ${detail}` : ''
+              })()}
             </span>
           </div>
         )}
