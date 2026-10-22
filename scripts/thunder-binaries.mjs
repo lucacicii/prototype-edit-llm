@@ -42,14 +42,14 @@ export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 /** The sidecars, and how to point at each one directly. */
 export const BINARIES = [
   {
-    name: 'thunder-runtime',
-    envVar: 'THUNDER_RUNTIME_BIN',
-    what: 'agent 内核（模型调用、工具循环都在这儿）'
+    name: 'thunder-std',
+    envVar: 'THUNDER_STD_BIN',
+    what: '标准工具包 MCP 进程（提供 read_file, write_file, edit_block, bash 等工具）'
   },
   {
     name: 'thunder-daemon',
     envVar: 'THUNDER_DAEMON_BIN',
-    what: 'daemon 侧车（自愈链用）'
+    what: 'daemon 侧车（主对话与自愈链用）'
   }
 ]
 

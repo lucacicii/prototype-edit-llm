@@ -93,7 +93,7 @@ async function copyFromCheckout(dir) {
     const from = join(releaseDir, bin.name + suffix)
     if (!existsSync(from)) {
       throw new Error(
-        `缺 ${from}。先在 checkout 里构建：cd ${dir} && cargo build --release -p thunder-agent-runtime -p thunder-agent-daemon`
+        `缺 ${from}。先在 checkout 里构建：cd ${dir} && cargo build --release -p thunder-daemon -p thunder-std`
       )
     }
     await fs.copyFile(from, join(target, bin.name + suffix))
