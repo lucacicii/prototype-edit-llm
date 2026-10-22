@@ -118,14 +118,14 @@ npm run dev
 在 `/Users/lucas/wz/GitHub/thunder` 编译后：
 ```bash
 cd /Users/lucas/wz/GitHub/thunder
-cargo build --release -p thunder-agent-daemon -p thunder-agent-runtime
+cargo build --release -p thunder-daemon -p thunder-std
 ```
 
 然后在启动 `prototype-edit-llm` 时指定环境变量指向 `target/release`：
 ```bash
 cd /Users/lucas/wz/GitHub/prototype-edit-llm
 THUNDER_DAEMON_BIN=/Users/lucas/wz/GitHub/thunder/target/release/thunder-daemon \
-THUNDER_RUNTIME_BIN=/Users/lucas/wz/GitHub/thunder/target/release/thunder-runtime \
+THUNDER_STD_BIN=/Users/lucas/wz/GitHub/thunder/target/release/thunder-std \
 npm run dev
 ```
 
@@ -136,7 +136,7 @@ npm run dev
 ```bash
 # 1. 在 thunder 仓库构建 release 产物
 cd /Users/lucas/wz/GitHub/thunder
-cargo build --release -p thunder-agent-daemon -p thunder-agent-runtime
+cargo build --release -p thunder-daemon -p thunder-std
 
 # 2. 回到 prototype-edit-llm，一键拷贝二进制到 build/thunder-bin 并更新 sidecars.lock.json
 cd /Users/lucas/wz/GitHub/prototype-edit-llm

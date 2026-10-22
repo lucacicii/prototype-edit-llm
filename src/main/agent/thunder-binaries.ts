@@ -22,10 +22,10 @@ import { existsSync } from 'fs'
 import { join } from 'path'
 import { isPackaged, repoRootDir, resourcesDir } from '../app-paths'
 
-export type SidecarName = 'thunder-runtime' | 'thunder-daemon'
+export type SidecarName = 'thunder-std' | 'thunder-daemon'
 
 const ENV_VARS: Record<SidecarName, string> = {
-  'thunder-runtime': 'THUNDER_RUNTIME_BIN',
+  'thunder-std': 'THUNDER_STD_BIN',
   'thunder-daemon': 'THUNDER_DAEMON_BIN'
 }
 
