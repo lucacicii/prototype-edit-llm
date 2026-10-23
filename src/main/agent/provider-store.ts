@@ -22,7 +22,7 @@
 
 import { promises as fs, existsSync, readFileSync } from 'fs'
 import { providerStorePath } from '../app-paths'
-import { RuntimeModel } from './runtime-client'
+import type { ModelDescriptor } from './model-descriptor'
 
 const FILE_VERSION = 1
 
@@ -391,7 +391,7 @@ export function availabilityOf(
  * Descriptor handed to the runtime. Numeric fields are filled from the
  * defaults so the runtime never has to guess a context window for pruning.
  */
-export function toRuntimeModel(model: LibraryModel, apiKey?: string): RuntimeModel {
+export function toModelDescriptor(model: LibraryModel, apiKey?: string): ModelDescriptor {
   return {
     provider: model.provider,
     id: model.id,

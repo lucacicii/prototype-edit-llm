@@ -15,10 +15,10 @@
      - **静态直出服务** (`http://127.0.0.1:4322/projects/<id>/...`)：针对 `native-html` 项目直接映射项目目录，免编译毫秒级预览。
      - **Vite 编译宿主** (`http://127.0.0.1:4321/prototypes/<id>`)：自动铺设在 `~/.prototype-studio/runtime-host` 下，为 Vue 3 (`index.vue`) 与 React (`index.tsx`) 提供 HMR 编译预览，绝不污染本仓库源码树。
 
-2. **Agent 引擎侧车 (`thunder-daemon` / `thunder-runtime`)**：
+2. **Agent 引擎侧车 (`thunder-daemon` + `thunder-std`)**：
    - 以独立 Rust 二进制侧车（Sidecar）方式运行，通过 **stdio NDJSON**（行分隔 JSON）与 Electron 主进程通信。
    - 主对话与工程读写由 **`thunder-daemon`** 驱动：每个原型方案作为独立的 `workspace_dir` 传入，直接复用 `thunder` 原生的：
-     - **完整工具集 (`thunder-agent-pack-code`)**：`read_file`、`write_file`、`ls`、`find`、`grep`、`bash`（带路径沙箱 Path Jail 与原子文件写入）。
+     - **完整工具集 (`thunder-std`)**：`read_file`、`write_file`、`edit_block`、`ls`、`find`、`grep`、`bash`（独立 MCP 进程，内存级 ripgrep/glob，写入原子且有同路径写锁）。
      - **交互式澄清工具 (`ask_user_question`)**：面向产品经理（PM）发起结构化的单选/多选问题卡片。
      - **上下文指令自动发现**：自动读取项目目录下的 `AGENTS.md`（由 `pm-persona.ts` 按产品场景生成）。
 
@@ -74,13 +74,13 @@
 
 ### 1. 二进制侧车的查找优先级
 
-无论在开发态（`src/main/agent/thunder-binaries.ts`）还是打包脚本（`scripts/thunder-binaries.mjs`）中，查找 `thunder-daemon` 和 `thunder-runtime` 的顺序严格一致：
+无论在开发态（`src/main/agent/thunder-binaries.ts`）还是打包脚本（`scripts/thunder-binaries.mjs`）中，查找 `thunder-daemon` 和 `thunder-std` 的顺序严格一致。这两个必须成对存在：daemon 只在**自己二进制旁边**找 `thunder-std`，找不到就静默地一个工具都没有。
 
 1. **第 1 优先级：环境变量显式指定（联调最快）**
    - `$THUNDER_DAEMON_BIN`
-   - `$THUNDER_RUNTIME_BIN`
+   - `$THUNDER_STD_BIN`
 2. **第 2 优先级：打包后的应用内资源目录**
-   - `Resources/bin/thunder-daemon` & `Resources/bin/thunder-runtime`（仅在 `.app` 打包态生效）
+   - `Resources/bin/thunder-daemon` & `Resources/bin/thunder-std`（仅在 `.app` 打包态生效）
 3. **第 3 优先级：仓库本地经校验的缓存目录**
    - `<repo>/build/thunder-bin/<platform>-<arch>/`（与 `sidecars.lock.json` 中的 SHA256 比对）
 

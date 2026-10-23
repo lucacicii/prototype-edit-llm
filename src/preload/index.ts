@@ -80,7 +80,6 @@ const agentApi = {
   ping: () => ipcRenderer.invoke('agent:ping'),
   getConfig: () => ipcRenderer.invoke('agent:get-config'),
   setConfig: (config: any) => ipcRenderer.invoke('agent:set-config', config),
-  tools: () => ipcRenderer.invoke('agent:tools'),
   // 模型库的增删。密钥单独走 saveModel 的 apiKey 字段，读回来的视图里永远没有它。
   saveModel: (model: any) => ipcRenderer.invoke('agent:save-model', model),
   deleteModel: (params: { provider: string; id: string }) =>

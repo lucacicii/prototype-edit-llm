@@ -11,13 +11,13 @@ import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { promises as fs } from 'fs'
 import * as path from 'path'
 import { BrowserViewManager } from '../browser-view-manager'
-import { activePrototypeFile, materialsFilesDir, prototypeStackMarker, providerStorePath } from '../app-paths'
+import { materialsFilesDir, providerStorePath } from '../app-paths'
 import { listMaterials } from '../material-store'
 import { agentReadiness } from '../runtime-env'
-import { resolveRuntimeBinary, RuntimeClient } from '../agent/runtime-client'
-import { PointedTarget, PrototypeAgent } from '../agent/prototype-agent'
-import { detectTechStack, stackInfo, TechStack } from '../agent/tech-stack'
+import type { PointedTarget } from '../../shared/pointed-target'
+import { stackInfo, TechStack } from '../agent/tech-stack'
 import { ThunderClient, getSharedThunderClient } from './thunder-client'
+import { resolveDaemonBinary } from '../agent/thunder-binaries'
 import { syncThunderModelConfig } from '../agent/thunder-model-config'
 import { ProjectRunner } from '../project-runner'
 import {
@@ -561,17 +561,7 @@ async function probeModelThinkingLevels(params: {
   }
 }
 
-export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient {
-  const client = new RuntimeClient({ workspaceDir: options.workspaceDir })
-  // Without a listener an EventEmitter 'error' would take the whole app down;
-  // a broken/missing runtime should only fail the run, never the window.
-  client.on('error', (err: Error) => {
-    console.error('[agent] thunder-runtime error:', err?.message ?? err)
-  })
-  client.on('exit', (code: number | null) => {
-    console.warn(`[agent] thunder-runtime exited (code ${code})`)
-  })
-
+export function setupAgentIpc(options: { workspaceDir: string }): void {
   // Per-run inputs the tools read. A run is single-flight in this app, so one
   // slot is enough, and it is cleared when the run settles.
   // activeStack 是当前激活原型的栈（仲裁结果），决定 applyEdit 落盘的
@@ -616,99 +606,23 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
     console.warn('[agent] thunder-daemon deferred start:', err)
   }
 
-  /**
-   * 落栈标记 + 必要时整页刷新预览。
-   *
-   * dev server 不重启、Vite 配置只在启动时读，所以栈切换
-   * （尤其 Vue↔React，插件装配不同）必须让浏览器重新拉模块图 ——
-   * reload 是唯一可靠路径。标记同栈时是幂等写，不触发刷新。
-   *
-   * 注意：标记对 dev server 的 transform 缓存**不生效**（Vite
-   * 的模块图按扩展名缓存，active.vue 与 active.tsx 是两个模块，
-   * 路由在浏览器侧重新求值即可，无需清缓存）。
-   */
-  const applyStack = async (stack: TechStack, forceReload = false) => {
-    const marker = prototypeStackMarker()
-    const current = await fs.readFile(marker, 'utf-8').catch(() => null)
-    if (current !== stack) {
-      await fs.mkdir(path.dirname(marker), { recursive: true })
-      await fs.writeFile(marker, stack, 'utf-8')
-    }
-    if (forceReload || (current !== null && current !== stack)) {
-      BrowserViewManager.getInstance().reload()
-    }
-  }
 
-  const agent = new PrototypeAgent({
-    client,
-    workspaceDir: options.workspaceDir,
-    getCode: () => activeCode,
-    applyEdit: async (code) => {
-      activeCode = code
-      // LLM 首行声明优先、内容特征次之（见 tech-stack.ts）。
-      // 认不出时保持原栈 —— 存量原型多是 Vue，不能因为一次
-      // 仲裁失败就把落盘扩展名换掉。
-      const verdict = detectTechStack(code)
-      const prevStack = activeStack
-      if (verdict.stack) {
-        activeStack = verdict.stack
-      }
-      // 栈换了要同步标记文件并整页刷新（Vite 插件装配只在启动时读）；
-      // applyStack 内部对同栈写入是幂等的，不触发刷新。
-      await applyStack(activeStack)
-      if (active) {
-        // The preview host serves one active prototype file; switching
-        // prototypes overwrites it, so the route stays a single component.
-        const file = activePrototypeFile(activeStack)
-        await fs.mkdir(path.dirname(file), { recursive: true })
-        await fs.writeFile(file, code, 'utf-8')
-      }
-      for (const win of BrowserWindow.getAllWindows()) {
-        win.webContents.send('agent:code-updated', {
-          code,
-          techStack: activeStack,
-          experimental: stackInfo(activeStack).experimental,
-          stackChanged: activeStack !== prevStack
-        })
-      }
-    },
-    getDiagnostics: () => BrowserViewManager.getInstance().getDiagnostics(),
-    // 圈改没有「点中的元素」，但框里认出来的那个同样回答了
-    // 「用户在说哪一块」，所以并到同一条通道上 —— 否则
-    // get_inspect_target 会在圈改时回「没有圈选任何元素」，跟指令里
-    // 描述的那几块区域自相矛盾。
-    // 圈选排在最前：那是用户更明确的指认（同时也是老行为）。
-    getPointedTargets: () => {
-      const list: PointedTarget[] = []
-      if (active?.inspectTarget) list.push(active.inspectTarget)
-      for (const m of active?.markupTargets ?? []) {
-        if (m.target) list.push({ ...m.target, note: m.note })
-      }
-      return list.filter((t) => t.tagName)
-    },
-    getTechStack: () => activeStack,
-    onFrame: (frame) => {
-      for (const win of BrowserWindow.getAllWindows()) {
-        win.webContents.send('agent:stream-event', frame)
-      }
-    }
-  })
 
   ipcMain.handle('agent:ping', async () => {
     try {
-      if (!client.isRunning) client.start()
+      daemonClient.start()
       const readiness = await agentReadiness()
       return {
         ok: true,
-        version: await client.ping(5_000),
-        runtimePath: resolveRuntimeBinary(),
+        version: await daemonClient.ping(),
+        daemonPath: resolveDaemonBinary(),
         readiness
       }
     } catch (err: any) {
       return {
         ok: false,
         error: err?.message ?? String(err),
-        runtimePath: resolveRuntimeBinary(),
+        daemonPath: resolveDaemonBinary(),
         readiness: await agentReadiness()
       }
     }
@@ -731,7 +645,7 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
       path: resolved.workspacePath,
       // When the env var wins, saving is still useful but won't take effect.
       envLocked: Boolean(process.env.PROTOTYPE_AGENT_MODEL?.trim()),
-      runtimePath: resolveRuntimeBinary(),
+      daemonPath: resolveDaemonBinary(),
       /** 两项就绪表（内核 / 数据根）：打包版缺哪一环，一眼能看出来。 */
       readiness: await agentReadiness(),
       models: redactLibrary(resolved.library),
@@ -754,12 +668,7 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
         ? { provider: suggestion.provider, id: suggestion.id, name: suggestion.name }
         : null,
       modelLabel: resolved.model?.name ?? null,
-      modelOrigin: resolved.origin ?? null,
-      tools: agent.toolSpecs.map((t) => ({
-        name: t.name,
-        description: t.description,
-        effect: t.effect ?? 'write'
-      }))
+      modelOrigin: resolved.origin ?? null
     }
   })
 
@@ -930,43 +839,6 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
     }
   )
 
-  ipcMain.handle('agent:tools', () => [
-    {
-      name: 'ask_user_question',
-      description: '向产品经理发起结构化的单选/多选问题卡片，澄清产品形态、核心模块、风格与技术栈',
-      effect: 'read'
-    },
-    {
-      name: 'read_file',
-      description: '读取原型项目工作区内的源码文件',
-      effect: 'read'
-    },
-    {
-      name: 'write_file',
-      description: '创建或修改原型项目工作区内的源码文件',
-      effect: 'write'
-    },
-    {
-      name: 'ls',
-      description: '列出原型项目目录结构',
-      effect: 'read'
-    },
-    {
-      name: 'find',
-      description: '在原型项目中按文件名搜索',
-      effect: 'read'
-    },
-    {
-      name: 'grep',
-      description: '在原型项目中检索代码或文案内容',
-      effect: 'read'
-    },
-    {
-      name: 'bash',
-      description: '在原型项目工作区中执行构建、脚本或包管理命令',
-      effect: 'exec'
-    }
-  ])
 
   ipcMain.handle(
     'agent:answer-question',
@@ -1277,13 +1149,14 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
             lastErrorDetail = ev.message.trim()
           }
 
-          // When thunder-daemon modifies or creates a file via `write_file` or `bash`,
-          // sync and refresh the live preview immediately!
+          // When the agent modifies or creates a file, sync and refresh the live
+          // preview immediately. This reads the tool result rather than the old
+          // `custom/file_change` event: thunder's rewritten kernel no longer emits
+          // that one, and the tool result is the ground truth anyway.
           if (
-            (ev.type === 'custom' && ev.kind === 'file_change') ||
-            (ev.type === 'tool_exec_result' &&
-              (ev.name === 'write_file' || ev.name === 'bash') &&
-              !ev.result?.is_error)
+            ev.type === 'tool_exec_result' &&
+            (ev.name === 'write_file' || ev.name === 'bash') &&
+            !ev.result?.is_error
           ) {
             void broadcastSyncProject()
           }
@@ -1324,7 +1197,6 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
         techStack: latestItem?.techStack ?? activeStack
       }
     } catch (err: any) {
-      // Fallback to `thunder-runtime` if `thunder-daemon` is unavailable
       const errMsg = err?.message ?? String(err)
       if (errMsg.includes('Cancelled') || errMsg.includes('cancelled')) {
         return {
@@ -1350,8 +1222,9 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
     }
     try {
       await daemonClient.cancelTask(runId)
-    } catch {
-      agent.cancel(runId)
+    } catch (err) {
+      // Nothing else can own this run: the daemon is the only kernel left.
+      console.warn('[agent] cancel failed:', err instanceof Error ? err.message : err)
     }
     return true
   })
@@ -1898,8 +1771,6 @@ export function setupAgentIpc(options: { workspaceDir: string }): RuntimeClient 
       }
     }
   )
-
-  return client
 }
 
 /** 图片/字体/压缩包之类不该塞进提示词的文件。 */

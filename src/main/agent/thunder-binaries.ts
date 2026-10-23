@@ -4,7 +4,7 @@
  * Same order as `scripts/thunder-binaries.mjs` (which packages them) — it has
  * to be, or the app would run one build and ship another:
  *
- *   1. `$THUNDER_RUNTIME_BIN` / `$THUNDER_DAEMON_BIN`
+ *   1. `$THUNDER_STD_BIN` / `$THUNDER_DAEMON_BIN`
  *   2. `Resources/bin/` in a packaged build
  *   3. the pinned cache, `build/thunder-bin/<platform>-<arch>/`
  *
@@ -48,11 +48,24 @@ export function sidecarCacheDir(): string {
 }
 
 /**
+ * The binary every run needs. Same resolution as `resolveThunderBinary`, but it
+ * always answers: when nothing is found the cache path is returned so a caller
+ * has something concrete to show or probe.
+ */
+export function resolveDaemonBinary(): string {
+  return (
+    resolveThunderBinary('thunder-daemon') ??
+    join(sidecarCacheDir(), 'thunder-daemon' + exeSuffix())
+  )
+}
+
+/**
  * Resolve a sidecar, or null when there is nothing to run.
  *
- * Callers decide how loudly to fail: a missing `thunder-runtime` breaks every
- * run (the readiness table says so up front), a missing `thunder-daemon` only
- * breaks the self-heal path.
+ * Callers decide how loudly to fail: a missing `thunder-daemon` breaks every run
+ * (the readiness table says so up front), and a missing `thunder-std` leaves the
+ * daemon with no tools at all — it discovers that binary next to itself, so both
+ * have to travel together.
  */
 export function resolveThunderBinary(name: SidecarName): string | null {
   const fileName = name + exeSuffix()

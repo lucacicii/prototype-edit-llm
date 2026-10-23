@@ -503,7 +503,11 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
             })
             break
           }
-          // thunder 0.4+ 的权威遥测：token 数、速率、上下文占用全部以它为准。
+          // 权威遥测：token 数、速率、上下文占用全部以它为准。
+          //
+          // 这个事件现在**只有 ACP 引擎**会发（`acp-runtime-manager.ts` 自己构造）。
+          // thunder 内核重写时删掉了产生它的插件，所以别再照着这条分支去想象
+          // thunder 的行为 —— thunder 侧的实时数字全部走本地累加。
           if (ev.kind !== 'metrics_update' || !ev.payload || typeof ev.payload !== 'object') break
           const snap = ev.payload as AgentMetricsSnapshot
           hasSnapshotRef.current = true

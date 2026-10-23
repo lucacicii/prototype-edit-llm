@@ -7,9 +7,10 @@
  * （例如在 Apple Silicon 上打 x64 包：`--arch darwin-x64`）。目录名取 key 的
  * 后半段，与 electron-builder 的 `${arch}` 宏一致（arm64 / x64）。
  *
- * 两样东西，一行都不在本仓库里构建：
- *   thunder-runtime   agent 内核（Rust，stdio NDJSON）      → Resources/bin/
- *   thunder-daemon    自愈链用的 daemon                      → Resources/bin/
+ * 两样东西，一行都不在本仓库里构建，而且必须成对出现（daemon 只在自己二进制
+ * 旁边找 thunder-std，找不到就一个工具都没有）：
+ *   thunder-daemon    agent 内核（Rust，stdio NDJSON）      → Resources/bin/
+ *   thunder-std       核心工具包（MCP，7 个文件/检索工具） → Resources/bin/
  *
  * 以前还有第三样：pi-ai bridge 的 bridge.mjs —— Rust 侧用系统装的 Node 起一个
  * 子进程跑模型调用。thunder 改成进程内直连 HTTP 之后（thunder-agent-providers

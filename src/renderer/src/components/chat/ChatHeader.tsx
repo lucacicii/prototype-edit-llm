@@ -26,7 +26,8 @@ const LABELS: Partial<Record<ThunderAgentPhase, string>> = {
 /**
  * 对话面板顶部：折叠按钮、标题、当前模型、运行阶段。
  *
- * 阶段来自 thunder 的 execution-status 插件（`agent_status`），而不是靠观察
+ * 阶段来自 `agent_status` 事件 —— 今天只有 ACP 引擎会发它（thunder 内核重写时
+ * 删掉了产生它的插件），而不是靠观察
  * 消息流 —— 停在问题上的 run 和正在思考的 run 从外面看完全一样，只有
  * thunder 知道是哪一个。空闲与已完成不显示徽标：那两种状态消息流已经说清楚了。
  *

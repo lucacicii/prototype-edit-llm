@@ -19,7 +19,7 @@ import { promises as fs, existsSync, readFileSync } from 'fs'
 import { homedir } from 'os'
 import * as path from 'path'
 import { isPackaged } from '../app-paths'
-import { RuntimeModel } from './runtime-client'
+import type { ModelDescriptor } from './model-descriptor'
 import {
   availabilityOf,
   findModel,
@@ -31,7 +31,7 @@ import {
   removeProvider,
   saveLibrary,
   selectionId,
-  toRuntimeModel,
+  toModelDescriptor,
   updateProviderEndpoint,
   upsertModel,
   validateModel
@@ -202,7 +202,7 @@ export interface ResolvedAgentModel {
   workspacePath: string
   library: ModelLibrary
   /** Absent when nothing is configured or the reference no longer resolves. */
-  model?: RuntimeModel
+  model?: ModelDescriptor
   /** Set whenever `model` is present. */
   origin?: ModelOrigin
   /** Set when `model` is absent — shown to the user as-is. */
@@ -292,7 +292,7 @@ export async function resolveAgentModel(workspaceDir: string): Promise<ResolvedA
   const fromEnv = trimmed(process.env.PROTOTYPE_AGENT_MODEL)
   if (fromEnv) {
     try {
-      const model = JSON.parse(fromEnv) as RuntimeModel
+      const model = JSON.parse(fromEnv) as ModelDescriptor
       if (model?.provider && model?.id && model?.api && model?.baseUrl) {
         return {
           config,
@@ -360,7 +360,7 @@ export async function resolveAgentModel(workspaceDir: string): Promise<ResolvedA
     source: loaded.source,
     workspacePath: loaded.workspacePath,
     library,
-    model: toRuntimeModel(entry, apiKey),
+    model: toModelDescriptor(entry, apiKey),
     origin: 'library',
     migrated: migrated.length ? migrated : undefined
   }

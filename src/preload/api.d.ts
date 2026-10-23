@@ -1,7 +1,7 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
 // 只借类型：圈选/圈改指向的元素在主进程那侧已经有权威定义，别在这儿再抄一份
 // （上一版就是抄了个 {tagName,text} 的窄版，把字段丢失藏到了编译期）。
-import type { PointedTarget } from '../main/agent/prototype-agent'
+import type { PointedTarget } from '../shared/pointed-target'
 // 版本元数据的权威定义在主进程那侧（同 PointedTarget 的口径，不在这儿抄一份）
 import type { VersionKind, VersionMeta } from '../main/ipc/history-bridge'
 import type { MaterialCategory, MaterialItem } from '../main/material-store'
@@ -278,7 +278,7 @@ export interface IAgentAPI {
     ok: boolean
     version?: string
     error?: string
-    runtimePath?: string
+    daemonPath?: string
   }>
   getConfig: () => Promise<{
     configured: boolean
@@ -299,7 +299,7 @@ export interface IAgentAPI {
     source?: 'env' | 'workspace' | 'home' | 'none'
     path?: string
     envLocked?: boolean
-    runtimePath?: string
+    daemonPath?: string
     /** 就绪表：runtime / thunder 数据根，打包版缺哪环一眼可见。 */
     readiness?: Array<{ label: string; ok: boolean; detail: string }>
     /** 本机模型库（无密钥，只有 hasApiKey）。 */
@@ -347,10 +347,8 @@ export interface IAgentAPI {
     defaultModel?: { provider: string; id: string; name?: string } | null
     modelLabel?: string | null
     modelOrigin?: 'library' | 'env' | null
-    tools?: Array<{ name: string; description: string; effect: string }>
   }>
   setConfig: (config: any) => Promise<{ ok: boolean; error?: string; path?: string }>
-  tools: () => Promise<Array<{ name: string; description: string; effect?: string }>>
   /**
    * 新增/更新模型库中的一项。
    *
