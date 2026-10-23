@@ -22,7 +22,7 @@
   ],
   "thunder": {
     "version": "0.1.0",
-    "commit": "6335912",
+    "commit": "afec2d3",
     "source": null,
     "artifacts": {
       "darwin-arm64": {
@@ -30,7 +30,7 @@
           "sha256": "c9f5e4569cacc81fd63f642a0fbd6715984b4feb6acc09eb81c7b9cd1b8b4cf2"
         },
         "thunder-daemon": {
-          "sha256": "d6b99c246eda8a264c3cd4b4ed089d9d692997ae55baedb3b81cc5713030ed50"
+          "sha256": "c291017aec63ccd515726635c1bf7ac6239389a40eca682feda9177242db0759"
         }
       },
       "darwin-x64": {
@@ -38,7 +38,7 @@
           "sha256": "9daa018cbf069420f7a67b3fa92057408f5aaa8c5dd36f52ef9dd0f796edd6ef"
         },
         "thunder-daemon": {
-          "sha256": "34776b0b31bc75092adb92266ee4b63d6637dfbd854570485275453f97161539"
+          "sha256": "a01d1948f3bf44ecb032b2edeba8a8d9fbe55b66d2ae4469f15c2586caf0986c"
         }
       }
     },

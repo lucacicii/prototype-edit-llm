@@ -262,6 +262,10 @@ async function bless(origin) {
   const next = {
     ...(lock ?? {}),
     thunder: {
+      // Keep the sibling pins: `protocol` (the vendored wire contract, see
+      // scripts/verify-thunder-protocol.mjs) lives under the same key, and a bless is
+      // about the binaries. Rebuilding this object from scratch silently deleted it.
+      ...(lock?.thunder ?? {}),
       version: version ?? lock?.thunder?.version ?? null,
       commit: commit ?? null,
       source,
