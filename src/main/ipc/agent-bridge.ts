@@ -585,11 +585,6 @@ export function setupAgentIpc(options: { workspaceDir: string }): void {
       win.webContents.send('agent:user-question', msg)
     }
   })
-  daemonClient.on('ui_request', (msg: any) => {
-    for (const win of BrowserWindow.getAllWindows()) {
-      win.webContents.send('agent:ui-request', msg)
-    }
-  })
   daemonClient.on('mode_changed', (msg: any) => {
     for (const win of BrowserWindow.getAllWindows()) {
       win.webContents.send('agent:mode-changed', msg)
@@ -605,11 +600,6 @@ export function setupAgentIpc(options: { workspaceDir: string }): void {
   daemonClient.on('task_queue_update', (msg: any) => {
     for (const win of BrowserWindow.getAllWindows()) {
       win.webContents.send('agent:queue-update', msg)
-    }
-  })
-  daemonClient.on('ui_notice', (msg: any) => {
-    for (const win of BrowserWindow.getAllWindows()) {
-      win.webContents.send('agent:ui-notice', msg)
     }
   })
   try {

@@ -574,7 +574,6 @@ export interface IAgentAPI {
     steering: string[]
     follow_up: string[]
   }) => void) => () => void
-  onUiNotice?: (callback: (data: { source: string; message: string; level: string }) => void) => () => void
   onAcpState?: (callback: (state: any) => void) => () => void
   onAcpPermissionRequest?: (callback: (payload: any) => void) => () => void
   onAcpPermissionResolved?: (callback: (payload: any) => void) => () => void
