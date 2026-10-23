@@ -10,7 +10,7 @@
  *
  * The order is now purely artefact-based:
  *
- *   1. `$THUNDER_RUNTIME_BIN` / `$THUNDER_DAEMON_BIN` — you named it, so it is
+ *   1. `$THUNDER_STD_BIN` / `$THUNDER_DAEMON_BIN` — you named it, so it is
  *      used as-is. This is the escape hatch for working on both repos at once,
  *      and the only remaining way to point at a checkout (explicitly).
  *   2. The pinned cache, `build/thunder-bin/<platform>-<arch>/`, **verified

@@ -31,7 +31,7 @@ export interface ProviderPreset {
 }
 
 /**
- * baseUrl 由传输层原样透传（runtime-client 不加工它），所以这里是各家的常见写法，
+ * baseUrl 由传输层原样透传（thunder 不加工它），所以这里是各家的常见写法，
  * 属于**可改的初值**而非权威：谁家改了约定、或者你用的是兼容网关，直接在表单里改。
  * OpenAI 那一条给的是 chat/completions 方言 —— 兼容网关几乎都实现它；要走 OpenAI
  * 自己的 responses 方言，右边那个下拉改一下即可。

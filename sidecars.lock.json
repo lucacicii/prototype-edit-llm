@@ -1,8 +1,11 @@
 {
   "$comment": [
-    "Pin for the two thunder sidecars this app ships (thunder-runtime, thunder-daemon).",
+    "Pin for the two thunder sidecars this app ships (thunder-daemon, thunder-std).",
     "They are built in the thunder repository; this file is how this repository knows",
     "which build it has, without reading a thunder checkout.",
+    "",
+    "The two must travel together: the daemon discovers `thunder-std` next to its own",
+    "binary and silently runs with no tools at all when it cannot.",
     "",
     "artifacts is keyed by <platform>-<arch> and then by file name, each entry",
     "carrying the sha256 of the exact file. scripts/prepare-sidecars.mjs refuses a",
@@ -10,27 +13,32 @@
     "refuses a download that does. Run that script with --bless to (re)fill this file.",
     "",
     "An empty artifacts map means no cache has been blessed yet: the build then",
-    "requires $THUNDER_RUNTIME_BIN / $THUNDER_DAEMON_BIN to be set explicitly."
+    "requires $THUNDER_DAEMON_BIN / $THUNDER_STD_BIN to be set explicitly.",
+    "",
+    "`source` is null on purpose: no thunder release carries this commit yet (main is",
+    "67+ commits past v0.6.0 and has no release workflow). `--from-release` therefore",
+    "demands an explicit --source, which is the honest thing for it to do rather than",
+    "silently downloading a v0.6.0 build that has a different crate layout."
   ],
   "thunder": {
     "version": "0.1.0",
-    "commit": "15edf6f",
-    "source": "https://github.com/lucacicii/thunder/releases/download/v0.6.0",
+    "commit": "6335912",
+    "source": null,
     "artifacts": {
       "darwin-arm64": {
         "thunder-std": {
-          "sha256": "188d0ec0a19944cb62fae4f295c1ecff511713963676b41021adbb4a6f5032f7"
+          "sha256": "c9f5e4569cacc81fd63f642a0fbd6715984b4feb6acc09eb81c7b9cd1b8b4cf2"
         },
         "thunder-daemon": {
-          "sha256": "0b61de0c64f2f17c0a974a5866dfdfc7b0a93357f10a64746e85a9b0daf81a90"
+          "sha256": "d6b99c246eda8a264c3cd4b4ed089d9d692997ae55baedb3b81cc5713030ed50"
         }
       },
       "darwin-x64": {
-        "thunder-runtime": {
-          "sha256": "e8a75fac792d6dbb8344472c751f3da2ae3948a311471a0183d20df00ab2b804"
+        "thunder-std": {
+          "sha256": "9daa018cbf069420f7a67b3fa92057408f5aaa8c5dd36f52ef9dd0f796edd6ef"
         },
         "thunder-daemon": {
-          "sha256": "959f12ec584c12880ee3a9bdb3fd4f2ec0635346bb8852619f9905cf86000df7"
+          "sha256": "34776b0b31bc75092adb92266ee4b63d6637dfbd854570485275453f97161539"
         }
       }
     }

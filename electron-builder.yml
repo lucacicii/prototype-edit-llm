@@ -2,7 +2,7 @@
 #
 # 两份外部产物靠下面的 files / extraResources 一起带上（构建前先跑
 # scripts/prepare-sidecars.mjs 把第一份按架构收拢到 build/sidecars-<arch>/）：
-#   1. thunder-runtime（Rust，agent 内核）      → Resources/bin/
+#   1. thunder-daemon + thunder-std（Rust，内核与核心工具包） → Resources/bin/
 #   2. runtime-host（预览用的真 Vite dev server） → Resources/runtime-host/
 # 既不带 node，也不带 pi-ai bridge：模型调用已经回到 thunder 进程内（thunder 的
 # RpiAiClient 直接发 HTTP），那条链上没有任何子进程要起。
@@ -31,7 +31,7 @@ files:
   - '!**/node_modules/**'
 
 extraResources:
-  # 侧车按目标架构取：arm64 包拿不到 x64 的 thunder-runtime，反之亦然。
+  # 侧车按目标架构取：arm64 包拿不到 x64 的 thunder-daemon，反之亦然。
   # `${arch}` 是 electron-builder 的宏，打包每个架构时展开成 arm64 / x64。
   - from: build/sidecars-${arch}/bin
     to: bin

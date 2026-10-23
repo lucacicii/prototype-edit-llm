@@ -16,12 +16,11 @@
  * Dev is untouched — everything here is a packaged-build concern.
  */
 
-import { promises as fs, existsSync, readFileSync } from 'fs'
+import { promises as fs, readFileSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import { isPackaged, resourcesDir, thunderDataDir } from './app-paths'
-import { resolveRuntimeBinary } from './agent/runtime-client'
-import { describeSidecarSearch } from './agent/thunder-binaries'
+import { describeSidecarSearch, resolveThunderBinary } from './agent/thunder-binaries'
 
 export interface RuntimeProvisionReport {
   packaged: boolean
@@ -78,16 +77,24 @@ function readSidecarRevision(): string | null {
  */
 export async function agentReadiness(): Promise<ReadinessItem[]> {
   const items: ReadinessItem[] = []
-
-  const runtime = resolveRuntimeBinary()
   const revision = readSidecarRevision()
-  const present = existsSync(runtime)
+
+  // Both binaries, because the daemon finds `thunder-std` *next to itself* and
+  // silently runs with no tools when it cannot: one present and one missing is the
+  // failure mode that looks like "the model got dumb", so it is reported here.
+  const daemon = resolveThunderBinary('thunder-daemon')
   items.push({
-    label: 'thunder-runtime（agent 内核）',
-    ok: present,
-    // 缺失时给出找过的地方：只说「找不到」等于没说。
-    detail: (present ? runtime : describeSidecarSearch('thunder-runtime')) +
+    label: 'thunder-daemon（agent 内核）',
+    ok: Boolean(daemon),
+    detail: (daemon ?? describeSidecarSearch('thunder-daemon')) +
       (revision ? ` ｜ 内嵌 thunder ${revision}` : '')
+  })
+
+  const std = resolveThunderBinary('thunder-std')
+  items.push({
+    label: 'thunder-std（核心工具包）',
+    ok: Boolean(std),
+    detail: std ?? describeSidecarSearch('thunder-std')
   })
 
   // thunder 的用户数据根：一旦设了它，thunder 写的一切都落在它下面，而不是
