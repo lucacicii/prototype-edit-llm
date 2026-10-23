@@ -15,11 +15,12 @@
     "fetch:thunder:all": "node scripts/fetch-thunder-binaries.mjs --from-release --arch darwin-arm64 && node scripts/fetch-thunder-binaries.mjs --from-release --arch darwin-x64",
     "fetch:thunder:local": "node scripts/fetch-thunder-binaries.mjs --from-checkout /Users/lucas/wz/GitHub/thunder",
     "sync:thunder:local": "node scripts/fetch-thunder-binaries.mjs --from-checkout /Users/lucas/wz/GitHub/thunder --bless",
-    "verify:sidecars": "node scripts/fetch-thunder-binaries.mjs --verify",
+    "verify:sidecars": "node scripts/fetch-thunder-binaries.mjs --verify && node scripts/verify-thunder-protocol.mjs",
     "prebuild:mac": "node scripts/prepare-sidecars.mjs --arch darwin-arm64 && node scripts/prepare-sidecars.mjs --arch darwin-x64",
     "prebuild:unpack": "node scripts/prepare-sidecars.mjs",
     "build:unpack": "npm run build && electron-builder --dir",
-    "build:mac": "npm run build && electron-builder --mac"
+    "build:mac": "npm run build && electron-builder --mac",
+    "verify:thunder-protocol": "node scripts/verify-thunder-protocol.mjs"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.8.0",

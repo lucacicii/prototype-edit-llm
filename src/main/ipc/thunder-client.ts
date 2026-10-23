@@ -7,6 +7,7 @@
  */
 
 import { ChildProcess, spawn } from 'child_process';
+import type { ThunderModelInfo, ThunderPermissionMode } from './thunder-protocol.vendored';
 import { resolveThunderBinary, sidecarCacheDir } from '../agent/thunder-binaries';
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
@@ -20,22 +21,15 @@ export interface ThunderClientOptions {
   workspaceDir?: string;
 }
 
-export interface ModelInfo {
-  id: string;
-  provider: string;
-  name: string;
-  selection_id: string;
-  available: boolean;
-}
-
 /**
- * The two approval modes the daemon actually implements.
+ * The wire shapes come from the vendored contract, not from a local copy.
  *
- * `ask` and `acceptEdits` are retired: `normalize_mode` folds every "less strict
- * than plan" name into `yolo`, because `plan` is the only mode with behaviour of its
- * own. Offering them in a UI would be offering a value the daemon silently rewrites.
+ * `ModelInfo` here used to be a five-field hand-written fork of the daemon's
+ * `list_models` payload; the vendored version carries the fields this app uses plus
+ * the ones it ignores, which is the point — a shape copied by hand drifts silently.
  */
-export type ThunderPermissionMode = 'plan' | 'yolo';
+export type ModelInfo = ThunderModelInfo;
+export type { ThunderPermissionMode };
 
 /** Result of AI-title generation or a manual rename (errors are structured, never thrown). */
 export interface ThunderTitleResult {

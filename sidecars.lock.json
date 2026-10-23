@@ -41,6 +41,10 @@
           "sha256": "34776b0b31bc75092adb92266ee4b63d6637dfbd854570485275453f97161539"
         }
       }
+    },
+    "protocol": {
+      "source": "agent-resume-panel@decb9dc2:packages/core/src/thunder/types.ts",
+      "vendoredSha256": "e43106ed156745e4e1176609a43e2ca61e9c155abd14a8360cdfffe357402257"
     }
   }
 }

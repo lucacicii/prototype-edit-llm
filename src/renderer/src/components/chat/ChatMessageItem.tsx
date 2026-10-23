@@ -85,6 +85,13 @@ export function ChatMessageItem({
         if (segment.kind === 'tools') {
           return <ToolCallsState key={`seg_tools_${segmentIndex}`} tools={segment.tools} />
         }
+        if (segment.kind === 'notice') {
+          return (
+            <div className="pc-turn-notice" key={`seg_notice_${segmentIndex}`}>
+              {segment.text}
+            </div>
+          )
+        }
         return (
           <div className="pc-bubble" key={`seg_text_${segmentIndex}`}>
             <Markdown fontSize={BUBBLE_FONT_SIZE} lineHeight={BUBBLE_LINE_HEIGHT}>
