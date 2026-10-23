@@ -143,6 +143,27 @@
   color: var(--pc-accent);
 }
 
+.pc-header-mode {
+  padding: 1px var(--pc-space-2);
+  border: 1px solid var(--pc-border, rgba(127, 127, 127, 0.3));
+  border-radius: 999px;
+  background: transparent;
+  color: var(--pc-label-secondary, inherit);
+  font-size: 11px;
+  line-height: 1.5;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.pc-header-mode.is-plan {
+  border-color: var(--pc-warning, #d08a28);
+  color: var(--pc-warning, #d08a28);
+}
+
+.pc-header-mode:hover {
+  background: var(--pc-chip-bg, rgba(127, 127, 127, 0.16));
+}
+
 .pc-header-model {
   display: inline-flex;
   align-items: center;
@@ -1536,6 +1557,39 @@
   background: linear-gradient(to top, var(--pc-pane-bg) 72%, transparent);
 }
 
+.pc-composer-queued.is-paused {
+  border-color: var(--pc-border-strong, rgba(127, 127, 127, 0.4));
+}
+
+.pc-composer-banner-action {
+  margin-left: auto;
+  padding: 1px var(--pc-space-2);
+  border: 1px solid var(--pc-border, rgba(127, 127, 127, 0.3));
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.pc-composer-banner-action:hover {
+  background: var(--pc-chip-bg, rgba(127, 127, 127, 0.16));
+}
+
+.pc-composer-queue-lists {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.pc-composer-queue-line {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 42ch;
+}
+
 .pc-composer-queued {
   display: flex;
   align-items: center;
@@ -1859,6 +1913,41 @@
   height: 10px;
   border-radius: 2px;
   background: currentColor;
+}
+
+/* 暂停/继续：和停止按钮并排，用次级配色 —— 它不是危险动作，但也会改变运行状态。 */
+.pc-send-btn.is-pause {
+  background: var(--pc-chip-bg, rgba(127, 127, 127, 0.16));
+  color: var(--pc-label-secondary, currentColor);
+}
+
+.pc-send-btn.is-pause.is-acted {
+  background: var(--pc-accent);
+  color: var(--pc-window-bg);
+}
+
+.pc-pause-icon {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.pc-pause-icon::before,
+.pc-pause-icon::after {
+  content: '';
+  display: block;
+  width: 3px;
+  height: 10px;
+  border-radius: 1px;
+  background: currentColor;
+}
+
+.pc-resume-icon {
+  display: inline-block;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 5px 0 5px 9px;
+  border-color: transparent transparent transparent currentColor;
 }
 
 .pc-run-hint {

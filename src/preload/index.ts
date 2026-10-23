@@ -107,6 +107,16 @@ const agentApi = {
     ipcRenderer.invoke('agent:steer-task', params),
   run: (params: any) => ipcRenderer.invoke('agent:run', params),
   cancel: (runId: string) => ipcRenderer.invoke('agent:cancel', runId),
+  pause: (taskId: string) => ipcRenderer.invoke('agent:pause', taskId),
+  resume: (taskId: string) => ipcRenderer.invoke('agent:resume', taskId),
+  clearQueue: (taskId: string) => ipcRenderer.invoke('agent:clear-queue', taskId),
+  getMode: (prototypeId: string) => ipcRenderer.invoke('agent:get-mode', prototypeId),
+  setMode: (args: { prototypeId: string; mode: string }) =>
+    ipcRenderer.invoke('agent:set-mode', args),
+  setConversationTitle: (args: { sessionId: string; title: string }) =>
+    ipcRenderer.invoke('agent:set-conversation-title', args),
+  generateTitle: (args: { sessionId: string; force?: boolean }) =>
+    ipcRenderer.invoke('agent:generate-title', args),
   acpConnect: (params: { provider: string; prototypeId: string; force?: boolean }) =>
     ipcRenderer.invoke('agent:acp-connect', params),
   acpDisconnect: (params: { provider: string; prototypeId: string }) =>
@@ -157,6 +167,16 @@ const agentApi = {
     const handler = (_: any, data: any) => callback(data)
     ipcRenderer.on('agent:mode-changed', handler)
     return () => ipcRenderer.removeListener('agent:mode-changed', handler)
+  },
+  onPaused: (callback: (data: any) => void) => {
+    const handler = (_: any, data: any) => callback(data)
+    ipcRenderer.on('agent:paused', handler)
+    return () => ipcRenderer.removeListener('agent:paused', handler)
+  },
+  onQueueUpdate: (callback: (data: any) => void) => {
+    const handler = (_: any, data: any) => callback(data)
+    ipcRenderer.on('agent:queue-update', handler)
+    return () => ipcRenderer.removeListener('agent:queue-update', handler)
   },
   onUiNotice: (callback: (data: any) => void) => {
     const handler = (_: any, data: any) => callback(data)

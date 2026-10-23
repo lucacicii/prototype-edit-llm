@@ -29,6 +29,8 @@ export interface PendingAttachment {
 export function ChatComposer({
   docked,
   queuedCount,
+  queues,
+  paused,
   promptInput,
   pendingAttachments,
   fileSuggestOpen,
@@ -66,6 +68,9 @@ export function ChatComposer({
   onFileInputChange,
   onSendClick,
   onCancel,
+  onPause,
+  onResume,
+  onClearQueue,
   onSelectModel,
   onSelectThinkingLevel,
   onAcceptSlashCommand
@@ -73,6 +78,10 @@ export function ChatComposer({
   /** 停靠在输入框上方的卡片（问题卡）。 */
   docked?: React.ReactNode
   queuedCount: number
+  /** 权威队列（daemon 每帧给全量）。本地那份只用于队列为空时的乐观显示。 */
+  queues: { steering: string[]; followUp: string[] }
+  /** 非 null 表示任务停在工具边界等我们恢复。 */
+  paused: { taskId: string; reason: string } | null
   promptInput: string
   pendingAttachments: PendingAttachment[]
   fileSuggestOpen: boolean
@@ -111,6 +120,10 @@ export function ChatComposer({
   onFileInputChange: (event: React.ChangeEvent<HTMLInputElement>) => void
   onSendClick: () => void
   onCancel: () => void
+  onPause: () => void
+  onResume: () => void
+  /** 撤回全部排队消息，把文字还回输入框。 */
+  onClearQueue: () => void
   onSelectModel: (selectionId: string) => void
   onSelectThinkingLevel: (level: string) => void
   onAcceptSlashCommand: (name: string) => void
@@ -153,10 +166,37 @@ export function ChatComposer({
     <div className="pc-composer-zone">
       {docked}
 
+      {paused && (
+        <div className="pc-composer-queued is-paused">
+          <strong>⏸ 已暂停</strong>
+          <span>
+            {paused.reason || '在工具边界停住'}
+            {queues.steering.length + queues.followUp.length > 0 ? ' · 队列仍会保留' : ''}
+          </span>
+          <button type="button" className="pc-composer-banner-action" onClick={onResume}>
+            继续
+          </button>
+        </div>
+      )}
+
       {isStreaming && queuedCount > 0 && (
         <div className="pc-composer-queued">
-          <strong>📥 已排队 {queuedCount} 条</strong>
-          <span>Enter 插话 · ⌥Enter 追问</span>
+          <strong>📥 队列 {queuedCount} 条</strong>
+          <div className="pc-composer-queue-lists">
+            {queues.steering.length > 0 && (
+              <span className="pc-composer-queue-line">
+                插话：{queues.steering.join(' / ')}
+              </span>
+            )}
+            {queues.followUp.length > 0 && (
+              <span className="pc-composer-queue-line">
+                追问：{queues.followUp.join(' / ')}
+              </span>
+            )}
+          </div>
+          <button type="button" className="pc-composer-banner-action" onClick={onClearQueue}>
+            撤回
+          </button>
         </div>
       )}
 
@@ -462,15 +502,29 @@ export function ChatComposer({
           </div>
 
           {isStreaming ? (
-            <button
-              type="button"
-              className="pc-send-btn is-stop"
-              onClick={onCancel}
-              title="停止任务"
-              aria-label="停止任务"
-            >
-              <span className="pc-stop-icon" />
-            </button>
+            <>
+              {/* 暂停只在工具边界生效：点了之后当前工具会跑完，所以按钮本身
+                  不假装"已暂停"—— 真正的状态等 daemon 的 task_paused 帧。 */}
+              <button
+                type="button"
+                className={`pc-send-btn is-pause${paused ? ' is-acted' : ''}`}
+                onClick={paused ? onResume : onPause}
+                disabled={paused?.taskId === null}
+                title={paused ? '继续任务' : '在下一个工具边界暂停'}
+                aria-label={paused ? '继续任务' : '暂停任务'}
+              >
+                <span className={paused ? 'pc-resume-icon' : 'pc-pause-icon'} />
+              </button>
+              <button
+                type="button"
+                className="pc-send-btn is-stop"
+                onClick={onCancel}
+                title="停止任务"
+                aria-label="停止任务"
+              >
+                <span className="pc-stop-icon" />
+              </button>
+            </>
           ) : (
             <button
               type="button"

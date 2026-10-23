@@ -16,7 +16,7 @@ import { listMaterials } from '../material-store'
 import { agentReadiness } from '../runtime-env'
 import type { PointedTarget } from '../../shared/pointed-target'
 import { stackInfo, TechStack } from '../agent/tech-stack'
-import { ThunderClient, getSharedThunderClient } from './thunder-client'
+import { ThunderClient, getSharedThunderClient, normalizeMode } from './thunder-client'
 import { resolveDaemonBinary } from '../agent/thunder-binaries'
 import { syncThunderModelConfig } from '../agent/thunder-model-config'
 import { ProjectRunner } from '../project-runner'
@@ -595,6 +595,18 @@ export function setupAgentIpc(options: { workspaceDir: string }): void {
       win.webContents.send('agent:mode-changed', msg)
     }
   })
+  daemonClient.on('task_paused', (msg: any) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      win.webContents.send('agent:paused', msg)
+    }
+  })
+  // Both queues in full, never a delta: a client that missed one frame would
+  // otherwise drift out of sync with the agent for the rest of the run.
+  daemonClient.on('task_queue_update', (msg: any) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      win.webContents.send('agent:queue-update', msg)
+    }
+  })
   daemonClient.on('ui_notice', (msg: any) => {
     for (const win of BrowserWindow.getAllWindows()) {
       win.webContents.send('agent:ui-notice', msg)
@@ -604,6 +616,36 @@ export function setupAgentIpc(options: { workspaceDir: string }): void {
     daemonClient.start()
   } catch (err) {
     console.warn('[agent] thunder-daemon deferred start:', err)
+  }
+
+  /**
+   * The approval mode per prototype.
+   *
+   * Kept here as well as in the daemon because the two answer different questions:
+   * the daemon remembers it per `session_id` (in memory), while this map lets a run
+   * state its mode explicitly instead of inheriting whatever the session last had.
+   * Seeded from `get_permission_state` the first time a surface asks.
+   */
+  const prototypeModes = new Map<string, 'plan' | 'yolo'>()
+
+  /**
+   * The session a prototype's runs belong to — the same derivation `agent:run` uses,
+   * so mode get/set touches the session the runs actually land in.
+   */
+  const sessionIdForPrototype = async (prototypeId: string): Promise<string> => {
+    try {
+      const wsManager = ProjectWorkspaceManager.getInstance()
+      const current = wsManager.getCurrentWorkspace()
+      const external = Boolean(current && current.id !== 'default-host')
+      if (external) {
+        return `sess_${prototypeId || 'proto'}`
+      }
+      const dir = projectDirFor(prototypeId || 'blank-prototype')
+      const item = await loadProjectItem(dir)
+      return item?.sessionId || `sess_${prototypeId || 'proto'}`
+    } catch {
+      return `sess_${prototypeId || 'proto'}`
+    }
   }
 
 
@@ -860,6 +902,65 @@ export function setupAgentIpc(options: { workspaceDir: string }): void {
    * 运行中插话：steer 在下一个工具边界进入（可续命），follow_up 只在
    * 本轮跑完后进入。都不会打断正在执行的工具。
    */
+  ipcMain.handle('agent:pause', async (_, taskId: string) => {
+    try {
+      return { ok: await daemonClient.pauseTask(taskId) }
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? String(err) }
+    }
+  })
+
+  ipcMain.handle('agent:resume', async (_, taskId: string) => {
+    try {
+      return { ok: await daemonClient.resumeTask(taskId) }
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? String(err) }
+    }
+  })
+
+  ipcMain.handle('agent:clear-queue', async (_, taskId: string) => {
+    try {
+      return { ok: true, ...(await daemonClient.clearQueue(taskId)) }
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? String(err) }
+    }
+  })
+
+  ipcMain.handle('agent:get-mode', async (_, prototypeId: string) => {
+    const cached = prototypeModes.get(prototypeId)
+    if (cached) return { ok: true, mode: cached }
+    try {
+      const state = await daemonClient.getPermissionState(await sessionIdForPrototype(prototypeId))
+      const mode = state?.mode ?? 'yolo'
+      prototypeModes.set(prototypeId, mode)
+      return { ok: true, mode, rules: state?.rules ?? [] }
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? String(err) }
+    }
+  })
+
+  ipcMain.handle('agent:set-mode', async (_, args: { prototypeId: string; mode: string }) => {
+    const mode = normalizeMode(args.mode)
+    try {
+      const res = await daemonClient.setMode(await sessionIdForPrototype(args.prototypeId), mode)
+      const accepted = res?.mode ?? mode
+      prototypeModes.set(args.prototypeId, accepted)
+      return { ok: true, mode: accepted }
+    } catch (err: any) {
+      // An older daemon may not know `set_mode`; the cached value must not be
+      // updated then, or the UI would show a mode no run will use.
+      return { ok: false, error: err?.message ?? String(err) }
+    }
+  })
+
+  ipcMain.handle('agent:set-conversation-title', async (_, args: { sessionId: string; title: string }) => {
+    return daemonClient.setConversationTitle(args.sessionId, args.title)
+  })
+
+  ipcMain.handle('agent:generate-title', async (_, args: { sessionId: string; force?: boolean }) => {
+    return daemonClient.generateConversationTitle(args.sessionId, args.force === true)
+  })
+
   ipcMain.handle(
     'agent:steer-task',
     async (
@@ -1128,6 +1229,9 @@ export function setupAgentIpc(options: { workspaceDir: string }): void {
         thinkingLevel: resolvedConfig.thinkingLevel,
         workspaceDir: projectDir,
         extraWorkspaceDirs: extraWorkspaceDirs.length ? extraWorkspaceDirs : undefined,
+        // Stated, not inherited: the daemon's session memory would otherwise carry
+        // whatever the last surface left behind.
+        mode: prototypeModes.get(params.prototypeId || ''),
         headless: false,
         attachments: params.attachments?.map((a) => ({
           data: a.data,

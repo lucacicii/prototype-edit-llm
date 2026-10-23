@@ -28,7 +28,55 @@ export interface ModelInfo {
   available: boolean;
 }
 
-export type ThunderPermissionMode = 'plan' | 'ask' | 'acceptEdits' | 'yolo';
+/**
+ * The two approval modes the daemon actually implements.
+ *
+ * `ask` and `acceptEdits` are retired: `normalize_mode` folds every "less strict
+ * than plan" name into `yolo`, because `plan` is the only mode with behaviour of its
+ * own. Offering them in a UI would be offering a value the daemon silently rewrites.
+ */
+export type ThunderPermissionMode = 'plan' | 'yolo';
+
+/** Result of AI-title generation or a manual rename (errors are structured, never thrown). */
+export interface ThunderTitleResult {
+  ok: boolean;
+  title?: string;
+  /** `not_found` | `invalid_title` | `store_error` | `no_utility_model` | `api_error` */
+  errorKind?: string;
+  error?: string;
+}
+
+/**
+ * Fold whatever mode name is on the wire into one of the two that exist.
+ *
+ * The daemon already does this server-side; doing it again here keeps an older
+ * daemon — or a hand-edited state file — from putting `ask` on screen.
+ */
+export function normalizeMode(raw: unknown): ThunderPermissionMode {
+  return typeof raw === 'string' && raw.trim().toLowerCase() === 'plan' ? 'plan' : 'yolo';
+}
+
+function titleErrorResult(err: unknown): ThunderTitleResult {
+  return { ok: false, error: err instanceof Error ? err.message : String(err) };
+}
+
+/**
+ * Fold the daemon's title reply into one shape.
+ *
+ * Both title commands answer with `success: true` and carry the real verdict inside
+ * `{ok, errorKind, error}` — an RPC that completed is not a title that worked, and
+ * reading only `title` would report success with an empty name.
+ */
+function titleResult(res: any): ThunderTitleResult {
+  if (!res || res.ok === false) {
+    return {
+      ok: false,
+      errorKind: res?.errorKind,
+      error: res?.error ?? 'Title could not be produced'
+    };
+  }
+  return { ok: true, title: res.title };
+}
 
 export interface RunTaskOptions {
   taskId: string;
@@ -169,16 +217,92 @@ export class ThunderClient extends EventEmitter {
   }
 
   /**
-   * Switch the approval mode for a session.
+   * Set the mode a session is judged by.
+   *
+   * Takes effect on the session's next run *and* on a run already in flight, at its
+   * next tool call. Only the two implemented modes are ever sent.
    */
   public async setMode(
     sessionId: string,
-    mode: ThunderPermissionMode | string
-  ): Promise<{ session_id: string; mode: string }> {
-    return this.sendRequest('set_mode', {
-      session_id: sessionId,
-      mode,
-    });
+    mode: ThunderPermissionMode
+  ): Promise<{ mode: ThunderPermissionMode } | null> {
+    const res = await this.sendRequest('set_mode', { session_id: sessionId, mode });
+    if (!res) return null;
+    return { mode: normalizeMode(res.mode ?? mode) };
+  }
+
+  /**
+   * Read the mode a session is judged by.
+   *
+   * The hydration source for a surface that has just opened a session: the daemon
+   * keeps the mode in memory per `session_id` and deliberately does not store it in
+   * the conversation.
+   */
+  public async getPermissionState(
+    sessionId: string
+  ): Promise<{ mode: ThunderPermissionMode; rules: unknown[] } | null> {
+    const res = await this.sendRequest('get_permission_state', { session_id: sessionId });
+    if (!res?.mode) return null;
+    // The wire field is `allowed_rules`; reading `rules` silently returned [].
+    return { mode: normalizeMode(res.mode), rules: res.allowed_rules ?? [] };
+  }
+
+  /**
+   * Cooperatively pause a running task at its next tool boundary.
+   *
+   * Nothing here interrupts a tool that is already executing: the daemon checks the
+   * gate between turns, so the reply means "accepted", not "stopped".
+   */
+  public async pauseTask(taskId: string): Promise<boolean> {
+    const res = await this.sendRequest('pause_task', { task_id: taskId });
+    return Boolean(res?.paused);
+  }
+
+  /** Resume a paused task. */
+  public async resumeTask(taskId: string): Promise<boolean> {
+    const res = await this.sendRequest('resume_task', { task_id: taskId });
+    return Boolean(res?.resumed);
+  }
+
+  /**
+   * Drop everything queued into a running task and hand the text back.
+   *
+   * The queues are returned separately because they mean different things: a
+   * steering message enters at the next tool boundary, a follow-up only once the run
+   * has nothing else to do. The caller puts them back in the editor.
+   */
+  public async clearQueue(
+    taskId: string
+  ): Promise<{ steering: string[]; followUp: string[] } | null> {
+    const res = await this.sendRequest('clear_queue', { task_id: taskId });
+    if (!res) return null;
+    return { steering: res.steering ?? [], followUp: res.follow_up ?? [] };
+  }
+
+  /** AI-generate a conversation title. Never throws: the reason comes back structured. */
+  public async generateConversationTitle(
+    sessionId: string,
+    force = false
+  ): Promise<ThunderTitleResult> {
+    try {
+      const res = await this.sendRequest('generate_title', { session_id: sessionId, force });
+      return titleResult(res);
+    } catch (err) {
+      return titleErrorResult(err);
+    }
+  }
+
+  /** Set a conversation title by hand, which also locks it against auto-renames. */
+  public async setConversationTitle(sessionId: string, title: string): Promise<ThunderTitleResult> {
+    try {
+      const res = await this.sendRequest('set_conversation_title', {
+        session_id: sessionId,
+        title,
+      });
+      return titleResult(res);
+    } catch (err) {
+      return titleErrorResult(err);
+    }
   }
 
   /**

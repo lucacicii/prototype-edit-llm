@@ -102,6 +102,9 @@ function slashTokenAtCursor(
   return null
 }
 
+/** A stable empty queue, so a non-streaming panel is not re-rendered by a new object. */
+const EMPTY_QUEUES: { steering: string[]; followUp: string[] } = { steering: [], followUp: [] }
+
 export const ChatPanel: React.FC<ChatPanelProps> = ({
   currentWorkspace,
   onOpenSettings,
@@ -182,9 +185,46 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const materials = useMaterialStore((s) => s.materials)
 
   const [promptInput, setPromptInput] = useState('')
+  /**
+   * The approval mode for this prototype, read back from the daemon rather than
+   * assumed: `plan` refuses writes, and a UI that shows the wrong one is worse than
+   * showing none.
+   */
+  const [mode, setModeState] = useState<'plan' | 'yolo'>('yolo')
   /** 打开的是第几轮（`stream.turns` 的下标）；null = 抽屉关着。 */
   const [openTurnIndex, setOpenTurnIndex] = useState<number | null>(null)
   const [cursorPos, setCursorPos] = useState(0)
+
+  const modePrototypeId = externalWs ? '' : currentPrototype?.id ?? ''
+  useEffect(() => {
+    if (engine !== 'thunder' || !window.agent?.getMode) return
+    let cancelled = false
+    void window.agent
+      .getMode(modePrototypeId)
+      .then((res) => {
+        if (!cancelled && res?.ok && res.mode) setModeState(res.mode)
+      })
+      .catch(() => {
+        // A daemon that cannot answer yet just means "keep the default"; the first
+        // run's `mode_changed` will correct it.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [engine, modePrototypeId])
+
+  const toggleMode = useCallback(() => {
+    const next = mode === 'plan' ? 'yolo' : 'plan'
+    setModeState(next)
+    void window.agent
+      ?.setMode?.({ prototypeId: modePrototypeId, mode: next })
+      .then((res) => {
+        // The daemon is the authority: roll the optimistic value back if it refused.
+        if (!res?.ok) setModeState(mode)
+      })
+      .catch(() => setModeState(mode))
+  }, [mode, modePrototypeId])
+
 
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const chatScrollEl = useRef<HTMLDivElement | null>(null)
@@ -695,6 +735,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         configured={configured}
         agentStatus={stream.isStreaming ? stream.agentStatus : null}
         acp={acp}
+        mode={mode}
+        onToggleMode={toggleMode}
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={onToggleSidebar}
         onOpenSettings={onOpenSettings}
@@ -750,6 +792,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           ) : null
         }
         queuedCount={streamHere ? stream.queuedCount : 0}
+        queues={streamHere ? stream.queues : EMPTY_QUEUES}
+        paused={streamHere ? stream.paused : null}
         promptInput={promptInput}
         pendingAttachments={pendingAttachments}
         fileSuggestOpen={fileSuggest.isOpen}
@@ -790,6 +834,16 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         onFileInputChange={handleFileInputChange}
         onSendClick={handleSendClick}
         onCancel={() => void stream.cancelRun()}
+        onPause={() => void stream.pauseRun()}
+        onResume={() => void stream.resumeRun()}
+        onClearQueue={() => {
+          // 撤回的文字回到输入框，而不是消失：用户插错话的下一步通常是改一改再发。
+          void stream.clearQueue().then((texts) => {
+            if (texts.length === 0) return
+            setPromptInput((current) => [current, ...texts].filter(Boolean).join('\n'))
+            requestAnimationFrame(() => textareaRef.current?.focus())
+          })
+        }}
         onSelectModel={selectModel}
         onSelectThinkingLevel={selectThinkingLevel}
         onAcceptSlashCommand={acceptSlashCommand}
