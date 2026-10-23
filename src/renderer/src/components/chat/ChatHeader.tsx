@@ -40,6 +40,8 @@ export function ChatHeader({
   configured,
   agentStatus,
   acp,
+  mode,
+  onToggleMode,
   sidebarCollapsed,
   onToggleSidebar,
   onOpenSettings
@@ -49,6 +51,14 @@ export function ChatHeader({
   configured: boolean
   agentStatus?: ThunderAgentStatus | null
   acp: AcpControls
+  /**
+   * The mode the daemon judges this session by — `plan` refuses writes, `yolo` runs
+   * every call. Not a UI preference: it is what the daemon will do on the next tool
+   * call, which is why it is read back from `get_permission_state` rather than
+   * assumed.
+   */
+  mode: 'plan' | 'yolo'
+  onToggleMode: () => void
   sidebarCollapsed: boolean
   onToggleSidebar: () => void
   onOpenSettings: () => void
@@ -88,6 +98,20 @@ export function ChatHeader({
           <Zap size={15} />
           <span>AI 原型对话</span>
         </span>
+        {acp.engine === 'thunder' && (
+          <button
+            type="button"
+            className={`pc-header-mode is-${mode}`}
+            onClick={onToggleMode}
+            title={
+              mode === 'plan'
+                ? 'Plan 模式：只读，写操作会被拦下（点击切到 Yolo）'
+                : 'Yolo 模式：每次工具调用直接执行（点击切到 Plan）'
+            }
+          >
+            <span>{mode === 'plan' ? '📋 Plan' : '⚡ Yolo'}</span>
+          </button>
+        )}
         {acp.engine === 'thunder' ? (
           <button
             type="button"

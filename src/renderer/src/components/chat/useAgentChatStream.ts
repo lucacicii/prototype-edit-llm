@@ -322,6 +322,17 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
   const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null)
   const [pendingPermission, setPendingPermission] = useState<AcpPermissionRequestPayload | null>(null)
   const [queuedMessages, setQueuedMessages] = useState<string[]>([])
+  /**
+   * The daemon's own view of the two queues. `task_queue_update` carries both in
+   * full, so this replaces the local tally instead of growing next to it — a
+   * locally-appended list would keep showing messages the daemon already delivered.
+   */
+  const [queues, setQueues] = useState<{ steering: string[]; followUp: string[] }>({
+    steering: [],
+    followUp: []
+  })
+  /** Set by `task_paused`: the run stopped at a tool boundary and waits for us. */
+  const [paused, setPaused] = useState<{ taskId: string; reason: string } | null>(null)
   const [agentStatus, setAgentStatus] = useState<ThunderAgentStatus | null>(null)
 
   /** 当前轮的切片数组（`liveSegments` 是它的快照）；换轮时整体换新。 */
@@ -664,6 +675,26 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
         }
       })
 
+      setPaused(null)
+      setQueues({ steering: [], followUp: [] })
+
+      const offPaused = window.agent.onPaused
+        ? window.agent.onPaused((frame: any) => {
+            if (frame?.task_id && frame.task_id !== params.runId) return
+            setPaused({ taskId: String(frame.task_id || params.runId), reason: String(frame.reason || '') })
+          })
+        : undefined
+
+      const offQueue = window.agent.onQueueUpdate
+        ? window.agent.onQueueUpdate((frame: any) => {
+            if (frame?.task_id && frame.task_id !== params.runId) return
+            setQueues({
+              steering: Array.isArray(frame.steering) ? frame.steering : [],
+              followUp: Array.isArray(frame.follow_up) ? frame.follow_up : []
+            })
+          })
+        : undefined
+
       const offQuestion = window.agent.onUserQuestion
         ? window.agent.onUserQuestion((q: any) => {
             if (q?.task_id && q.task_id !== params.runId) return
@@ -761,6 +792,8 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
           publishTurns()
         }
         offStream?.()
+        offPaused?.()
+        offQueue?.()
         offQuestion?.()
         offCode?.()
         offPermission?.()
@@ -772,6 +805,8 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
         runPrototypeIdRef.current = null
         activeRunIdRef.current = null
         setPendingQuestion(null)
+        setPaused(null)
+        setQueues({ steering: [], followUp: [] })
         stopTimer()
       }
     },
@@ -809,6 +844,48 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
     },
     []
   )
+
+  /** Pause at the next tool boundary. The banner stays until `task_paused` arrives. */
+  const pauseRun = useCallback(async (): Promise<boolean> => {
+    const runId = activeRunIdRef.current
+    if (!runId || !window.agent?.pause) return false
+    try {
+      const res = await window.agent.pause(runId)
+      return Boolean(res?.ok)
+    } catch {
+      return false
+    }
+  }, [])
+
+  const resumeRun = useCallback(async (): Promise<boolean> => {
+    const runId = paused?.taskId ?? activeRunIdRef.current
+    if (!runId || !window.agent?.resume) return false
+    try {
+      const res = await window.agent.resume(runId)
+      if (res?.ok) setPaused(null)
+      return Boolean(res?.ok)
+    } catch {
+      return false
+    }
+  }, [paused])
+
+  /**
+   * Withdraw everything queued and hand it back, so an accidental steer does not
+   * cost the whole run. The daemon replies with the text it dropped.
+   */
+  const clearQueue = useCallback(async (): Promise<string[]> => {
+    const runId = activeRunIdRef.current
+    if (!runId || !window.agent?.clearQueue) return []
+    try {
+      const res = await window.agent.clearQueue(runId)
+      if (!res?.ok) return []
+      setQueues({ steering: [], followUp: [] })
+      setQueuedMessages([])
+      return [...(res.steering ?? []), ...(res.followUp ?? [])]
+    } catch {
+      return []
+    }
+  }, [])
 
   const steer = useCallback((message: string) => queueIntoRunning(message, 'steer'), [queueIntoRunning])
   const followUp = useCallback((message: string) => queueIntoRunning(message, 'follow_up'), [queueIntoRunning])
@@ -912,7 +989,13 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
     pendingPermission,
     respondPermission,
     dismissPermission,
-    queuedCount: queuedMessages.length,
+    queuedCount: queues.steering.length + queues.followUp.length || queuedMessages.length,
+    /** Authoritative queues from the daemon; empty until the first frame arrives. */
+    queues,
+    paused,
+    pauseRun,
+    resumeRun,
+    clearQueue,
     steer,
     followUp,
     startRun,

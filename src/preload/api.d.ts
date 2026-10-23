@@ -498,6 +498,42 @@ export interface IAgentAPI {
     behavior?: 'steer' | 'follow_up'
   }) => Promise<{ ok: boolean; error?: string }>
   cancel: (runId: string) => Promise<boolean>
+  /**
+   * `pause` / `resume` are accepted at a tool boundary, not applied instantly: the
+   * reply says the gate moved, not that the run has stopped.
+   */
+  pause: (taskId: string) => Promise<{ ok: boolean; error?: string }>
+  resume: (taskId: string) => Promise<{ ok: boolean; error?: string }>
+  /** Drop both queues and hand the text back so it can go into the editor. */
+  clearQueue: (taskId: string) => Promise<{
+    ok: boolean
+    steering?: string[]
+    followUp?: string[]
+    error?: string
+  }>
+  getMode: (prototypeId: string) => Promise<{
+    ok: boolean
+    mode?: 'plan' | 'yolo'
+    rules?: unknown[]
+    error?: string
+  }>
+  setMode: (args: { prototypeId: string; mode: 'plan' | 'yolo' }) => Promise<{
+    ok: boolean
+    mode?: 'plan' | 'yolo'
+    error?: string
+  }>
+  setConversationTitle: (args: { sessionId: string; title: string }) => Promise<{
+    ok: boolean
+    title?: string
+    errorKind?: string
+    error?: string
+  }>
+  generateTitle: (args: { sessionId: string; force?: boolean }) => Promise<{
+    ok: boolean
+    title?: string
+    errorKind?: string
+    error?: string
+  }>
   acpConnect: (params: { provider: string; prototypeId: string; force?: boolean }) => Promise<{ ok: boolean; state?: any; error?: string }>
   acpDisconnect: (params: { provider: string; prototypeId: string }) => Promise<{ ok: boolean }>
   acpGetState: (params: { provider: string; prototypeId: string }) => Promise<{ ok: boolean; state?: any }>
@@ -530,6 +566,14 @@ export interface IAgentAPI {
     }) => void
   ) => () => void
   onModeChanged?: (callback: (data: { session_id: string; mode: string; previous?: string; source: string; task_id?: string }) => void) => () => void
+  onPaused?: (callback: (data: { task_id: string; session_id?: string; reason: string }) => void) => () => void
+  /** Always both queues in full — never a delta, so a missed frame cannot desync. */
+  onQueueUpdate?: (callback: (data: {
+    task_id: string
+    session_id?: string
+    steering: string[]
+    follow_up: string[]
+  }) => void) => () => void
   onUiNotice?: (callback: (data: { source: string; message: string; level: string }) => void) => () => void
   onAcpState?: (callback: (state: any) => void) => () => void
   onAcpPermissionRequest?: (callback: (payload: any) => void) => () => void
