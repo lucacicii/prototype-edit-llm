@@ -23,11 +23,13 @@ export interface ActiveToolInfo {
   isError?: boolean
 }
 
-/** 一段按时间顺序发生的运行切片：思考 / 正文 / 一批工具。 */
+/** 一段按时间顺序发生的运行切片：思考 / 正文 / 一批工具 / 一条系统提示。 */
 export type LiveSegment =
   | { kind: 'reasoning'; text: string }
   | { kind: 'text'; text: string }
   | { kind: 'tools'; tools: ActiveToolInfo[] }
+  /** 这次 run 对自己做了什么，值得说出来 —— 目前只有上下文压缩。 */
+  | { kind: 'notice'; text: string }
 
 /**
  * 一次 run 里的一轮（turn）。
@@ -233,6 +235,11 @@ function appendDelta(segments: LiveSegment[], kind: 'reasoning' | 'text', delta:
 }
 
 /** 把工具加进尾部工具切片，或开一个新切片。 */
+/** 追加一条独立提示（不并入正文，也不属于工具）。 */
+function appendNotice(segments: LiveSegment[], text: string): void {
+  segments.push({ kind: 'notice', text })
+}
+
 function appendTool(segments: LiveSegment[], tool: ActiveToolInfo): void {
   const last = segments[segments.length - 1]
   if (last && last.kind === 'tools') {
@@ -543,6 +550,19 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
           // 它是权威值，会覆盖紧随其前的 `turn_end` / `loop_complete` 估算。
           // 第一帧（turn_start）就带 wall clock，所以总耗时从 run 一开始就能显示。
           applyMetrics(metricsFromSnapshot(snap))
+          break
+        }
+        case 'context_compacted': {
+          // 内核把上下文重建到能装下为止：这件事必须说出来，否则下一轮更小的
+          // prompt_tokens 看起来像 bug，长任务像是 agent 开始失忆。
+          const compacted = ev as { tokens_before?: number; tokens_after?: number }
+          const before = compacted.tokens_before ?? 0
+          const after = compacted.tokens_after ?? 0
+          appendNotice(
+            segmentsRef.current,
+            `上下文已压缩：${Math.round(before / 1000)}k → ${Math.round(after / 1000)}k`
+          )
+          publishSegments()
           break
         }
         case 'turn_end': {
