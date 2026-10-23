@@ -178,11 +178,6 @@ const agentApi = {
     ipcRenderer.on('agent:queue-update', handler)
     return () => ipcRenderer.removeListener('agent:queue-update', handler)
   },
-  onUiNotice: (callback: (data: any) => void) => {
-    const handler = (_: any, data: any) => callback(data)
-    ipcRenderer.on('agent:ui-notice', handler)
-    return () => ipcRenderer.removeListener('agent:ui-notice', handler)
-  },
   onAcpState: (callback: (state: any) => void) => {
     const handler = (_: any, data: any) => callback(data)
     ipcRenderer.on('agent:acp-state', handler)

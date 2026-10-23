@@ -104,12 +104,6 @@ export interface ModeChangedEvent {
   source: string;
 }
 
-export interface UiNoticeEvent {
-  source: string;
-  message: string;
-  level: string;
-}
-
 export class ThunderClient extends EventEmitter {
   private process: ChildProcess | null = null;
   private lineReader: readline.Interface | null = null;
@@ -375,23 +369,6 @@ export class ThunderClient extends EventEmitter {
   }
 
   /**
-   * Answer a pending `ui_request` dialog raised by `thunder-daemon`.
-   */
-  public async answerUi(params: {
-    requestId: string;
-    value?: string;
-    confirmed?: boolean;
-    cancelled?: boolean;
-  }): Promise<any> {
-    return this.sendRequest('answer_ui', {
-      request_id: params.requestId,
-      ...(params.value !== undefined ? { value: params.value } : {}),
-      ...(params.confirmed !== undefined ? { confirmed: params.confirmed } : {}),
-      cancelled: Boolean(params.cancelled),
-    });
-  }
-
-  /**
    * Steer or queue follow-up input into an active task.
    */
   public async steerTask(params: {
@@ -420,14 +397,6 @@ export class ThunderClient extends EventEmitter {
   public onModeChanged(listener: (evt: ModeChangedEvent) => void): () => void {
     this.on('mode_changed', listener);
     return () => this.off('mode_changed', listener);
-  }
-
-  /**
-   * Listen for ui_notice events pushed by the daemon.
-   */
-  public onUiNotice(listener: (evt: UiNoticeEvent) => void): () => void {
-    this.on('ui_notice', listener);
-    return () => this.off('ui_notice', listener);
   }
 
   private sendRequest(method: string, params: Record<string, any>): Promise<any> {
@@ -486,16 +455,12 @@ export class ThunderClient extends EventEmitter {
         this.emit('task_failed', msg);
       } else if (type === 'user_question') {
         this.emit('user_question', msg);
-      } else if (type === 'ui_request') {
-        this.emit('ui_request', msg);
       } else if (type === 'task_paused') {
         this.emit('task_paused', msg);
       } else if (type === 'task_queue_update') {
         this.emit('task_queue_update', msg);
       } else if (type === 'mode_changed') {
         this.emit('mode_changed', msg);
-      } else if (type === 'ui_notice') {
-        this.emit('ui_notice', msg);
       }
     } catch (e) {
       console.error('[ThunderClient] Failed to parse daemon output line:', trimmed, e);
