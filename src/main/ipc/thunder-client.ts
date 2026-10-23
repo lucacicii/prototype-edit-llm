@@ -18,8 +18,6 @@ export interface ThunderClientOptions {
   binaryPath?: string;
   /** Working directory for agent workspace. */
   workspaceDir?: string;
-  /** Force mock mode (useful for UI development without API keys). */
-  useMock?: boolean;
 }
 
 export interface ModelInfo {
@@ -40,7 +38,6 @@ export interface RunTaskOptions {
   modelDescriptor?: Record<string, any>;
   thinkingLevel?: string;
   attachments?: Array<{ path?: string; data?: string; mimeType?: string; name?: string }>;
-  useMock?: boolean;
   workspaceDir?: string;
   extraWorkspaceDirs?: string[];
   /** Approval mode (plan | ask | acceptEdits | yolo). Defaults to yolo in prototype-edit-llm. */
@@ -227,7 +224,6 @@ export class ThunderClient extends EventEmitter {
         ...(opts.thinkingLevel ? { thinking_level: opts.thinkingLevel } : {}),
         ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
         ...(opts.extraWorkspaceDirs?.length ? { extra_workspace_dirs: opts.extraWorkspaceDirs } : {}),
-        use_mock: opts.useMock ?? this.options.useMock ?? false,
         workspace_dir: opts.workspaceDir ?? this.options.workspaceDir,
         headless: opts.headless ?? false,
       }).catch((err) => {
