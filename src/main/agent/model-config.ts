@@ -2,12 +2,13 @@
  * The per-prototype agent config, and the one place a run's model is assembled.
  *
  * `.prototype-agent.json` used to carry two different things at once: the agent
- * tuning (prompt, turns, temperature) and a whole model — and in "manual" mode
- * that meant an endpoint *and a live API key* sitting in the project
- * directory. It carries one thing now: the tuning, plus a `{provider, id}`
- * reference into this app's own model library (`provider-store.ts`). Endpoints
- * and keys belong to the install, not to the prototype being edited, so they
- * are not in here at all.
+ * tuning (prompt, turns, temperature — none of which the thunder wire ever
+ * accepted) and a whole model — and in "manual" mode that meant an endpoint
+ * *and a live API key* sitting in the project directory. It carries one thing
+ * now: engine and thinking-level preferences, plus a `{provider, id}` reference
+ * into this app's own model library (`provider-store.ts`). Endpoints and keys
+ * belong to the install, not to the prototype being edited, so they are not in
+ * here at all.
  *
  * `resolveAgentModel()` is the single seam every caller goes through —
  * `agent:get-config` and `agent:run` both need "the effective model, or why
@@ -52,11 +53,7 @@ export interface AgentConfigFile {
   engine?: 'thunder' | 'claude' | 'codex'
   acpPermissionPolicy?: 'allowAll' | 'ask'
   acpAgents?: Partial<Record<'claude' | 'codex', { command?: string; args?: string[]; env?: Record<string, string> }>>
-  systemPrompt?: string
-  maxTurns?: number
-  temperature?: number
   thinkingLevel?: string
-  requestTimeoutMs?: number
 }
 
 /** Which layer the effective config came from. */
@@ -116,17 +113,8 @@ export function normalizeConfig(config?: AgentConfigFile | null): AgentConfigFil
 
   const model = normalizeModel(config.model)
   if (model) clean.model = model
-  const systemPrompt = trimmed(config.systemPrompt)
-  if (systemPrompt) clean.systemPrompt = systemPrompt
-  if (Number.isFinite(config.maxTurns) && config.maxTurns) clean.maxTurns = config.maxTurns
-  if (Number.isFinite(config.temperature) && config.temperature !== undefined) {
-    clean.temperature = config.temperature
-  }
   const thinkingLevel = trimmed(config.thinkingLevel)
   if (thinkingLevel) clean.thinkingLevel = thinkingLevel
-  if (Number.isFinite(config.requestTimeoutMs) && config.requestTimeoutMs) {
-    clean.requestTimeoutMs = config.requestTimeoutMs
-  }
   if (config.engine === 'thunder' || config.engine === 'claude' || config.engine === 'codex') {
     clean.engine = config.engine
   }

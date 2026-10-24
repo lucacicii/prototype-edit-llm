@@ -84,7 +84,6 @@ export interface AgentRunParams {
   code: string
   prototypeId: string
   engine?: 'thunder' | 'claude' | 'codex'
-  history?: { role: 'user' | 'assistant' | 'tool' | 'system'; content: string | null }[]
   /**
    * 圈选点中的元素。走的是同一个 PointedTarget —— 以前这里是内联的
    * `{tagName, text}`，把选择器/组件/源码位置全挡在了 IPC 之外，模型调
@@ -951,6 +950,41 @@ export function setupAgentIpc(options: { workspaceDir: string }): void {
     return daemonClient.generateConversationTitle(args.sessionId, args.force === true)
   })
 
+  /**
+   * The thunder session the current conversation belongs to. Derived the same
+   * way `agent:run` does, so a truncate that rotated the project's session is
+   * reflected without waiting for the next run.
+   */
+  ipcMain.handle('agent:get-session', async (_, args: { prototypeId?: string }) => {
+    try {
+      const sessionId = await sessionIdForPrototype(args.prototypeId || '')
+      return { ok: true, sessionId }
+    } catch (err: any) {
+      return { ok: false, error: err?.message ?? String(err) }
+    }
+  })
+
+  /** Title of a thunder conversation, for the header; absent sessions are not an error. */
+  ipcMain.handle(
+    'agent:get-conversation-title',
+    async (_, args: { sessionId: string }) => {
+      try {
+        const conv = await daemonClient.getConversation(args.sessionId)
+        const record = (conv?.conversation ?? conv) as
+          | { title?: string; title_source?: string }
+          | null
+          | undefined
+        return {
+          ok: true,
+          title: typeof record?.title === 'string' ? record.title : null,
+          titleSource: typeof record?.title_source === 'string' ? record.title_source : null
+        }
+      } catch (err: any) {
+        return { ok: false, error: err?.message ?? String(err) }
+      }
+    }
+  )
+
   ipcMain.handle(
     'agent:steer-task',
     async (
@@ -1285,6 +1319,8 @@ export function setupAgentIpc(options: { workspaceDir: string }): void {
       return {
         ok: true,
         runId,
+        /** The session this run landed in, so the title UI targets the right one. */
+        sessionId,
         finishReason: (taskResult?.finish_reason || 'done').toLowerCase(),
         finalContent: taskResult?.final_content ?? null,
         code: latestItem?.vueCode ?? activeCode,

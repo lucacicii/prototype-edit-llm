@@ -2582,3 +2582,181 @@
   color: var(--pc-warning);
   border-color: color-mix(in srgb, var(--pc-warning) 35%, transparent);
 }
+
+/* ============ 会话标题（thunder 引擎；daemon 侧持久化） ============ */
+
+.pc-header-title {
+  /* 有会话名时可收缩：长标题截断，而不是把模型徽标挤出屏。 */
+  min-width: 0;
+}
+
+.pc-header-title-name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pc-space-1);
+  min-width: 0;
+}
+
+.pc-header-title-btn {
+  display: inline-flex;
+  align-items: center;
+  max-width: 220px;
+  padding: 1px var(--pc-space-1-5);
+  border: 1px solid transparent;
+  border-radius: var(--pc-radius-md);
+  background: transparent;
+  color: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: text;
+}
+
+.pc-header-title-btn:hover {
+  border-color: var(--pc-separator);
+  background: var(--pc-fill-secondary);
+}
+
+.pc-header-title-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pc-header-title-input {
+  width: 200px;
+  padding: 1px var(--pc-space-1-5);
+  border: 1px solid var(--pc-accent);
+  border-radius: var(--pc-radius-md);
+  background: var(--pc-fill-secondary);
+  color: var(--pc-label-primary);
+  font-size: 13px;
+  font-weight: 500;
+  outline: none;
+}
+
+.pc-header-title-ai {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: var(--pc-space-0-5);
+  border: none;
+  border-radius: var(--pc-radius-md);
+  background: transparent;
+  color: var(--pc-label-tertiary);
+  cursor: pointer;
+}
+
+.pc-header-title-ai:hover {
+  color: var(--pc-accent);
+  background: var(--pc-fill-secondary);
+}
+
+.pc-header-title-ai:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+@keyframes pc-title-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.pc-spin {
+  animation: pc-title-spin 1s linear infinite;
+}
+
+/* ============ 消息内搜索（⌘F） ============ */
+
+.pc-chat-search {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pc-space-1-5);
+  padding: 2px var(--pc-space-2);
+  border: 1px solid var(--pc-separator);
+  border-radius: var(--pc-radius-lg);
+  background: var(--pc-fill-secondary);
+}
+
+.pc-chat-search-icon {
+  flex-shrink: 0;
+  color: var(--pc-label-tertiary);
+}
+
+.pc-chat-search-input {
+  width: 130px;
+  border: none;
+  background: transparent;
+  color: var(--pc-label-primary);
+  font-size: 12px;
+  outline: none;
+}
+
+.pc-chat-search-input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+}
+
+.pc-chat-search-count {
+  flex-shrink: 0;
+  color: var(--pc-label-tertiary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pc-chat-search-count.is-empty {
+  color: var(--pc-destructive);
+}
+
+.pc-chat-search-nav {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.pc-chat-search-nav button,
+.pc-chat-search-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border: none;
+  border-radius: var(--pc-radius-sm);
+  background: transparent;
+  color: var(--pc-label-secondary);
+  cursor: pointer;
+}
+
+.pc-chat-search-nav button:hover,
+.pc-chat-search-close:hover {
+  color: var(--pc-label-primary);
+  background: var(--pc-fill-tertiary);
+}
+
+/* CSS Custom Highlight API：高亮画在 highlight registry 里，不重渲染消息流。 */
+::highlight(pc-chat-search) {
+  background-color: rgba(251, 191, 36, 0.35);
+  color: inherit;
+}
+
+::highlight(pc-chat-search-active) {
+  background-color: rgba(251, 191, 36, 0.75);
+  color: #1e293b;
+}
+
+/* ============ 图片附件缩略图（用户消息内联 + 灯箱） ============ */
+
+.pc-msg-images.is-thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pc-space-2);
+  margin-bottom: var(--pc-space-1-5);
+}
+
+.pc-msg-image-thumb {
+  width: 76px;
+  height: 76px;
+  border-radius: var(--pc-radius-lg);
+  object-fit: cover;
+  border: 1px solid var(--pc-separator);
+}

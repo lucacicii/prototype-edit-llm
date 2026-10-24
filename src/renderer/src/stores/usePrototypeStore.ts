@@ -28,6 +28,8 @@ export interface PrototypeChatMessage {
     mimeType?: string
     bytes: number
     truncated?: boolean
+    /** 图片附件的 data URL；发出时留存，用于消息流里的缩略图与灯箱回看。 */
+    dataUrl?: string
   }[]
   stats?: RunStats
 }

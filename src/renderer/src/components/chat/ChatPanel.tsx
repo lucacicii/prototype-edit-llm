@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react'
+import { message } from 'antd'
 import { ResizeHandle } from '../ResizeHandle'
 import {
   useWorkspaceChatStore,
@@ -16,6 +17,7 @@ import {
 } from '../../stores/useAgentModelConfigStore'
 import { useMaterialStore } from '../../stores/useMaterialStore'
 import { useAgentChatStream } from './useAgentChatStream'
+import { useTextSearchHighlight } from './useTextSearch'
 import { ChatHeader } from './ChatHeader'
 import { ChatContextBanners } from './ChatContextBanners'
 import { ChatFeed } from './ChatFeed'
@@ -195,6 +197,85 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const [openTurnIndex, setOpenTurnIndex] = useState<number | null>(null)
   const [cursorPos, setCursorPos] = useState(0)
 
+  // ============ 会话标题（thunder 引擎；daemon 侧持久化，手动名锁定） ============
+  /** undefined = 引擎不适用（ACP）；null = 会话还没有标题。 */
+  const [conversationTitle, setConversationTitle] = useState<string | null | undefined>(undefined)
+  const [titleBusy, setTitleBusy] = useState(false)
+
+  const refreshConversationTitle = useCallback(
+    async (sessionId?: string) => {
+      if (!window.agent?.getConversationTitle) return
+      let sid = sessionId
+      if (!sid) {
+        const session = await window.agent
+          .getSession?.({ prototypeId: runKey ?? '' })
+          .catch(() => null)
+        if (!session?.ok || !session.sessionId) return
+        sid = session.sessionId
+      }
+      const res = await window.agent
+        .getConversationTitle({ sessionId: sid })
+        .catch(() => null)
+      if (res?.ok) setConversationTitle(res.title ?? null)
+    },
+    [runKey]
+  )
+
+  useEffect(() => {
+    if (engine !== 'thunder') {
+      setConversationTitle(undefined)
+      return
+    }
+    setConversationTitle(null)
+    void refreshConversationTitle()
+  }, [engine, convId, refreshConversationTitle])
+
+  /** 手动改名：daemon 会把 title_source 记为 manual，之后的 AI 改名不再覆盖。 */
+  const renameConversation = useCallback(
+    async (title: string) => {
+      const session = await window.agent
+        .getSession?.({ prototypeId: runKey ?? '' })
+        .catch(() => null)
+      if (!session?.ok || !session.sessionId) return
+      const res = await window.agent
+        .setConversationTitle({ sessionId: session.sessionId, title })
+        .catch((err: any) => ({ ok: false, error: String(err) }))
+      if (res?.ok) {
+        setConversationTitle(title)
+        message.success(`已重命名：「${title}」`)
+      } else {
+        message.error(`重命名失败：${res?.error || '未知错误'}`)
+      }
+    },
+    [runKey]
+  )
+
+  /** AI 命名：daemon 用 utility 模型基于对话内容生成（手动名时静默保持不动）。 */
+  const aiRenameConversation = useCallback(async () => {
+    const session = await window.agent
+      .getSession?.({ prototypeId: runKey ?? '' })
+      .catch(() => null)
+    if (!session?.ok || !session.sessionId) return
+    setTitleBusy(true)
+    try {
+      const res = await window.agent
+        .generateTitle({ sessionId: session.sessionId })
+        .catch((err: any) => ({ ok: false as const, title: undefined, error: String(err) }))
+      if (res?.ok && res.title) {
+        setConversationTitle(res.title)
+        message.success(`已重命名：「${res.title}」`)
+      } else {
+        message.error(`AI 命名失败：${res?.error || '未知错误'}`)
+      }
+    } finally {
+      setTitleBusy(false)
+    }
+  }, [runKey])
+
+  // ============ 消息内搜索（⌘F / Ctrl+F，CSS Highlight API 高亮） ============
+  // hook 与快捷键监听挂在 stream/滚动容器声明之后（见下），这里只放开关。
+  const [searchOpen, setSearchOpen] = useState(false)
+
   const modePrototypeId = externalWs ? '' : currentPrototype?.id ?? ''
   useEffect(() => {
     if (engine !== 'thunder' || !window.agent?.getMode) return
@@ -304,6 +385,33 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
    * 换原型时 `lastRunPrototypeId` 与新 run 的归属一起变，所以不会串台。
    */
   const turnsHere = stream.turns.length > 0 && stream.lastRunPrototypeId === runKey
+
+  // ============ 消息内搜索（⌘F / Ctrl+F，CSS Highlight API 高亮） ============
+  const search = useTextSearchHighlight({
+    rootRef: chatScrollEl,
+    highlightPrefix: 'pc-chat-search',
+    deps: [convMessages, streamHere, stream.liveSegments],
+    skipSelectors: ['button', '.pc-composer-root']
+  })
+
+  useEffect(() => {
+    if (collapsed) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      const isFind =
+        (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'f'
+      if (!isFind) return
+      event.preventDefault()
+      event.stopPropagation()
+      setSearchOpen(true)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [collapsed])
+
+  const closeSearch = useCallback(() => {
+    search.reset()
+    setSearchOpen(false)
+  }, [search])
 
   /**
    * 切项目、或新 run 开始时把抽屉收起来，避免它指向另一批轮次。
@@ -464,11 +572,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         : ''
     instruction = stackHeader + instruction
 
-    const history = convMessages
-      .filter((m) => m.role === 'user' || m.role === 'assistant')
-      .slice(-8)
-      .map((m) => ({ role: m.role, content: m.content }))
-
     addChatMessage(currentPrototype.id, {
       role: 'user',
       content: instruction,
@@ -480,7 +583,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             name: a.name,
             mimeType: a.mimeType,
             bytes: a.bytes,
-            truncated: a.truncated
+            truncated: a.truncated,
+            // 图片留 data URL：消息流里的缩略图与灯箱回看都靠它。
+            dataUrl: a.kind === 'image' ? a.previewUrl : undefined
           }))
         : undefined
     })
@@ -509,7 +614,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       engine,
       prompt: instruction,
       code: externalWs ? '' : currentPrototype.vueCode,
-      history,
       inspectTarget: target ? (target as any) : undefined,
       markupTargets: markups.length ? (markups as any) : undefined,
       attachments: outgoingImages.length ? outgoingImages : undefined
@@ -543,13 +647,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     }
 
     const metrics = stream.getLastRunMetrics()
+    const counts = stream.getLastRunCounts()
     const stats = metrics
       ? {
-          totalTurns: 0,
+          totalTurns: counts.totalTurns,
           promptTokens: metrics.promptTokens ?? 0,
           completionTokens: metrics.completionTokens ?? 0,
           durationMs: metrics.durationMs ?? 0,
-          toolExecutions: 0,
+          toolExecutions: counts.toolExecutions,
           tokensPerSecond: metrics.tps
         }
       : undefined
@@ -560,6 +665,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       timestamp: Date.now(),
       stats
     })
+
+    // daemon 在 run 开始时会落一个截断的临时标题；跑完拉一次，让标题跟上来。
+    if (engine === 'thunder' && res.sessionId) void refreshConversationTitle(res.sessionId)
   }
 
   const handleSendClick = () => {
@@ -740,6 +848,23 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={onToggleSidebar}
         onOpenSettings={onOpenSettings}
+        conversationTitle={conversationTitle}
+        titleBusy={titleBusy}
+        onRenameTitle={(title) => void renameConversation(title)}
+        onAiTitle={() => void aiRenameConversation()}
+        search={
+          searchOpen
+            ? {
+                query: search.query,
+                totalMatches: search.totalMatches,
+                currentMatchIndex: search.currentMatchIndex,
+                onQueryChange: search.setQuery,
+                onNext: search.nextMatch,
+                onPrev: search.prevMatch,
+                onClose: closeSearch
+              }
+            : null
+        }
       />
 
       <ChatContextBanners

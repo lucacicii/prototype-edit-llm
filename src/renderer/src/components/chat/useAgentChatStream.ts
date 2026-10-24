@@ -193,7 +193,6 @@ export interface StartRunParams {
   engine?: AgentEngine
   prompt: string
   code: string
-  history?: Array<{ role: string; content: string | null }>
   inspectTarget?: unknown
   markupTargets?: unknown[]
   attachments?: Array<{ name: string; mimeType: string; data: string }>
@@ -208,6 +207,8 @@ export interface RunOutcome {
   partialContent?: string
   code?: string
   techStack?: string
+  /** thunder 引擎：本次 run 落在哪个 daemon 会话（会话标题等操作的目标）。 */
+  sessionId?: string
 }
 
 interface UseAgentChatStreamOptions {
@@ -761,7 +762,6 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
           engine: params.engine,
           prompt: params.prompt,
           code: params.code,
-          history: params.history,
           inspectTarget: params.inspectTarget as any,
           markupTargets: params.markupTargets as any,
           attachments: params.attachments
@@ -793,7 +793,8 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
           finishReason: reason,
           finalContent,
           code: res.code,
-          techStack: res.techStack
+          techStack: res.techStack,
+          sessionId: typeof res.sessionId === 'string' ? res.sessionId : undefined
         }
       } catch (err: any) {
         return {
@@ -938,6 +939,16 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
 
   const getLastRunMetrics = useCallback(() => lastRunMetricsRef.current, [])
 
+  /**
+   * 整 run 的轮次/工具计数。跑完后 turns 仍在（下一次 startRun 才清空），
+   * 与 getLastRunMetrics 同一时机读取 —— 消息 stats 里的「N 轮」就来自这里。
+   */
+  const getLastRunCounts = useCallback(() => {
+    const totalTurns = turnsRef.current.length
+    const toolExecutions = turnsRef.current.reduce((n, t) => n + (t.toolCount || 0), 0)
+    return { totalTurns, toolExecutions }
+  }, [])
+
   const resetSessionCounters = useCallback(() => {
     setSessionTotalTokens(0)
     setCurrentContextTokens(0)
@@ -1022,6 +1033,7 @@ export function useAgentChatStream(options: UseAgentChatStreamOptions = {}) {
     cancelRun,
     addSessionTokens,
     resetSessionCounters,
-    getLastRunMetrics
+    getLastRunMetrics,
+    getLastRunCounts
   }
 }

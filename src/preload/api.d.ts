@@ -287,11 +287,7 @@ export interface IAgentAPI {
     config: {
       /** 指向本机模型库的引用（provider + id），不含端点与密钥。 */
       model?: { provider: string; id: string; name?: string }
-      systemPrompt?: string
-      maxTurns?: number
-      temperature?: number
       thinkingLevel?: string
-      requestTimeoutMs?: number
       engine?: 'thunder' | 'claude' | 'codex'
       acpPermissionPolicy?: 'allowAll' | 'ask'
       acpAgents?: Record<string, any>
@@ -465,7 +461,6 @@ export interface IAgentAPI {
     engine?: 'thunder' | 'claude' | 'codex'
     prompt: string
     code: string
-    history?: Array<{ role: string; content: string | null }>
     /** 圈选点中的元素（富字段：选择器/组件/源码位置）。 */
     inspectTarget?: PointedTarget
     /** 圈改框住的每一块：框里认出来的元素（探针 payload 与渲染层都叫 target，别改名） + 框的范围（视口坐标）+ 该框的批注。 */
@@ -486,6 +481,8 @@ export interface IAgentAPI {
     finalContent?: string | null
     code?: string
     techStack?: string
+    /** thunder 引擎：本次 run 落在哪个 daemon 会话（标题等会话操作的目标）。 */
+    sessionId?: string
   }>
   answerQuestion: (params: {
     questionId: string
@@ -532,6 +529,19 @@ export interface IAgentAPI {
     ok: boolean
     title?: string
     errorKind?: string
+    error?: string
+  }>
+  /** 当前对话归属的 thunder 会话（与 agent:run 同一套推导，truncate 换会话后也能拿到新的）。 */
+  getSession: (args: { prototypeId?: string }) => Promise<{
+    ok: boolean
+    sessionId?: string
+    error?: string
+  }>
+  /** 会话标题（daemon 侧持久化）；会话不存在不是错误，title 返回 null。 */
+  getConversationTitle: (args: { sessionId: string }) => Promise<{
+    ok: boolean
+    title?: string | null
+    titleSource?: string | null
     error?: string
   }>
   acpConnect: (params: { provider: string; prototypeId: string; force?: boolean }) => Promise<{ ok: boolean; state?: any; error?: string }>

@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import { Image as AntImage } from 'antd'
 import {
   Sparkles,
   Copy,
@@ -94,7 +95,12 @@ export function ChatMessageItem({
         }
         return (
           <div className="pc-bubble" key={`seg_text_${segmentIndex}`}>
-            <Markdown fontSize={BUBBLE_FONT_SIZE} lineHeight={BUBBLE_LINE_HEIGHT}>
+            <Markdown
+                  fontSize={BUBBLE_FONT_SIZE}
+                  lineHeight={BUBBLE_LINE_HEIGHT}
+                  enableImageGallery
+                  enableHtmlPreview
+                >
               {segment.text}
             </Markdown>
             {isStreaming && isLast && <span className="pc-caret" />}
@@ -104,21 +110,58 @@ export function ChatMessageItem({
     ) : (
       <>
         {isUser && message.attachments && message.attachments.length > 0 && (
-          <div className="pc-msg-images">
-            {message.attachments.map((att, ai) => (
-              <span key={ai} className="pc-msg-image-chip">
-                <FileText size={10} />
-                <span>{att.name}</span>
-              </span>
-            ))}
-          </div>
+          <>
+            {/* 图片附件：缩略图网格 + 灯箱（与 agent-resume-panel 的附件渲染对齐）。 */}
+            {message.attachments.some((att) => att.kind === 'image') && (
+              <div className="pc-msg-images is-thumbs">
+                <AntImage.PreviewGroup>
+                  {message.attachments
+                    .filter((att) => att.kind === 'image')
+                    .map((att, ai) =>
+                      att.dataUrl ? (
+                        <AntImage
+                          key={ai}
+                          src={att.dataUrl}
+                          alt={att.name}
+                          className="pc-msg-image-thumb"
+                          loading="lazy"
+                        />
+                      ) : (
+                        // 没留 dataUrl 的旧消息（或磁盘上的历史记录）退回文件名 chip。
+                        <span key={ai} className="pc-msg-image-chip">
+                          <FileText size={10} />
+                          <span>{att.name}</span>
+                        </span>
+                      )
+                    )}
+                </AntImage.PreviewGroup>
+              </div>
+            )}
+            {message.attachments.some((att) => att.kind === 'text') && (
+              <div className="pc-msg-images">
+                {message.attachments
+                  .filter((att) => att.kind === 'text')
+                  .map((att, ai) => (
+                    <span key={ai} className="pc-msg-image-chip">
+                      <FileText size={10} />
+                      <span>{att.name}</span>
+                    </span>
+                  ))}
+              </div>
+            )}
+          </>
         )}
         <div className="pc-bubble">
           {message.content ? (
             isUser ? (
               <div className="pc-bubble-text">{message.content}</div>
             ) : (
-              <Markdown fontSize={BUBBLE_FONT_SIZE} lineHeight={BUBBLE_LINE_HEIGHT}>
+              <Markdown
+                  fontSize={BUBBLE_FONT_SIZE}
+                  lineHeight={BUBBLE_LINE_HEIGHT}
+                  enableImageGallery
+                  enableHtmlPreview
+                >
                 {message.content}
               </Markdown>
             )

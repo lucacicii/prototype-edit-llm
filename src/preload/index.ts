@@ -117,6 +117,10 @@ const agentApi = {
     ipcRenderer.invoke('agent:set-conversation-title', args),
   generateTitle: (args: { sessionId: string; force?: boolean }) =>
     ipcRenderer.invoke('agent:generate-title', args),
+  getSession: (args: { prototypeId?: string }) =>
+    ipcRenderer.invoke('agent:get-session', args),
+  getConversationTitle: (args: { sessionId: string }) =>
+    ipcRenderer.invoke('agent:get-conversation-title', args),
   acpConnect: (params: { provider: string; prototypeId: string; force?: boolean }) =>
     ipcRenderer.invoke('agent:acp-connect', params),
   acpDisconnect: (params: { provider: string; prototypeId: string }) =>

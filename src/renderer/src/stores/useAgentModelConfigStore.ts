@@ -44,14 +44,6 @@ export const EMPTY_VOCABULARIES: AgentModelVocabularies = {
   defaults: { contextWindow: 0, maxTokens: 0, thinkingLevels: ['off'] }
 }
 
-export interface AgentTuningPatch {
-  systemPrompt?: string
-  maxTurns?: number
-  temperature?: number
-  thinkingLevel?: string
-  requestTimeoutMs?: number
-}
-
 export interface ProviderGroup {
   provider: string
   api: string
@@ -128,7 +120,6 @@ interface AgentModelConfigState {
   refresh: () => Promise<void>
   selectModel: (value: string) => Promise<void>
   selectThinkingLevel: (value: string) => Promise<void>
-  saveTuning: (patch: AgentTuningPatch) => Promise<{ ok: boolean; error?: string; path?: string }>
 }
 
 export const useAgentModelConfigStore = create<AgentModelConfigState>((set, get) => ({
@@ -213,13 +204,8 @@ export const useAgentModelConfigStore = create<AgentModelConfigState>((set, get)
 
     set({ selectionId: value, thinkingLevel: nextThinkingLevel })
 
-    if (window.agent?.getConfig && window.agent?.setConfig) {
-      const current = await window.agent.getConfig()
+    if (window.agent) {
       const res = await window.agent.setConfig({
-        systemPrompt: current.config?.systemPrompt,
-        maxTurns: current.config?.maxTurns,
-        temperature: current.config?.temperature,
-        requestTimeoutMs: current.config?.requestTimeoutMs,
         model: { provider: entry.provider, id: entry.id, name: entry.name },
         thinkingLevel: nextThinkingLevel || undefined
       })
@@ -237,13 +223,8 @@ export const useAgentModelConfigStore = create<AgentModelConfigState>((set, get)
     const entry = models.find((m) => m.selectionId === selectionId)
     set({ thinkingLevel: value })
 
-    if (entry && window.agent?.getConfig && window.agent?.setConfig) {
-      const current = await window.agent.getConfig()
+    if (entry && window.agent) {
       const res = await window.agent.setConfig({
-        systemPrompt: current.config?.systemPrompt,
-        maxTurns: current.config?.maxTurns,
-        temperature: current.config?.temperature,
-        requestTimeoutMs: current.config?.requestTimeoutMs,
         model: { provider: entry.provider, id: entry.id, name: entry.name },
         thinkingLevel: value || undefined
       })
@@ -253,20 +234,6 @@ export const useAgentModelConfigStore = create<AgentModelConfigState>((set, get)
       }
       await get().refresh()
     }
-  },
-
-  saveTuning: async (patch: AgentTuningPatch) => {
-    if (!window.agent?.getConfig || !window.agent?.setConfig) {
-      return { ok: false, error: 'agent 桥接不可用' }
-    }
-    const current = await window.agent.getConfig()
-    const res = await window.agent.setConfig({
-      ...(current.config ?? {}),
-      ...patch,
-      model: current.config?.model
-    })
-    if (res?.ok) await get().refresh()
-    return res ?? { ok: false, error: '未知错误' }
   },
 
   selectEngine: async (engine: AgentEngine) => {
